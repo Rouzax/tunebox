@@ -184,6 +184,12 @@ played_by = '\s*\(Played by ([^)]*)\)\s*$'
   https://np.tritondigital.com/public/nowplaying?mountName=OWR_INTERNATIONAL&numberToFetch=5&eventType=track
   ```
 
+- **Other source types.** `source = { type = "qmusic", station = "qnl_top40" }`
+  reads Qmusic's play history (station ids such as `qmusic_nl`,
+  `qnl_nonstop`, `qnl_foute_uur`, `qnl_top40`, `qnl_thema`).
+  `source = { type = "npo", site = "nporadio2" }` reads the track list on
+  NPO's site (`nporadio1`, `nporadio2` or `npo3fm`). `examples/stations-nl.toml`
+  has every tested station ready to copy.
 - **Streams** are the quality choices listeners see; the first one is the
   default. Every `url` must be `https://`: the player page is served over
   https and browsers refuse plain-http audio on it. `codec` (`aac` or
@@ -300,7 +306,7 @@ is reported at startup instead of being ignored.
 | `streams` | yes, or `stream_url` | One or more `[[channels.streams]]` tables: `name` (required), `url` (required, `https://`), `codec` (`aac` or `mp3`), `kbps` (whole number). The first is the default. |
 | `stream_url` | instead of `streams` | One stream, `http://` or `https://`, named "Default". |
 | `default_image` | no | An image address for the player to show when a song has no cover. |
-| `source` | yes | `{ type = "triton", mount = "<feed mount>" }`. |
+| `source` | yes | `{ type = "triton", mount = "<feed mount>" }`, `{ type = "qmusic", station = "<station id>" }` or `{ type = "npo", site = "nporadio1" \| "nporadio2" \| "npo3fm" }`. |
 | `group` | no | Heading on the channel page. |
 | `logo` | no | `https://` address of the station logo. tunebox downloads it once into the data folder and serves it from there, so listeners' browsers never contact that address. PNG, JPEG, WebP or SVG, up to 2 MB. |
 | `always` | no, default `false` | Check the station even while nobody listens. |

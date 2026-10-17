@@ -11,9 +11,15 @@ from typing import Any, cast
 from tunebox.tracks import Rules
 
 # Source types and the settings each one requires.
-SOURCE_SETTINGS: dict[str, tuple[str, ...]] = {"triton": ("mount",)}
+SOURCE_SETTINGS: dict[str, tuple[str, ...]] = {
+    "triton": ("mount",),
+    "qmusic": ("station",),
+    "npo": ("site",),
+}
 # Settings whose value must be one of a fixed set, per source type.
-SOURCE_CHOICES: dict[str, dict[str, tuple[str, ...]]] = {}
+SOURCE_CHOICES: dict[str, dict[str, tuple[str, ...]]] = {
+    "npo": {"site": ("nporadio1", "nporadio2", "npo3fm")},
+}
 CODECS = ("aac", "mp3")
 DEFAULTS: dict[str, float] = {
     "delay_s": 7,
