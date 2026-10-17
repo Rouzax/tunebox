@@ -1,0 +1,16 @@
+# Example stack. Copy tunebox.example.toml to ./data/tunebox.toml first; the
+# data directory must be writable by uid 1000 (the SQLite file lives there).
+services:
+  tunebox:
+    image: ghcr.io/rouzax/tunebox:latest
+    restart: unless-stopped
+    ports:
+      # Loopback only: a reverse proxy on the host handles TLS and the public
+      # name. The host port is an example; pick any free one. The container
+      # port stays 8080.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: Europe/Amsterdam
+      LOG_LEVEL: info

@@ -1,0 +1,5 @@
+*
+!tunebox/
+!web/
+!tunebox.example.toml
+**/__pycache__
