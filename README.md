@@ -1,157 +1,301 @@
 # tunebox
 
-A self-hosted web radio player: a small radio API (now playing, song
-history, cover art) and a standalone browser player built for slow
-in-car browsers and phones.
+tunebox is a self-hosted web radio companion. You run it on your own
+server. It follows your internet radio stations and always knows which song
+is playing, which one is next and which ones played before, with a matching
+album cover for each.
 
-This first release is the radio API. It polls each channel's now-playing
-feed, finds a matching cover for every track, and serves what is playing,
-what comes next and what played recently. A small status page shows the
-result; the player itself follows in a later release.
+It is built for listening in the car and on a phone: titles switch when you
+actually hear the new song, not half a minute early, and slow car browsers
+get small, cheap updates.
 
-## What it does
+**Status:** this first release is the back end. It comes with a simple
+status page, and it can feed an existing PawTunes web radio player. tunebox's own player, designed for in-car screens, is the next
+release.
 
-- Polls the now-playing feed once per channel, however many players are
-  open, and keeps the last 50 tracks per channel. The list survives a
-  restart.
-- Switches the title at about the moment you hear the song, not when the
-  station announces it: each track counts as heard a configurable number of
-  seconds after it started.
-- Looks up a cover for every track on Deezer, then iTunes, and accepts one
-  only when both the title and one of the artists match. Without a song
-  cover it falls back to an artist photo, and without either the track has
-  no cover.
-- Recognises station IDs and voice-overs, and splits "(Played by ...)"
-  credits off the title.
-- Offers an endpoint in the format PawTunes' "custom" stats source reads,
-  so an existing PawTunes install can use it.
+## What you get
 
-Only Triton Digital now-playing feeds are supported as a source so far.
+- **Now playing, next and recently played** for every station, the same on
+  every device. The recent list (the last 50 songs) survives a restart.
+- **Covers you can trust.** tunebox looks each song up on Deezer, then on
+  iTunes, and only accepts a cover when both the title and an artist match.
+  When no song cover exists it shows a photo of the artist instead, and when
+  there is neither, no picture rather than the wrong one.
+- **Tidy titles.** Station jingles and voice-overs are recognised and not
+  shown as songs. Credits such as "(Played by ... at Tomorrowland)" are
+  split off the title so a player can show them on their own line.
+- **Titles in time with the music.** You set how many seconds after a song
+  starts it counts as heard; a player adds how far it plays behind the live
+  stream.
 
-## Run it with Docker
+Supported stations: those whose now-playing information comes from Triton
+Digital, such as One World Radio and the other Tomorrowland channels. The
+example configuration has three of them ready to go.
 
-You need Docker with the compose plugin.
+## Before you start
 
-1. Create a directory for the stack and a `data` directory inside it, owned
-   by uid 1000 (the container runs as that user and keeps its database
-   there):
+You need:
+
+- A Linux machine with **Docker** and the **Docker Compose** plugin.
+- About 100 MB of disk for the image, plus a few MB for its data.
+- Outgoing internet access to the radio station, Deezer and iTunes.
+- Optional: a reverse proxy (such as Nginx Proxy Manager, Caddy or Traefik)
+  if you want to reach tunebox from your phone or car over HTTPS. Without
+  one, tunebox is reachable only from the machine it runs on.
+
+## Install
+
+1. Create a folder for tunebox with a `data` folder inside it. tunebox runs
+   as user id 1000 and must be able to write to `data`:
 
    ```sh
    mkdir -p tunebox/data && cd tunebox
    sudo chown 1000:1000 data
    ```
 
-2. Put the example configuration in place. It defines three channels; edit
-   it as needed (see [Configuration](#configuration)):
+2. Download the example configuration and the compose file:
 
    ```sh
    curl -fsSL -o data/tunebox.toml https://raw.githubusercontent.com/Rouzax/tunebox/main/tunebox.example.toml
    curl -fsSL -o compose.yaml https://raw.githubusercontent.com/Rouzax/tunebox/main/compose.example.yaml
    ```
 
-3. Start it and open the status page at `http://127.0.0.1:8080/`:
+   The configuration already contains One World Radio, Daybreak Sessions
+   and Tomorrowland Anthems. You can [change the stations](#change-the-stations)
+   later.
+
+3. If port 8080 is already used on this machine, open `compose.yaml` and
+   change the first `8080` in `"127.0.0.1:8080:8080"` to a free port, for
+   example `"127.0.0.1:8085:8080"`. Leave the second `8080` as it is.
+
+4. Start it:
 
    ```sh
    docker compose up -d
-   docker compose logs -f
    ```
 
-The first log line is `"event": "started"`, followed by `cover_found` and
-`cover_miss` lines as covers are looked up. Within a minute the status page
-lists each channel's current track, the next one and recent ones.
+Docker downloads the image `ghcr.io/rouzax/tunebox:latest` and starts it in
+the background. It restarts automatically after a reboot.
 
-What gets created: `data/tunebox.db` and SQLite's `data/tunebox.db-wal` and
-`data/tunebox.db-shm`. They hold the recent lists and the cover decisions;
-deleting them only means covers are looked up again.
+## Check that it works
 
-The host port in `compose.example.yaml` (`127.0.0.1:8080`) is an example:
-publish any free port. The container port stays 8080, and the container's
-health check assumes it. The port is bound to loopback because a reverse
-proxy on the host is expected to provide TLS and the public name. Another
-container on the same Docker network reaches tunebox as `http://tunebox:8080`.
+Open `http://127.0.0.1:8080/` in a browser on the same machine (use your
+own port if you changed it in step 3).
 
-## Configuration
+You should see one section per station with the song playing now, often the
+next one, and the five songs before it. Covers fill in during the first
+minute or two: tunebox looks them up one at a time so it stays within
+Deezer's and iTunes' limits.
 
-tunebox reads one TOML file, `/data/tunebox.toml` in the container (see
-`TUNEBOX_CONFIG` below). A missing or invalid file stops the server at
-startup with a message naming the key, for example
-`tunebox: channels[0].source.mount: required`, and exit code 2.
+To see what tunebox is doing:
 
-### `[server]`
+```sh
+docker compose logs -f
+```
+
+A healthy start looks like this (one line per event):
+
+```
+{"ts": "...", "level": "info", "logger": "tunebox", "event": "started", "port": 8080, "channels": ["owr", "daybreak", "anthems"]}
+{"ts": "...", "level": "info", "logger": "tunebox.covers", "event": "cover_found", "artist": "SONNY FODERA, CHRYSTAL", "title": "My Loving", ...}
+```
+
+`docker compose ps` shows the container as `healthy` after about half a
+minute.
+
+If the container stops right away or the page does not load, see
+[Troubleshooting](#troubleshooting).
+
+## Reach it from other devices
+
+The compose file only accepts connections from the machine itself, on
+purpose: phones and cars should reach tunebox through your reverse proxy,
+which adds HTTPS. In your proxy, forward a hostname to
+`http://127.0.0.1:8080` (or the port you chose).
+
+If your proxy runs in Docker on the same network as tunebox, it can use
+`http://tunebox:8080` instead.
+
+## Use it with PawTunes
+
+tunebox can supply the song titles, history and covers for an existing
+PawTunes player.
+
+1. In PawTunes' admin panel, open the channel's settings.
+2. Set the stats (now playing) method to **custom**.
+3. Set the URL to tunebox's PawTunes address for that station:
+   `https://<your-host>/api/pawtunes/<station id>`, for example
+   `https://radio.example.com/api/pawtunes/anthems`. If PawTunes runs in a
+   container on the same Docker network, `http://tunebox:8080/api/pawtunes/anthems`
+   works too.
+
+The station ids are the `id` values in `data/tunebox.toml`: `owr`,
+`daybreak` and `anthems` in the example.
+
+What changes in PawTunes:
+
+- Titles switch about when you hear the song, and keep their
+  "(Played by ...)" credits.
+- History shows up to 20 songs, without jingles.
+- Covers come from tunebox. A song's cover is decided the first time
+  PawTunes sees the song; if tunebox had not found one yet, PawTunes uses
+  its own artwork for that song. (Changing the cover while a song plays
+  would make PawTunes list the song twice.)
+- During a station jingle PawTunes shows its default artist with the jingle
+  code; the PawTunes car theme shows the station name instead.
+
+## Change the stations
+
+Stations are listed in `data/tunebox.toml`, one `[[channels]]` block each:
+
+```toml
+[[channels]]
+id = "owr"                       # short name used in addresses
+name = "One World Radio"         # shown during jingles
+stream_url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL_ADP.aac"
+source = { type = "triton", mount = "OWR_INTERNATIONAL" }
+
+[channels.rules]
+station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+played_by = '\s*\(Played by ([^)]*)\)\s*$'
+```
+
+- **To remove a station**, delete its block.
+- **To add a Triton station**, copy a block and change `id`, `name`,
+  `stream_url` and `mount`. The `mount` is the station's name in Triton's
+  now-playing feed. For the Tomorrowland channels it is the stream's name
+  without `_ADP`. Check that you have the right one by opening this address
+  in a browser; it should list recent songs:
+
+  ```
+  https://np.tritondigital.com/public/nowplaying?mountName=OWR_INTERNATIONAL&numberToFetch=5&eventType=track
+  ```
+
+- **`[channels.rules]`** tells tunebox how a station writes its titles. The
+  two patterns in the example match Tomorrowland's jingle codes (such as
+  `E1700 16 Oct 2026 M19 VO`) and its "(Played by ...)" credits. For
+  another station you can leave the block out; every entry is then shown as
+  a song.
+
+After editing, apply the change with:
+
+```sh
+docker compose restart
+```
+
+If the file has a mistake, the container stops and the log names the line
+it did not accept, for example `tunebox: channels[2].source.mount: required`.
+
+## Fine-tune when titles change
+
+Every station sends a song's title some seconds before you hear it, and how
+many differs by station and by player. Two settings in `data/tunebox.toml`
+control the switch:
+
+```toml
+[defaults]
+delay_s = 7            # for tunebox's own player (it adds its own buffer)
+pawtunes_delay_s = 28  # for PawTunes
+```
+
+- The title changes **before** the song: raise the number.
+- The title changes **after** the song: lower it.
+
+Restart tunebox after a change. Both defaults come from a few measured
+song changes, so small adjustments are normal. You can also set a different
+value for one station by adding `delay_s` or `pawtunes_delay_s` to its
+`[[channels]]` block.
+
+## Update, back up and reset
+
+- **Update** to the latest release:
+
+  ```sh
+  docker compose pull && docker compose up -d
+  ```
+
+- **Back up**: everything worth keeping is in the `data` folder. Only
+  `tunebox.toml` matters; the database is rebuilt on its own.
+- **Reset** the recent lists and covers: stop tunebox, delete
+  `data/tunebox.db`, `data/tunebox.db-wal` and `data/tunebox.db-shm`, and
+  start it again. History refills from the stations and covers are looked
+  up again. Your configuration is not touched.
+
+## Troubleshooting
+
+| What you see | Likely cause | What to do |
+|---|---|---|
+| The container stops right away; the log says `tunebox: <something>: <reason>` | A mistake in `data/tunebox.toml`, or the file is missing. | Fix what the message names, then `docker compose up -d`. |
+| The log says `tunebox: cannot listen on 0.0.0.0:<port>` | `port` in `[server]` was changed to one that is not free inside the container. | Remove `port` from `[server]` (8080 is the default) and change the published port in `compose.yaml` instead. |
+| `docker compose up` complains the port is already allocated | Another program on the machine uses that port. | Choose a free port as in [Install](#install) step 3. |
+| `store_unavailable` in the log | The `data` folder is not writable by user id 1000. | `sudo chown 1000:1000 data` and restart. Until then tunebox works but forgets everything on restart. |
+| The status page shows no covers for some songs | The song is in neither Deezer nor iTunes (common for unreleased tracks), or the catalogues could not be reached. | Nothing to do for unreleased tracks. A failed lookup is retried after 10 minutes, a song that was not found after 3 days. Look for `search_failed` in the log. |
+| A station's name on the status page says "(feed unreachable)" | The station's now-playing feed does not answer. | Nothing to do: tunebox keeps showing the last known songs and keeps trying, at most every 2 minutes. |
+| The title changes too early or too late | The delay does not fit this station or player. | See [Fine-tune when titles change](#fine-tune-when-titles-change). |
+| PawTunes shows nothing new | PawTunes cannot reach the URL. | Open the same `/api/pawtunes/<id>` address in a browser from the PawTunes machine; you should see the current song. |
+
+For more detail in the log, set `LOG_LEVEL: info,tunebox.covers=debug` in
+`compose.yaml` and restart.
+
+## Reference
+
+### Configuration file
+
+`/data/tunebox.toml` in the container. Unknown keys are rejected, so a typo
+is reported at startup instead of being ignored.
+
+`[server]`
 
 | Key | Default | Meaning |
 |---|---|---|
 | `host` | `"0.0.0.0"` | Address to listen on inside the container. |
 | `port` | `8080` | Port to listen on. Keep 8080 in the container; the health check uses it. |
-| `data_dir` | the directory of the config file | Where `tunebox.db` is kept. |
+| `data_dir` | the folder of the config file | Where `tunebox.db` is kept. |
 
-### `[defaults]`
-
-These apply to every channel; a channel can override any of them by setting
-the same key in its own table.
+`[defaults]` (each can also be set per station)
 
 | Key | Default | Meaning |
 |---|---|---|
-| `delay_s` | `7` | Seconds after a track's start time at which the API reports it as current. The player adds how much audio it has buffered on top. |
-| `pawtunes_delay_s` | `28` | The same for `/api/pawtunes/<id>`. PawTunes' own player does not add its buffer, so this delay includes it. |
-| `poll_interval_s` | `12` | Seconds between polls of the feed, plus up to 3 s of random jitter. After a failed poll the wait doubles each time, up to 120 s. |
-| `history_size` | `50` | Tracks kept per channel. |
+| `delay_s` | `7` | Seconds after a song's start at which `/api/channels/<id>/now` reports it as current. |
+| `pawtunes_delay_s` | `28` | The same for `/api/pawtunes/<id>`. |
+| `poll_interval_s` | `12` | Seconds between checks of a station's feed, plus up to 3 s of random spread. After a failure the wait doubles each time, up to 120 s. |
+| `history_size` | `50` | Songs kept per station. |
 
-Both delays were measured on two track changes; if titles change before or
-after you hear the song, adjust them.
-
-### `[[channels]]`
+`[[channels]]`
 
 | Key | Required | Meaning |
 |---|---|---|
-| `id` | yes | Used in URLs. Lower-case letters, digits and `-`. |
-| `name` | yes | Shown when no track is playing (during a station ID). |
-| `stream_url` | yes | The audio stream, `http://` or `https://`. Passed to the player as is. |
-| `default_image` | no | An image URL for the player to show without a cover. |
-| `source` | yes | Where now-playing data comes from: `{ type = "triton", mount = "<feed mount>" }`. |
+| `id` | yes | Used in addresses. Lower-case letters, digits and `-`. |
+| `name` | yes | Shown during jingles. |
+| `stream_url` | yes | The audio stream, `http://` or `https://`, passed to the player as is. |
+| `default_image` | no | An image address for the player to show when a song has no cover. |
+| `source` | yes | `{ type = "triton", mount = "<feed mount>" }`. |
 
-`[channels.rules]` (optional) describes the channel's track titles. Without
-it nothing is treated as a station ID or a credit.
+`[channels.rules]` (optional)
 
 | Key | Default | Meaning |
 |---|---|---|
-| `station_id` | none | A regular expression. An entry with no artist whose title matches it is a station ID: it is not shown as a track and not kept in history. |
-| `played_by` | none | A regular expression for a credit at the end of the title. Its first group is kept as `played_by`; the rest is removed from the title. |
+| `station_id` | none | A regular expression. An entry with no artist whose title matches it is a jingle: not shown as a song and not kept in history. |
+| `played_by` | none | A regular expression for a credit at the end of a title. Its first group (in parentheses) is kept as the credit; the match is removed from the title. |
 | `artist_separator` | `","` | What separates several artists. Only this splits: `&`, `.` and `/` inside a name are kept. |
-
-The example file sets both patterns for the Tomorrowland channels.
 
 ### Environment variables
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `TUNEBOX_CONFIG` | `/data/tunebox.toml` | Path to the configuration file. |
-| `TUNEBOX_WEB` | the `web/` directory next to the code | Static files served at `/`. |
-| `LOG_LEVEL` | `info` | A level, optionally followed by per-module levels: `info,tunebox.covers=debug`. |
+| `LOG_LEVEL` | `info` | Log detail: a level, optionally with per-part levels, such as `info,tunebox.covers=debug`. |
+| `TUNEBOX_WEB` | the built-in `web` folder | Folder with the files served at `/`. |
+| `TZ` | | Time zone, as in the compose file. Log times are always UTC. |
 
-## API
+### HTTP API
 
-All responses are JSON. Channel ids come from the configuration.
+For player developers. All answers are JSON.
 
-### `GET /api/channels`
+**`GET /api/channels`** lists the stations: `id`, `name`, `stream_url`,
+`default_image`. It may be cached for five minutes.
 
-The configured channels. Browsers may cache it for five minutes.
-
-```json
-[{"id": "owr", "name": "One World Radio",
-  "stream_url": "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL_ADP.aac",
-  "default_image": null}]
-```
-
-### `GET /api/channels/<id>/now`
-
-What is playing now, what comes next, and what played before, for a player
-that plays `buffer_s` seconds behind the live stream:
-`/api/channels/owr/now?buffer_s=30`. A browser playing a live stream is
-typically about 30 s behind, because the stream starts with a burst of past
-audio; measure it as `audio.buffered.end(0) - audio.currentTime` and measure
-again after every reconnect. Without `buffer_s` only the server's `delay_s`
-applies. Values outside 0 to 120 are a `400` with `{"error": "bad_buffer_s"}`.
+**`GET /api/channels/<id>/now?buffer_s=<seconds>`** answers what is playing:
 
 ```json
 {"current": {"artist": "CAMELPHAT, JOSH GIGANTE, KUUDA",
@@ -165,69 +309,47 @@ applies. Values outside 0 to 120 are a `400` with `{"error": "bad_buffer_s"}`.
  "stale_since": null}
 ```
 
-- `current` is `null` during a station ID; show the channel name then.
-- `upcoming` is the next track, already announced but not heard yet, and
-  `in_s` is the number of seconds until it becomes current. The countdown is
-  relative, so a wrong clock on the device does not matter. `upcoming.track`
-  is `null` when a station ID comes next.
-- `history` is newest first, without station IDs and without the current
-  and upcoming tracks.
-- `cover` is a Deezer or iTunes image URL, or `null` while the lookup is
-  running or when nothing matched. `cover_kind` is `album`, `artist` (an
-  artist photo) or `null`.
-- `stale_since` is the time (epoch ms) the feed stopped answering, or
-  `null`. While it is set, the channel keeps serving its last data.
-- The response has an `ETag`. Send it back in `If-None-Match` and an
-  unchanged answer is `304 Not Modified` with no body. The countdown is not
-  part of the comparison, so a 304 means: keep your own deadline.
+- `buffer_s` (0 to 120, optional) is how far the player plays behind the
+  live stream; tunebox adds it to `delay_s`. A browser playing these
+  streams is usually about 30 s behind, because the stream starts with a
+  burst of earlier audio. Measure it as
+  `audio.buffered.end(0) - audio.currentTime`, again after every reconnect.
+  An invalid value is a `400` with `{"error": "bad_buffer_s"}`.
+- `current` is `null` during a jingle; show the station name.
+- `upcoming` is the next song, announced but not heard yet. `in_s` counts
+  down to the moment it becomes current. It is relative, so a wrong device
+  clock does not matter. `upcoming.track` is `null` when a jingle comes next.
+- `history` is newest first, without jingles and without the current and
+  upcoming songs.
+- `played_by` is the credit without the "Played by" words, or `null`.
+- `started_at` is the song's start in milliseconds since 1970 (UTC).
+- `cover` is a Deezer or iTunes image address, or `null` while the lookup
+  runs or when nothing matched. `cover_kind` is `album`, `artist` (an artist
+  photo) or `null`. Both image hosts allow reading the pixels from another
+  site (for colour extraction).
+- `stale_since` is when the station's feed stopped answering, in
+  milliseconds since 1970, or `null`. The data shown is then the last known.
+- Answers carry an `ETag`. Send it back as `If-None-Match` and an unchanged
+  answer is a `304` without a body. The countdown is not part of the
+  comparison, so on a `304` keep your own deadline.
 
-### `GET /api/pawtunes/<id>`
+**`GET /api/pawtunes/<id>`** answers in the format PawTunes' "custom" stats
+source reads: `artist`, `title` (with its credit), `artwork` (optional) and
+`history` (up to 20 entries with `artist`, `title`, `played_at` in
+milliseconds and optional `artwork`).
 
-The same data in the format PawTunes' "custom" stats source reads. See
-[Using it with PawTunes](#using-it-with-pawtunes).
+**`GET /healthz`** is `200` while the server runs, with each station's last
+successful check and `stale_since`. An unreachable station does not make it
+fail.
 
-### `GET /healthz`
-
-`200` whenever the server runs, with each channel's last successful poll
-and `stale_since`. An unreachable feed does not make it fail.
-
-### Everything else
-
-Static files from the web directory; `/` is `index.html`. Unknown paths
-are `404` with `{"error": "not_found"}`, unknown channels
-`{"error": "unknown_channel"}`.
-
-## Using it with PawTunes
-
-In a PawTunes channel, set the stats method to "custom" and the URL to
-`https://<your-host>/api/pawtunes/<channel id>` (or
-`http://tunebox:8080/api/pawtunes/<channel id>` from a container on the
-same Docker network).
-
-PawTunes then shows tunebox's tracks with their "(Played by ...)" credits,
-its history (up to 20 entries, without station IDs) and its covers. During
-a station ID the artist is empty and the title is the ID code, which
-PawTunes shows with its default artist name.
-
-A track's artwork is fixed the first time PawTunes sees the track: if no
-cover was known yet, PawTunes falls back to its own artwork sources for that
-track even if tunebox finds one later. Changing the artwork while a track
-plays would make PawTunes count it as a new track.
-
-## Troubleshooting
-
-| What you see | Likely cause | What to do |
-|---|---|---|
-| The container exits right away; the log says `tunebox: <key>: <reason>` | The configuration file is missing or a key is wrong. | Fix the named key. The path is `TUNEBOX_CONFIG` (default `/data/tunebox.toml`). |
-| `tunebox: cannot listen on 0.0.0.0:8080` | Something else uses the port. | Change `server.port`, or the host side of the published port. |
-| `store_unavailable` in the log | The data directory is not writable by uid 1000. | `chown 1000:1000` the data directory. tunebox keeps running, but forgets its lists and covers on restart. |
-| The title changes before or after you hear the song | The delay does not match this stream or player. | Adjust `delay_s` (tunebox player) or `pawtunes_delay_s` (PawTunes). |
-| Tracks have no cover | The track is in neither catalogue, or the catalogues were unreachable. | Look for `cover_miss` and `search_failed` in the log. A failed search is retried after 10 minutes; a confident miss after 3 days. |
-| `stale_since` is set or the status page says "feed unreachable" | The now-playing feed does not answer. | Nothing to do; the channel keeps its last data and polls again, backing off to every 2 minutes. |
+Everything else is served from the web folder (`/` is the status page).
+Unknown addresses are a `404` with `{"error": "not_found"}`, unknown
+stations `{"error": "unknown_channel"}`.
 
 ## Development
 
-You need [uv](https://docs.astral.sh/uv/).
+You need [uv](https://docs.astral.sh/uv/). The server uses only the Python
+standard library; the tools below are for development.
 
 ```sh
 uv venv --python 3.14 .venv
@@ -236,17 +358,17 @@ uv pip install --python .venv --require-hashes -r requirements-dev.txt
 ```
 
 The commit hook runs ruff, pyright (strict) and vulture; the push hook runs
-the tests with coverage. Run them by hand with:
+the tests with coverage. To run them by hand:
 
 ```sh
 .venv/bin/pre-commit run --all-files
 .venv/bin/pre-commit run --all-files --hook-stage pre-push
 ```
 
-Tests never touch the network, except one marked `live`:
-`.venv/bin/pytest -m live`.
+Tests do not use the network, except one marked `live`
+(`.venv/bin/pytest -m live`).
 
-To run the server from a checkout:
+Run the server from a checkout:
 
 ```sh
 mkdir -p data && cp tunebox.example.toml data/tunebox.toml
@@ -254,11 +376,9 @@ TUNEBOX_CONFIG=data/tunebox.toml .venv/bin/python -m tunebox
 ```
 
 Dev tool versions are pinned in `requirements-dev.in` and compiled with
-hashes into `requirements-dev.txt` (`uv pip compile requirements-dev.in
---python-version 3.14 --generate-hashes -o requirements-dev.txt`). The
-server itself uses only the Python standard library.
+hashes into `requirements-dev.txt`:
+`uv pip compile requirements-dev.in --python-version 3.14 --generate-hashes -o requirements-dev.txt`.
 
 ## License
 
-Licensed under the GNU Affero General Public License v3.0; see
-[LICENSE](LICENSE).
+GNU Affero General Public License v3.0; see [LICENSE](LICENSE).
