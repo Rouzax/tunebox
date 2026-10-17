@@ -1,0 +1,980 @@
+# Every station probed for tunebox: HTTPS streams with CORS and a now-playing
+# source. Copy the channels you want into your tunebox.toml. Logos are
+# downloaded once by tunebox and served from its data folder.
+# Stream bitrates are what the stations reported when this file was made.
+
+[[channels]]
+id = "owr"
+name = "One World Radio"
+group = "Tomorrowland"
+logo = "https://i.imgur.com/YEQRKTU.png"
+always = true
+source = { type = "triton", mount = "OWR_INTERNATIONAL" }
+
+[[channels.streams]]
+name = "High"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL_ADP.aac"
+codec = "aac"
+kbps = 256
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONALAAC.aac"
+codec = "aac"
+kbps = 128
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL.mp3"
+codec = "mp3"
+kbps = 192
+
+[channels.rules]
+station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+played_by = '\s*\(Played by ([^)]*)\)\s*$'
+
+[[channels]]
+id = "daybreak"
+name = "Daybreak Sessions"
+group = "Tomorrowland"
+logo = "https://i.imgur.com/G7I18C6.png"
+always = true
+source = { type = "triton", mount = "OWR_DAYBREAK" }
+
+[[channels.streams]]
+name = "High"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_DAYBREAK_ADP.aac"
+codec = "aac"
+kbps = 256
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_DAYBREAKAAC.aac"
+codec = "aac"
+kbps = 128
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_DAYBREAK.mp3"
+codec = "mp3"
+kbps = 128
+
+[channels.rules]
+station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+played_by = '\s*\(Played by ([^)]*)\)\s*$'
+
+[[channels]]
+id = "anthems"
+name = "Tomorrowland Anthems"
+group = "Tomorrowland"
+always = true
+source = { type = "triton", mount = "OWR_ANTHEMS" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_ANTHEMSAAC.aac"
+codec = "aac"
+kbps = 128
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_ANTHEMS.mp3"
+codec = "mp3"
+kbps = 128
+
+[channels.rules]
+station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+played_by = '\s*\(Played by ([^)]*)\)\s*$'
+
+[[channels]]
+id = "radio-538"
+name = "Radio 538"
+group = "Radio 538"
+logo = "https://i.imgur.com/UBM3Kcj.png"
+source = { type = "triton", mount = "RADIO538" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIO538.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIO538AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-538-classics"
+name = "Radio 538 Classics"
+group = "Radio 538"
+logo = "https://i.imgur.com/4UU0P1i.png"
+source = { type = "triton", mount = "TLPSTR08" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR08.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR08AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-538-non-stop"
+name = "Radio 538 Non-Stop"
+group = "Radio 538"
+logo = "https://i.imgur.com/vXBZ0CD.png"
+source = { type = "triton", mount = "TLPSTR09" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR09.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR09AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-538-zomer"
+name = "Radio 538 Zomer"
+group = "Radio 538"
+logo = "https://i.imgur.com/BVdQD67.png"
+source = { type = "triton", mount = "TLPSTR06" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR06.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR06AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-538-hitzone"
+name = "Radio 538 Hitzone"
+group = "Radio 538"
+logo = "https://i.imgur.com/wuU3qpZ.png"
+source = { type = "triton", mount = "TLPSTR11" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR11.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR11AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-538-dance-department"
+name = "Radio 538 Dance Department"
+group = "Radio 538"
+logo = "https://i.imgur.com/EQGwLGt.png"
+source = { type = "triton", mount = "TLPSTR01" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR01.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR01AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-538-top-50"
+name = "Radio 538 Top 50"
+group = "Radio 538"
+logo = "https://i.imgur.com/2z4AjJE.png"
+source = { type = "triton", mount = "TLPSTR13" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR13.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR13AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-538-ibiza"
+name = "Radio 538 Ibiza"
+group = "Radio 538"
+logo = "https://i.imgur.com/KS4g96d.png"
+source = { type = "triton", mount = "TLPSTR19" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR19.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR19AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-538-party"
+name = "Radio 538 Party"
+group = "Radio 538"
+logo = "https://i.imgur.com/krie0mH.png"
+source = { type = "triton", mount = "TLPSTR16" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR16.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR16AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-538-90s"
+name = "Radio 538 90's"
+group = "Radio 538"
+logo = "https://i.imgur.com/UtIYpSe.png"
+source = { type = "triton", mount = "TLPSTR21" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR21.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR21AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-10"
+name = "Radio 10"
+group = "Radio 10"
+logo = "https://i.imgur.com/iehkBal.png"
+source = { type = "triton", mount = "RADIO10" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIO10.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIO10AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-10-60s-and-70s-hits"
+name = "Radio 10 60's & 70's Hits"
+group = "Radio 10"
+logo = "https://i.imgur.com/KGXbkNe.png"
+source = { type = "triton", mount = "TLPSTR18" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR18.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR18AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-10-80s-hits"
+name = "Radio 10 80's Hits"
+group = "Radio 10"
+logo = "https://i.imgur.com/M5YZosr.png"
+source = { type = "triton", mount = "TLPSTR20" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR20.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR20AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-10-90s-hits"
+name = "Radio 10 90's hits"
+group = "Radio 10"
+logo = "https://i.imgur.com/PqqNeIS.png"
+source = { type = "triton", mount = "TLPSTR22" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR22.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR22AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-10-disco-classics"
+name = "Radio 10 Disco Classics"
+group = "Radio 10"
+logo = "https://i.imgur.com/fvSC4ui.png"
+source = { type = "triton", mount = "TLPSTR23" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR23.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR23AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-10-love-songs"
+name = "Radio 10 Love Songs"
+group = "Radio 10"
+logo = "https://i.imgur.com/o6Hyotg.png"
+source = { type = "triton", mount = "TLPSTR04" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR04.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR04AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-10-non-stop"
+name = "Radio 10 Non-Stop"
+group = "Radio 10"
+logo = "https://i.imgur.com/idDJ4BF.png"
+source = { type = "triton", mount = "TLPSTR15" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR15.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR15AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-10-top-4000"
+name = "Radio 10 Top 4000"
+group = "Radio 10"
+logo = "https://i.imgur.com/OBjqkh5.png"
+source = { type = "triton", mount = "TLPSTR24" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR24.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR24AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "qmusic-one-world-radio"
+name = "Qmusic One World Radio"
+group = "Qmusic"
+logo = "https://i.imgur.com/iw7WsI0.png"
+source = { type = "triton", mount = "OWR_WORLD_RADIO_NL" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_WORLD_RADIO_NL.mp3"
+codec = "mp3"
+kbps = 192
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_WORLD_RADIO_NLAAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "sky-radio"
+name = "Sky Radio"
+group = "Sky Radio"
+logo = "https://i.imgur.com/FFcRL7k.png"
+source = { type = "triton", mount = "SKYRADIO" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SKYRADIO.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SKYRADIOAAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "sky-radio-hits"
+name = "Sky Radio Hits"
+group = "Sky Radio"
+logo = "https://i.imgur.com/B1cAztH.png"
+source = { type = "triton", mount = "SRGSTR01" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR01.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR01AAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "sky-radio-nice-and-easy"
+name = "Sky Radio Nice & Easy"
+group = "Sky Radio"
+logo = "https://i.imgur.com/BK8jwT0.png"
+source = { type = "triton", mount = "SRGSTR07" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR07.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR07AAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "sky-radio-love-songs"
+name = "Sky Radio Love Songs"
+group = "Sky Radio"
+logo = "https://i.imgur.com/3QvzDdF.png"
+source = { type = "triton", mount = "SRGSTR03" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR03.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR03AAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "sky-radio-christmas"
+name = "Sky Radio Christmas"
+group = "Sky Radio"
+logo = "https://i.imgur.com/sVtlfTB.png"
+source = { type = "triton", mount = "SRGSTR08" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR08.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR08AAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "sky-radio-non-stop-work"
+name = "Sky Radio Non-Stop@Work"
+group = "Sky Radio"
+logo = "https://i.imgur.com/YSlZJ3U.png"
+source = { type = "triton", mount = "SRGSTR24" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR24.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR24AAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "sky-radio-smooth-hits"
+name = "Sky Radio Smooth Hits"
+group = "Sky Radio"
+logo = "https://i.imgur.com/1eYhosn.png"
+source = { type = "triton", mount = "SRGSTR15" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR15.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR15AAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "sky-radio-80s-hits"
+name = "Sky Radio 80's Hits"
+group = "Sky Radio"
+logo = "https://i.imgur.com/xHjro5N.png"
+source = { type = "triton", mount = "SRGSTR04" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR04.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR04AAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "sky-radio-90s-hits"
+name = "Sky Radio 90's Hits"
+group = "Sky Radio"
+logo = "https://i.imgur.com/HWXQKC4.png"
+source = { type = "triton", mount = "SRGSTR05" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR05.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR05AAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "sky-radio-summer-hits"
+name = "Sky Radio Summer Hits"
+group = "Sky Radio"
+logo = "https://i.imgur.com/dl8lXFT.png"
+source = { type = "triton", mount = "SRGSTR28" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR28.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SRGSTR28AAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "slam"
+name = "SLAM!"
+group = "SLAM!"
+logo = "https://i.imgur.com/bzlKHPM.png"
+source = { type = "triton", mount = "SLAM_MP3" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SLAM_MP3.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/SLAM_AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "slam-non-stop"
+name = "SLAM! Non-Stop"
+group = "SLAM!"
+logo = "https://i.imgur.com/CFvAgY7.png"
+source = { type = "triton", mount = "WEB10_MP3" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB10_MP3.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB10_AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "slam-housuh-in-de-pauzuh"
+name = "SLAM! Housuh In De Pauzuh"
+group = "SLAM!"
+logo = "https://i.imgur.com/X31Ljhx.png"
+source = { type = "triton", mount = "WEB16_MP3" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB16_MP3.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB16_AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "slam-40"
+name = "SLAM! 40"
+group = "SLAM!"
+logo = "https://i.imgur.com/kYFXOna.png"
+source = { type = "triton", mount = "WEB14_MP3" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB14_MP3.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB14_AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "slam-00s"
+name = "SLAM! 00's"
+group = "SLAM!"
+logo = "https://i.imgur.com/qs3bwR8.png"
+source = { type = "triton", mount = "WEB15_MP3" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB15_MP3.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB15_AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "slam-hardstyle"
+name = "SLAM! Hardstyle"
+group = "SLAM!"
+logo = "https://i.imgur.com/OHAoV0A.png"
+source = { type = "triton", mount = "WEB11_MP3" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB11_MP3.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB11_AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "slam-the-boom-room"
+name = "SLAM! The Boom Room"
+group = "SLAM!"
+logo = "https://i.imgur.com/M4us2Vq.png"
+source = { type = "triton", mount = "WEB12_MP3" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB12_MP3.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB12_AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "slam-mixmarathon"
+name = "SLAM! MixMarathon"
+group = "SLAM!"
+logo = "https://i.imgur.com/vN8yi8n.png"
+source = { type = "triton", mount = "WEB13_MP3" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB13_MP3.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB13_AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "slam-juize"
+name = "SLAM! Juize"
+group = "SLAM!"
+logo = "https://i.imgur.com/DTncfTu.png"
+source = { type = "triton", mount = "WEB09_MP3" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB09_MP3.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/WEB09_AAC.aac"
+codec = "aac"
+kbps = 96
+
+[[channels]]
+id = "radio-veronica"
+name = "Radio Veronica"
+group = "Veronica"
+logo = "https://i.imgur.com/pppV8ge.png"
+source = { type = "triton", mount = "VERONICA" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/VERONICA.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/VERONICAAAC.aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "qmusic"
+name = "Qmusic"
+group = "Qmusic"
+logo = "https://i.imgur.com/BxM4YpA.png"
+source = { type = "qmusic", station = "qmusic_nl" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://audio-streaming.qmusic.nl/Qmusic_nl_live_high.aac"
+codec = "aac"
+kbps = 96
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://audio-streaming.qmusic.nl/Qmusic_nl_live.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels]]
+id = "qmusic-non-stop"
+name = "Qmusic Non Stop"
+group = "Qmusic"
+logo = "https://i.imgur.com/TiJMWYQ.png"
+source = { type = "qmusic", station = "qnl_nonstop" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://audio-streaming.qmusic.nl/Qmusic_nl_nonstop_high.aac"
+codec = "aac"
+kbps = 96
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://audio-streaming.qmusic.nl/Qmusic_nl_nonstop.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels]]
+id = "qmusic-foute-uur"
+name = "Qmusic Foute Uur"
+group = "Qmusic"
+logo = "https://i.imgur.com/S7LXTJd.png"
+source = { type = "qmusic", station = "qnl_foute_uur" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://audio-streaming.qmusic.nl/Qmusic_nl_fouteuur_high.aac"
+codec = "aac"
+kbps = 96
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://audio-streaming.qmusic.nl/Qmusic_nl_fouteuur.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels]]
+id = "qmusic-top-40"
+name = "Qmusic Top 40"
+group = "Qmusic"
+logo = "https://i.imgur.com/735k85q.png"
+source = { type = "qmusic", station = "qnl_top40" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://audio-streaming.qmusic.nl/Qmusic_nl_top40_high.aac"
+codec = "aac"
+kbps = 96
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://audio-streaming.qmusic.nl/Qmusic_nl_top40.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels]]
+id = "qmusic-thema"
+name = "Qmusic Thema"
+group = "Qmusic"
+logo = "https://i.imgur.com/wf4kyIf.png"
+source = { type = "qmusic", station = "qnl_thema" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://audio-streaming.qmusic.nl/Qmusic_nl_thema_high.aac"
+codec = "aac"
+kbps = 96
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://audio-streaming.qmusic.nl/Qmusic_nl_thema.mp3"
+codec = "mp3"
+kbps = 128
+
+[[channels]]
+id = "npo-radio-1"
+name = "NPO Radio 1"
+group = "NPO"
+logo = "https://i.imgur.com/qTyj9s9.png"
+source = { type = "npo", site = "nporadio1" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://icecast.omroep.nl/radio1-bb-mp3"
+codec = "mp3"
+kbps = 192
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://icecast.omroep.nl/radio1-bb-aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "npo-radio-2"
+name = "NPO Radio 2"
+group = "NPO"
+logo = "https://i.imgur.com/6O5Aupi.png"
+source = { type = "npo", site = "nporadio2" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://icecast.omroep.nl/radio2-bb-mp3"
+codec = "mp3"
+kbps = 192
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://icecast.omroep.nl/radio2-bb-aac"
+codec = "aac"
+kbps = 64
+
+[[channels]]
+id = "npo-3fm"
+name = "NPO 3FM"
+group = "NPO"
+logo = "https://i.imgur.com/48v83lH.png"
+source = { type = "npo", site = "npo3fm" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://icecast.omroep.nl/3fm-bb-mp3"
+codec = "mp3"
+kbps = 192
+
+[[channels.streams]]
+name = "Data saver"
+url = "https://icecast.omroep.nl/3fm-bb-aac"
+codec = "aac"
+kbps = 64

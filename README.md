@@ -151,6 +151,12 @@ What changes in PawTunes:
 
 ## Change the stations
 
+`examples/stations-nl.toml` in the repository lists 50 Dutch and
+Tomorrowland stations that were tested with tunebox (streams, now-playing
+data, logos). Copy the `[[channels]]` blocks you want into
+`data/tunebox.toml`. Each block ends where the next `[[channels]]` starts;
+its `[[channels.streams]]` and `[channels.rules]` tables belong to it.
+
 Stations are listed in `data/tunebox.toml`, one `[[channels]]` block each:
 
 ```toml

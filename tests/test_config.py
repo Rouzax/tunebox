@@ -177,3 +177,21 @@ def test_player_settings(tmp_path: Path) -> None:
     assert parse(minimal(), tmp_path).player == PlayerConfig()
     data = {**minimal(), "player": {"latitude": 52, "longitude": 4.5, "default_channel": "owr"}}
     assert parse(data, tmp_path).player == PlayerConfig(52.0, 4.5, "owr")
+
+
+STATIONS = Path(__file__).parent.parent / "examples" / "stations-nl.toml"
+
+
+def test_example_station_list_loads() -> None:
+    config = load(STATIONS)
+    assert len(config.channels) == 50
+    groups = [c.group for c in config.channels]
+    assert groups.count("Tomorrowland") == 3
+    assert {c.source.type for c in config.channels} == {"triton", "qmusic", "npo"}
+    assert all(
+        c.streams and all(s.url.startswith("https://") for s in c.streams) for c in config.channels
+    )
+    assert [c.id for c in config.channels if c.always] == ["owr", "daybreak", "anthems"]
+    text = STATIONS.read_text(encoding="utf-8")
+    # Copied from an LMS favorites list: none of its TuneIn tracking parameters.
+    assert "serial=" not in text and "partnerId" not in text
