@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tunebox</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.4 system-ui, sans-serif; margin: 16px; max-width: 40rem; }
+  ul { padding: 0; }
+  li { list-style: none; margin: 6px 0; display: flex; align-items: center; gap: 8px; }
+  img { width: 56px; height: 56px; object-fit: cover; background: #8884; flex: none; }
+  .dim { opacity: 0.6; }
+</style>
+</head>
+<body>
+<h1>tunebox</h1>
+<p class="dim">Radio API status page. The player arrives in milestone 2.</p>
+<main id="channels"></main>
+<script>
+const root = document.getElementById("channels");
+
+function trackItem(track, prefix) {
+  const item = document.createElement("li");
+  const image = document.createElement("img");
+  image.alt = "";
+  if (track.cover) image.src = track.cover;
+  const text = document.createElement("span");
+  text.textContent = `${prefix}${track.artist} - ${track.title}` +
+    (track.played_by ? ` (Played by ${track.played_by})` : "");
+  item.append(image, text);
+  return item;
+}
+
+function textItem(text) {
+  const item = document.createElement("li");
+  item.textContent = text;
+  return item;
+}
+
+async function refresh() {
+  try {
+    const channels = await (await fetch("/api/channels")).json();
+    const sections = await Promise.all(channels.map(async (channel) => {
+      const now = await (await fetch(`/api/channels/${encodeURIComponent(channel.id)}/now`)).json();
+      const section = document.createElement("section");
+      const heading = document.createElement("h2");
+      heading.textContent = channel.name + (now.stale_since ? " (feed unreachable)" : "");
+      const list = document.createElement("ul");
+      list.append(now.current ? trackItem(now.current, "") : textItem("Station ID"));
+      if (now.upcoming) {
+        const next = now.upcoming.track
+          ? trackItem(now.upcoming.track, `in ${now.upcoming.in_s} s: `)
+          : textItem(`in ${now.upcoming.in_s} s: station ID`);
+        next.classList.add("dim");
+        list.append(next);
+      }
+      for (const track of now.history.slice(0, 5)) {
+        const item = trackItem(track, "");
+        item.classList.add("dim");
+        list.append(item);
+      }
+      section.append(heading, list);
+      return section;
+    }));
+    root.replaceChildren(...sections);
+  } catch (error) {
+    root.replaceChildren(textItem(`Could not reach the API: ${error}`));
+  }
+}
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>
