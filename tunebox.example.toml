@@ -1,0 +1,45 @@
+# tunebox configuration. Copy to the data directory as tunebox.toml.
+
+[server]
+port = 8080
+# host = "0.0.0.0"
+# data_dir defaults to the directory this file is in.
+
+[defaults]
+# Seconds after a track's start time at which it counts as heard. The player
+# adds its own buffer on top; PawTunes' stock player does not, so it gets a
+# separate, longer delay.
+delay_s = 7
+pawtunes_delay_s = 28
+poll_interval_s = 12
+history_size = 50
+
+[[channels]]
+id = "owr"
+name = "One World Radio"
+stream_url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL_ADP.aac"
+source = { type = "triton", mount = "OWR_INTERNATIONAL" }
+
+[channels.rules]
+station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+played_by = '\s*\(Played by ([^)]*)\)\s*$'
+
+[[channels]]
+id = "daybreak"
+name = "Daybreak Sessions"
+stream_url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_DAYBREAK_ADP.aac"
+source = { type = "triton", mount = "OWR_DAYBREAK" }
+
+[channels.rules]
+station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+played_by = '\s*\(Played by ([^)]*)\)\s*$'
+
+[[channels]]
+id = "anthems"
+name = "Tomorrowland Anthems"
+stream_url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_ANTHEMS_ADP.aac"
+source = { type = "triton", mount = "OWR_ANTHEMS" }
+
+[channels.rules]
+station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+played_by = '\s*\(Played by ([^)]*)\)\s*$'
