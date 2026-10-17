@@ -198,7 +198,14 @@ def test_recent_list_survives_a_restart() -> None:
     source.responses = [[NEW, OLD]]
     channel, _, _ = make(source, Clock(1_300_000), store=store)
     channel.poll_once()
-    restarted, _, _ = make(FakeSource(), Clock(1_300_000), store=store)
+    restarted_source = FakeSource()
+    restarted_source.responses = [[NEW, OLD]]
+    restarted, _, _ = make(restarted_source, Clock(1_300_000), store=store)
+    # Kept as history; current again only once the feed has answered.
+    body = restarted.now_view()[0]
+    assert body["current"] is None
+    assert [t["title"] for t in body["history"]] == ["My People", "Stay"]
+    restarted.poll_once()
     assert restarted.now_view()[0]["current"]["title"] == "My People"
 
 
@@ -355,3 +362,39 @@ def test_status_reports_whether_the_channel_is_active() -> None:
     assert channel.status()["active"] is False
     channel.touch()
     assert channel.status()["active"] is True
+
+
+def test_a_woken_channel_shows_no_current_until_it_has_polled() -> None:
+    source = FakeSource()
+    source.responses = [[NEW], [NEW]]
+    channel, _, _ = make(source, Clock(1_300_000))
+    channel.poll_once()
+    assert channel.now_view()[0]["current"] is not None
+    stop = threading.Event()
+    stop.set()
+    channel.sleep_until_active(stop)
+    # Idle for a while: what it knew may be long over.
+    body, _ = channel.now_view()
+    assert body["current"] is None
+    assert body["upcoming"] is None
+    assert body["history"]
+    assert channel.pawtunes_view()["title"] == "One World Radio"
+    channel.poll_once()
+    assert channel.now_view()[0]["current"]["title"] == "My People"
+
+
+def test_touch_reports_whether_the_channel_was_idle() -> None:
+    channel, _, _ = make(FakeSource(), Clock(5_000))
+    assert channel.touch() is True
+    assert channel.touch() is False
+
+
+def test_waiting_for_the_first_poll_after_waking() -> None:
+    source = FakeSource()
+    source.responses = [[NEW]]
+    channel, _, _ = make(source, Clock(1_300_000))
+    assert channel.wait_fresh(0.01) is False
+    worker = threading.Thread(target=channel.poll_once)
+    worker.start()
+    assert channel.wait_fresh(2) is True
+    worker.join()

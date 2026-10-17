@@ -13,6 +13,11 @@ const FORBIDDEN = [
     [/this\.#|^\s*(static\s+)?#[A-Za-z_$]/m, 'private class member'],
     [/^\s*static\s*\{/m, 'static block'],
     [/^await\s/m, 'top-level await'],
+    // Newer DOM and library calls the car may not have (Chrome 86+, 92+, 98+).
+    [/\.replaceChildren\(/, 'replaceChildren()'],
+    [/\.at\(/, 'Array.prototype.at()'],
+    [/structuredClone\(/, 'structuredClone()'],
+    [/\.replaceAll\(/, 'String.prototype.replaceAll()'],
 ];
 
 function stripped(source) {
@@ -25,10 +30,13 @@ function stripped(source) {
         .replace(/`(?:[^`\\]|\\.)*`/g, '``');
 }
 
-test('player code stays within the ES2019 syntax floor', () => {
-    const files = readdirSync(JS).filter((name) => name.endsWith('.js'));
-    for (const name of files) {
-        const source = stripped(readFileSync(join(JS, name), 'utf8'));
+test('player code stays within the ES2019 syntax and API floor', () => {
+    const files = readdirSync(JS).filter((name) => name.endsWith('.js')).map((name) => join(JS, name));
+    // The status and check pages run in the car too.
+    files.push(new URL('../status.js', import.meta.url).pathname, new URL('../check.js', import.meta.url).pathname);
+    for (const path of files) {
+        const name = path.split('/').pop();
+        const source = stripped(readFileSync(path, 'utf8'));
         for (const [pattern, what] of FORBIDDEN) {
             assert.ok(!pattern.test(source), `${name}: ${what}`);
         }

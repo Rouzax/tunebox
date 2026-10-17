@@ -69,6 +69,9 @@ class Channel:
         self._frozen_artwork: dict[tuple[int, str], str | None] = {}
         self._active_until = 0
         self._wake = threading.Event()
+        # Set by a successful poll; cleared while idle. What was current
+        # before an idle spell is long over, so nothing is current until then.
+        self._fresh = threading.Event()
 
     def run(self, stop: threading.Event) -> None:
         while not stop.is_set():
@@ -84,11 +87,18 @@ class Channel:
                     delay = self._failed(error)
             stop.wait(delay)
 
-    def touch(self) -> None:
-        """Marks the channel as listened to; an idle poller wakes at once."""
+    def touch(self) -> bool:
+        """Marks the channel as listened to; an idle poller wakes at once.
+        Returns whether the channel was idle."""
+        was_idle = not self.active()
         with self._lock:
             self._active_until = self._clock() + ACTIVE_MS
         self._wake.set()
+        return was_idle
+
+    def wait_fresh(self, timeout_s: float) -> bool:
+        """Waits up to timeout_s for a successful poll since waking."""
+        return self._fresh.wait(timeout_s)
 
     def active(self) -> bool:
         if self.config.always:
@@ -100,6 +110,7 @@ class Channel:
         """Waits without network traffic until a request or stop."""
         # Back after a gap, the feed may have moved on by more than a few entries.
         self._polled = False
+        self._fresh.clear()
         event(log, logging.DEBUG, "channel_idle", channel=self.config.id)
         while not stop.is_set() and not self.active():
             self._wake.wait(IDLE_CHECK_S)
@@ -122,6 +133,7 @@ class Channel:
             added = self._merge(entries)
             recent = list(self._recent)
             self._polled = True
+            self._fresh.set()
             self._failures = 0
             self._last_ok = now
             recovered_from, self._stale_since = self._stale_since, None
@@ -242,8 +254,14 @@ class Channel:
         relative countdown that a wrong device clock cannot shift."""
         timeline, stale = self._timeline(self.config.delay_s + buffer_s)
         current = timeline.current
+        history = list(timeline.history)
         upcoming: dict[str, Any] | None = None
-        if timeline.upcoming is not None:
+        if not self._fresh.is_set():
+            # Woken from idle (or just started): the last known track is history.
+            if current is not None:
+                history.insert(0, current)
+            current = None
+        elif timeline.upcoming is not None:
             track = timeline.upcoming
             upcoming = {
                 # A station ID is coming: the player switches to the channel name.
@@ -253,7 +271,7 @@ class Channel:
         body: dict[str, Any] = {
             "current": self._track_json(current) if current else None,
             "upcoming": upcoming,
-            "history": [self._track_json(t) for t in timeline.history],
+            "history": [self._track_json(t) for t in history],
             "stale_since": stale,
         }
         return body, _etag(body)
@@ -261,7 +279,7 @@ class Channel:
     def pawtunes_view(self) -> dict[str, Any]:
         """The shape PawTunes' "custom" stats source reads."""
         timeline, _ = self._timeline(self.config.pawtunes_delay_s)
-        audible = timeline.audible
+        audible = timeline.audible if self._fresh.is_set() else None
         body: dict[str, Any]
         if audible is None:
             body = {"artist": "", "title": self.config.name}

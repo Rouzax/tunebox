@@ -92,9 +92,12 @@ async function start(root) {
         },
     });
 
+    const probe = document.createElement('audio');
+    const playable = (stream) => canPlay(stream, (type) => probe.canPlayType(type));
+
     app.selectChannel = (id) => {
         app.channel = channels.find((channel) => channel.id === id);
-        app.stream = pickStream(app.channel, storage.get(`stream.${id}`));
+        app.stream = pickStream(app.channel, storage.get(`stream.${id}`), playable);
         storage.set('channel', id);
         switcher.reset();
         shown = null;
@@ -116,9 +119,10 @@ async function start(root) {
         }
     };
     app.step = (delta) => app.selectChannel(nextChannel(channels, app.channel.id, delta));
-    const probe = document.createElement('audio');
     app.play = () => {
-        if (!canPlay(app.stream, (type) => probe.canPlayType(type))) {
+        if (!playable(app.stream)) {
+            // Never leave the previous station playing under this one's titles.
+            player.stop();
             toast.show(`This browser cannot play ${app.stream.codec.toUpperCase()}. Pick another quality on the channel page.`, 8000);
             return;
         }

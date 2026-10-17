@@ -167,8 +167,8 @@ Good to know:
 - "Reconnecting..." means the stream dropped. The player keeps trying with
   pauses of 2 seconds up to a minute; you do not need to do anything.
 - The visualizer starts after your first tap or key press on the page.
-- A station nobody listened to for a while shows its name for a few
-  seconds until its first song arrives.
+- Opening a station nobody listened to for a while takes a moment: tunebox
+  checks its feed first, so what you see is what is on now.
 
 ## Embed the player on another page
 
@@ -348,7 +348,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | No sound, and the ring around the stop button keeps spinning ("Reconnecting...") | The stream cannot be reached from this device or network. | The player keeps trying. Try another quality on the stations page; open `/check.html` on the device to see which formats it plays. |
 | "This browser cannot play AAC" (or MP3) | The browser lacks that codec (common for AAC in some Linux browsers). | Pick a quality with the other codec, usually "Compatible" (MP3). |
 | No visualizer | It starts after the first tap or key press on the page. A stream served without the cross-origin permission plays without it ("No visualizer for this stream"). | Tap the page once. Nothing to do for such a stream. |
-| A station shows only its name, no song | Nobody had listened to it recently, so tunebox only started checking its feed now; or its feed is down. | Wait a few seconds. If it stays empty, `/healthz` shows `stale_since` for that station. |
+| A station shows only its name, no song | Its feed answered slowly or not at all when you opened it (tunebox does not show a song it cannot confirm is on now). | Wait for the next update (10 seconds). If it stays empty, `/healthz` shows `stale_since` for that station. |
 | PawTunes shows nothing new | PawTunes cannot reach the URL. | Open the same `/api/pawtunes/<id>` address in a browser from the PawTunes machine; you should see the current song. |
 
 For more detail in the log, set `LOG_LEVEL: info,tunebox.covers=debug` in
@@ -392,7 +392,7 @@ is reported at startup instead of being ignored.
 | `id` | yes | Used in addresses. Lower-case letters, digits and `-`. |
 | `name` | yes | Shown during jingles. |
 | `streams` | yes, or `stream_url` | One or more `[[channels.streams]]` tables: `name` (required), `url` (required, `https://`), `codec` (`aac` or `mp3`), `kbps` (whole number). The first is the default. |
-| `stream_url` | instead of `streams` | One stream, `http://` or `https://`, named "Default". |
+| `stream_url` | instead of `streams` | One stream, `http://` or `https://`, named "Default". An `http://` stream only plays when the player page itself is plain http (on your own network); browsers block it on an https page. |
 | `default_image` | no | An image address for the player to show when a song has no cover. |
 | `source` | yes | `{ type = "triton", mount = "<feed mount>" }`, `{ type = "qmusic", station = "<station id>" }` or `{ type = "npo", site = "nporadio1" \| "nporadio2" \| "npo3fm" }`. |
 | `group` | no | Heading on the channel page. |

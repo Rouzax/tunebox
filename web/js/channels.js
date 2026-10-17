@@ -38,8 +38,14 @@ export function streamLabel(stream) {
     return parts.length ? `${stream.name} (${parts.join(' ')})` : stream.name;
 }
 
-export function pickStream(channel, savedName) {
-    return channel.streams.find((stream) => stream.name === savedName) || channel.streams[0];
+// The remembered stream if this browser can play it, else the first it can
+// play, else the first (it will report that it cannot play).
+export function pickStream(channel, savedName, playable = () => true) {
+    const saved = channel.streams.find((stream) => stream.name === savedName);
+    if (saved && playable(saved)) {
+        return saved;
+    }
+    return channel.streams.find(playable) || channel.streams[0];
 }
 
 export function pickChannel(channels, requested, saved, fallback) {

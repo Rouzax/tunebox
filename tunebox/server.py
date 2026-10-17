@@ -20,6 +20,9 @@ from tunebox.logs import bound, event
 log = logging.getLogger(__name__)
 
 MAX_BUFFER_S = 120.0
+# A request to an idle channel waits this long for its first poll, so the
+# answer carries what is on now rather than nothing.
+FRESH_WAIT_S = 2.5
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -37,7 +40,8 @@ CONTENT_TYPES = {
 # own code has no build step to fingerprint it) is revalidated on every load.
 IMMUTABLE_DIRS = ("vendor/",)
 # Covers come from catalogue CDNs and streams from redirect targets whose
-# hosts vary, hence https: for images and media.
+# hosts vary, hence any https host for images and media. http media is for
+# an http stream_url on a plain-http page; https pages block it anyway.
 CSP = "; ".join(
     [
         "default-src 'self'",
@@ -45,7 +49,7 @@ CSP = "; ".join(
         "style-src 'self'",
         "font-src 'self'",
         "img-src 'self' https: data:",
-        "media-src https:",
+        "media-src https: http:",
         "connect-src 'self'",
         "frame-ancestors *",
         "base-uri 'none'",
@@ -168,7 +172,8 @@ class Handler(BaseHTTPRequestHandler):
             channel = channels.get(parts[2])
             if channel is None:
                 return self._send_json(404, {"error": "unknown_channel"}, head)
-            channel.touch()
+            if channel.touch():
+                channel.wait_fresh(FRESH_WAIT_S)
             buffer_s = _buffer_s(self.path)
             if buffer_s is None:
                 return self._send_json(400, {"error": "bad_buffer_s"}, head)
@@ -181,7 +186,8 @@ class Handler(BaseHTTPRequestHandler):
             channel = channels.get(parts[2])
             if channel is None:
                 return self._send_json(404, {"error": "unknown_channel"}, head)
-            channel.touch()
+            if channel.touch():
+                channel.wait_fresh(FRESH_WAIT_S)
             headers = {"Cache-Control": "no-cache"}
             return self._send_json(200, channel.pawtunes_view(), head, headers)
         if parts and parts[0] == "api":

@@ -1,5 +1,6 @@
 import AudioMotionAnalyzer from '../vendor/audiomotion-analyzer-4.5.4/audioMotion-analyzer.js';
 import {createEffects} from './effects.js';
+import {keepAudioRunning} from './reconnect.js';
 import {accentColor} from './palette.js';
 
 const ART_GRADIENT = 'car-art';
@@ -95,6 +96,7 @@ export function bindVisualizer(app) {
     let lowPower = false;
     let gestured = false;
     let available = true;
+    let resumeAudio = () => {};
 
     function ensureMotion() {
         if (motion || !gestured || !available || !player.element()) {
@@ -106,6 +108,7 @@ export function bindVisualizer(app) {
             motion.registerGradient(ART_GRADIENT, {bgColor: BACKGROUND, colorStops: artStops});
         }
         motion.setOptions({onCanvasDraw: (instance) => app.setBass(instance.getEnergy('bass'))});
+        resumeAudio = keepAudioRunning(motion.audioCtx, () => player.state() !== 'stopped');
         effects = createEffects(motion, root, app.setBass);
         checkPower();
         return motion;
@@ -251,7 +254,7 @@ export function bindVisualizer(app) {
     events.on('state', (state) => {
         if (state === 'loading' || state === 'playing') {
             if (motion) {
-                motion.audioCtx.resume();
+                resumeAudio();
             } else {
                 apply();
             }

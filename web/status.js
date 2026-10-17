@@ -43,9 +43,11 @@ async function refresh() {
       section.append(heading, list);
       return section;
     }));
-    root.replaceChildren(...sections);
+    root.textContent = "";
+    root.append(...sections);
   } catch (error) {
-    root.replaceChildren(textItem(`Could not reach the API: ${error}`));
+    root.textContent = "";
+    root.append(textItem(`Could not reach the API: ${error}`));
   }
 }
 

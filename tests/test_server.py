@@ -246,3 +246,10 @@ def test_unknown_logos_are_not_found(server: TuneboxServer, path: str) -> None:
 def test_channel_list_gives_the_logo_path(server: TuneboxServer) -> None:
     _, _, body = request(server, "/api/channels")
     assert json.loads(body)[0]["logo"] == "/logos/owr.png"
+
+
+def test_csp_allows_the_streams_the_config_accepts() -> None:
+    # stream_url may be http (kept for older configs); on a plain-http page
+    # such a stream must not be refused by the policy itself.
+    media = next(part for part in CSP.split("; ") if part.startswith("media-src"))
+    assert media.split()[1:] == ["https:", "http:"]

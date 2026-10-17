@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {STALL_MS, bufferSeconds, createWatchdog, retryDelayMs} from '../js/reconnect.js';
+import {STALL_MS, bufferSeconds, createWatchdog, keepAudioRunning, retryDelayMs} from '../js/reconnect.js';
 
 test('retries back off and then stay at a minute', () => {
     assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 20].map(retryDelayMs), [2000, 4000, 8000, 16000, 30000, 60000, 60000, 60000]);
@@ -38,4 +38,34 @@ test('buffer seconds from the buffered ranges, clamped', () => {
     assert.equal(bufferSeconds(null, 0), 0);
     assert.equal(bufferSeconds(ranges(5), 10), 0);
     assert.equal(bufferSeconds(ranges(500), 0), 120);
+});
+
+test('a suspended or interrupted audio context is resumed while playback is wanted', async () => {
+    let wanted = true;
+    const context = {
+        state: 'running',
+        resumes: 0,
+        resume() {
+            this.resumes += 1;
+            return Promise.reject(new Error('not allowed yet'));
+        },
+    };
+    const resume = keepAudioRunning(context, () => wanted);
+    for (const state of ['suspended', 'interrupted']) {
+        context.state = state;
+        context.onstatechange();
+    }
+    assert.equal(context.resumes, 2);
+    context.state = 'running';
+    context.onstatechange();
+    wanted = false;
+    context.state = 'suspended';
+    resume();
+    assert.equal(context.resumes, 2);
+    context.state = 'closed';
+    wanted = true;
+    resume();
+    assert.equal(context.resumes, 2);
+    // A rejected resume() must not surface as an unhandled rejection.
+    await new Promise((done) => setImmediate(done));
 });

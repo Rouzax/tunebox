@@ -51,3 +51,11 @@ test('a stream plays unless the browser says it cannot play its codec', () => {
     assert.equal(canPlay(MP3, says({'audio/mpeg': 'maybe'})), true);
     assert.equal(canPlay({name: 'Default', codec: null}, says({})), true);
 });
+
+test('the stream choice prefers one this browser can play', () => {
+    const mp3Only = (stream) => stream.codec === 'mp3';
+    assert.equal(pickStream(CHANNELS[0], 'High', mp3Only), MP3);
+    assert.equal(pickStream(CHANNELS[0], null, mp3Only), MP3);
+    assert.equal(pickStream(CHANNELS[3], null, mp3Only), HIGH);
+    assert.equal(pickStream(CHANNELS[0], 'High', () => true), HIGH);
+});

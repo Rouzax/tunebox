@@ -53,3 +53,12 @@ def test_manifest_icons_exist() -> None:
 def test_car_css_has_no_pawtunes_selectors_left() -> None:
     css = (WEB / "css" / "car.css").read_text(encoding="utf-8")
     assert ".pawtunes" not in css
+
+
+def test_scripts_do_not_evaluate_strings() -> None:
+    # The CSP has no 'unsafe-eval': eval and new Function throw, so a syntax
+    # probe built on them reports "unsupported" in every browser.
+    scripts = [*WEB.glob("*.js"), *(WEB / "js").glob("*.js")]
+    for script in scripts:
+        source = script.read_text(encoding="utf-8")
+        assert not re.search(r"\bnew Function\(|\beval\(", source), script.name

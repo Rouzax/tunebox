@@ -13,14 +13,9 @@
         return td;
     }
 
-    function syntax(code) {
-        try {
-            new Function(code);
-            return 'yes';
-        } catch (error) {
-            return 'no';
-        }
-    }
+    // Set by check-async.js and check-optional.js, which only parse in
+    // browsers that know the syntax (the page allows no eval).
+    var syntax = window.tuneboxSyntax || {};
 
     function css(property, value) {
         return window.CSS && CSS.supports ? (CSS.supports(property, value) ? 'yes' : 'no') : 'unknown';
@@ -44,8 +39,9 @@
         }
     }
     row('ES modules', 'noModule' in document.createElement('script') ? 'yes' : 'no');
-    row('async/await', syntax('async function f() { await 1; }'));
-    row('Optional chaining (?.)', syntax('var a = null; a?.b;'));
+    row('async/await', syntax.asyncAwait ? 'yes' : 'no');
+    row('Optional chaining (?.)', syntax.optionalChaining ? 'yes' : 'no');
+    row('replaceChildren()', typeof document.body.replaceChildren === 'function' ? 'yes' : 'no');
     row('AbortController', typeof AbortController === 'function' ? 'yes' : 'no');
     row('ResizeObserver', typeof ResizeObserver === 'function' ? 'yes' : 'no');
     row('CSS @property', window.CSS && CSS.registerProperty ? 'yes' : 'no');

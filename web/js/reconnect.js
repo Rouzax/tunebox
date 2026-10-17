@@ -44,3 +44,23 @@ export function bufferSeconds(buffered, currentTime) {
     const ahead = buffered.end(buffered.length - 1) - currentTime;
     return Math.max(0, Math.min(MAX_BUFFER_S, Math.round(ahead)));
 }
+
+// A stream routed through Web Audio is silent while its AudioContext is
+// suspended, or "interrupted" on iOS during a call or a navigation prompt,
+// yet playback time keeps advancing, so the watchdog cannot see it. Resume
+// the context whenever it leaves "running" while playback is wanted.
+// Returns the check, for calling on a play as well.
+export function keepAudioRunning(context, wanted) {
+    const resume = () => {
+        if (!wanted() || context.state === 'running' || context.state === 'closed') {
+            return;
+        }
+        const resumed = context.resume();
+        if (resumed && resumed.catch) {
+            // Refused until the next user gesture; the next state change or play tries again.
+            resumed.catch(() => {});
+        }
+    };
+    context.onstatechange = resume;
+    return resume;
+}

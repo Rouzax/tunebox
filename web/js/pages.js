@@ -5,6 +5,12 @@ export const PAGES = ['main', 'history', 'channels', 'viz'];
 const HISTORY_SHOWN = 20;
 const AGO_REFRESH_MS = 30000;
 
+// replaceChildren() is too new for older car browsers (Chrome 86).
+function replaceContent(el, children) {
+    el.textContent = '';
+    el.append(...children);
+}
+
 function element(tag, className, text) {
     const el = document.createElement(tag);
     if (className) {
@@ -70,7 +76,7 @@ export function bindPages(app) {
             item.append(image, what, element('span', 'ago', timeAgo(track.started_at, now)));
             return item;
         });
-        historyList.replaceChildren(...items);
+        replaceContent(historyList, items);
         historyEmpty.classList.toggle('hidden', items.length > 0);
     }
     events.on('history', () => {
@@ -110,7 +116,7 @@ export function bindPages(app) {
             section.append(list);
             return section;
         });
-        groups.replaceChildren(...sections);
+        replaceContent(groups, sections);
     }
 
     // Scrolls the channel page only. scrollIntoView() would also scroll the
