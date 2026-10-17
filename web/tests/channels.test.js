@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {groupChannels, nextChannel, pickChannel, pickStream, streamLabel} from '../js/channels.js';
+import {canPlay, groupChannels, nextChannel, pickChannel, pickStream, streamLabel} from '../js/channels.js';
 
 const HIGH = {name: 'High', url: 'https://example.invalid/h', codec: 'aac', kbps: 256};
 const MP3 = {name: 'Compatible', url: 'https://example.invalid/m', codec: 'mp3', kbps: null};
@@ -42,4 +42,12 @@ test('channel choice: link, then remembered, then default, then first', () => {
     assert.equal(pickChannel(CHANNELS, 'nope', 'radio-538', 'solo'), 'radio-538');
     assert.equal(pickChannel(CHANNELS, null, 'removed', 'solo'), 'solo');
     assert.equal(pickChannel(CHANNELS, null, null, 'removed'), 'owr');
+});
+
+test('a stream plays unless the browser says it cannot play its codec', () => {
+    const says = (answers) => (type) => answers[type] || '';
+    assert.equal(canPlay(HIGH, says({'audio/aac': 'probably'})), true);
+    assert.equal(canPlay(HIGH, says({'audio/mpeg': 'maybe'})), false);
+    assert.equal(canPlay(MP3, says({'audio/mpeg': 'maybe'})), true);
+    assert.equal(canPlay({name: 'Default', codec: null}, says({})), true);
 });

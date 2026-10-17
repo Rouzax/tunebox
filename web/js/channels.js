@@ -50,3 +50,12 @@ export function pickChannel(channels, requested, saved, fallback) {
     }
     return channels[0].id;
 }
+
+const MIME_TYPES = {aac: 'audio/aac', mp3: 'audio/mpeg'};
+
+// Whether this browser can play the stream's codec; streams without a codec
+// in the config are tried.
+export function canPlay(stream, canPlayType) {
+    const type = stream.codec ? MIME_TYPES[stream.codec] : null;
+    return !type || canPlayType(type) !== '';
+}
