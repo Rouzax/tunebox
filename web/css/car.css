@@ -1,0 +1,533 @@
+/* The car theme, layered over base.css. */
+
+/* One line per text row, scrolled by ticker.js when it does not fit. Wrapping is
+   what pushed long titles under the player bar on short screens. */
+.tunebox .onair {
+    /* .page centres its children, which would let .onair grow to the
+       unwrapped text width and leave the ticker nothing to clip against. */
+    box-sizing: border-box;
+    width:      100%;
+}
+
+.tunebox .onair .ticker {
+    overflow:    hidden;
+    white-space: nowrap;
+}
+
+.tunebox .onair .ticker > div {
+    display:     inline-block;
+    white-space: nowrap;
+}
+
+.tunebox .onair .ticker.scrolling {
+    text-align: left;
+}
+
+.tunebox .onair .ticker.scrolling > div {
+    /* Room for the edge fades, so the line's first and last letters rest
+       fully visible; ticker.js measures this padding into the scroll distance. */
+    padding:   0 var(--ticker-fade);
+    animation: car-ticker var(--ticker-duration, 10s) linear infinite alternate;
+}
+
+/* A scrolling line fades out at both edges instead of being cut off. */
+.tunebox .onair .ticker {
+    --ticker-fade: 1.5rem;
+}
+
+.tunebox .onair .ticker.scrolling {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--ticker-fade), #000 calc(100% - var(--ticker-fade)), transparent);
+    mask-image:         linear-gradient(to right, transparent, #000 var(--ticker-fade), #000 calc(100% - var(--ticker-fade)), transparent);
+}
+
+/* The holds at both ends leave the start and the end of the line readable. */
+@keyframes car-ticker {
+    0%, 15% {
+        transform: translateX(0);
+    }
+    85%, 100% {
+        transform: translateX(var(--ticker-shift, 0));
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tunebox .onair .ticker,
+    .tunebox .onair .ticker > div {
+        white-space: normal;
+    }
+
+    .tunebox .onair .ticker.scrolling > div {
+        animation: none;
+    }
+}
+
+/* Right edge of the bar, mirroring the history button on the left. */
+.tunebox .player .fullscreen-toggle {
+    margin-left: auto;
+    cursor:      pointer;
+}
+
+.tunebox .player .fullscreen-toggle .exit,
+.tunebox .player .fullscreen-toggle.active .enter {
+    display: none;
+}
+
+.tunebox .player .fullscreen-toggle.active .exit {
+    display: inline;
+}
+
+/* Visualizer button: the first icon of the right-hand group takes the auto
+   margin, whichever of the two the browser supports. */
+.tunebox .player .viz-toggle {
+    margin-left: auto;
+    cursor:      pointer;
+}
+
+.tunebox .player .viz-toggle:not(.hidden) + .fullscreen-toggle {
+    margin-left: .75rem;
+}
+
+/* History, channels and the visualizer menu are read and tapped; the
+   visualizer fades out behind them. Only opacity animates: a
+   transition on every property would visibly slide the Ring canvas into
+   place around the cover. */
+.tunebox #analyzer,
+.tunebox .car-fx {
+    transition: opacity 300ms ease;
+}
+
+.tunebox[data-page]:not([data-page="main"]) #analyzer,
+.tunebox[data-page]:not([data-page="main"]) .car-fx {
+    opacity: 0;
+}
+
+/* A stopped analyzer leaves its last frame on the canvas. */
+.tunebox[data-viz="off"] #analyzer {
+    visibility: hidden;
+}
+
+/* A full-height LED wall towers over the artwork and runs behind the buttons;
+   keep it between the two. */
+.tunebox[data-viz="led"] #analyzer {
+    top:    45%;
+    bottom: 6.5rem;
+}
+
+/* Album-art gradients can be as light as the text, so give it its own contrast. */
+.tunebox .onair {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 10px rgba(0, 0, 0, .6);
+}
+
+/* Cover palette from palette.js. Registered so a track change cross-fades
+   the colours instead of jumping; browsers without @property just switch.
+   For a colourless cover palette.js publishes the accent and its
+   neighbours; these initial values (the same accent and neighbours) only
+   show before that. */
+@property --art-1 {
+    syntax:        '<color>';
+    inherits:      true;
+    initial-value: #62a8ea;
+}
+
+@property --art-2 {
+    syntax:        '<color>';
+    inherits:      true;
+    initial-value: #9b7bf0;
+}
+
+@property --art-3 {
+    syntax:        '<color>';
+    inherits:      true;
+    initial-value: #3cc6c0;
+}
+
+@property --art-glow {
+    syntax:        '<color>';
+    inherits:      true;
+    initial-value: rgba(98, 168, 234, .6);
+}
+
+.tunebox {
+    transition: --art-1 2s ease, --art-2 2s ease, --art-3 2s ease, --art-glow 2s ease;
+}
+
+/* Animated background: three soft colour fields drifting slowly. Only transform
+   is animated, which the compositor handles without repainting. */
+.tunebox .car-ambient {
+    position:       absolute;
+    z-index:        0;
+    top:            0;
+    right:          0;
+    bottom:         0;
+    left:           0;
+    overflow:       hidden;
+    transition:     opacity 1s ease, background 1s ease;
+    pointer-events: none;
+    opacity:        0;
+}
+
+.tunebox.car-ambient-on .car-ambient {
+    opacity: 1;
+}
+
+.tunebox .car-ambient::before {
+    position:   absolute;
+    top:        -30%;
+    right:      -30%;
+    bottom:     -30%;
+    left:       -30%;
+    content:    "";
+    animation:  car-drift 45s ease-in-out infinite alternate;
+    opacity:    .32;
+    background: radial-gradient(circle at 28% 30%, var(--art-1) 0, transparent 38%),
+                radial-gradient(circle at 74% 38%, var(--art-2) 0, transparent 34%),
+                radial-gradient(circle at 46% 74%, var(--art-3) 0, transparent 42%);
+}
+
+@keyframes car-drift {
+    0% {
+        transform: translate(0, 0) rotate(0deg) scale(1);
+    }
+    50% {
+        transform: translate(-7%, 5%) rotate(25deg) scale(1.12);
+    }
+    100% {
+        transform: translate(6%, -6%) rotate(-20deg) scale(1.05);
+    }
+}
+
+/* Cover glow, breathing with the bass level palette.js writes to --bass. */
+.tunebox.car-glow-on .artwork-img {
+    box-shadow: 0 0 calc(1rem + var(--bass, 0) * 2.5rem) calc(var(--bass, 0) * .6rem) var(--art-glow);
+}
+
+.tunebox[data-viz="neon"] #analyzer canvas {
+    filter: drop-shadow(0 0 4px var(--art-1)) drop-shadow(0 0 10px var(--art-1));
+}
+
+/* The glow filter repaints the whole canvas every frame. */
+.tunebox[data-power="low"][data-viz="neon"] #analyzer canvas {
+    filter: none;
+}
+
+/* A full-screen light wall is calm only when dim. */
+.tunebox[data-viz="ambient"] #analyzer {
+    opacity: .55;
+}
+
+.tunebox .car-fx {
+    position:       absolute;
+    z-index:        0;
+    top:            0;
+    left:           0;
+    width:          100%;
+    height:         100%;
+    pointer-events: none;
+}
+
+/* Effects draw on .car-fx; the spectrum canvas would show its last frame. */
+.tunebox[data-effect] #analyzer {
+    visibility: hidden;
+}
+
+/* Night: dim everything that glows, the cover and the controls; the title
+   stays the brightest thing on screen so it still reads at a glance. */
+/* The ambient layer covers the skin's background, the largest bright area,
+   so its own dark fill dims that too. */
+.tunebox.car-night .car-ambient {
+    filter:     brightness(.4);
+    background: rgba(0, 0, 0, .55);
+}
+
+.tunebox.car-night #analyzer,
+.tunebox.car-night .car-fx {
+    opacity: .35;
+}
+
+.tunebox.car-night .artwork-img {
+    filter: brightness(.65);
+}
+
+.tunebox.car-night .player,
+.tunebox.car-night .car-daynight {
+    opacity: .6;
+}
+
+.tunebox.car-night .onair .car-channel-line,
+.tunebox.car-night .onair .car-artist-line,
+.tunebox.car-night .onair .car-played-line {
+    opacity: .55;
+}
+
+.tunebox.car-night .onair .car-title-line {
+    opacity: .85;
+}
+
+/* Day: a light theme, like the car's own screen by day. base.css paints the
+   page navy with white text; the ambient layer covers it with a light base
+   here, and the colours base.css sets explicitly are replaced one by one. The cover's colours stay, as pastel fields. */
+.tunebox.car-day {
+    color: #1f2a37;
+}
+
+.tunebox.car-day .car-ambient {
+    background: linear-gradient(160deg, #f6f8fb 0%, #e4eaf1 100%);
+}
+
+.tunebox.car-day .car-ambient::before {
+    opacity: .4;
+}
+
+/* The track text sits on the dark scrim in both modes, so it stays white. */
+.tunebox.car-day .onair {
+    color: #fff;
+}
+
+/* The accent darkened for contrast on the light base; browsers without
+   color-mix() keep the first value, the accent darkened likewise. */
+.tunebox.car-day .icon-fill,
+.tunebox.car-day .car-daynight svg {
+    fill: #1f6fbf;
+    fill: color-mix(in srgb, var(--accent-color) 65%, #000);
+}
+
+.tunebox.car-day .player {
+    background: rgba(255, 255, 255, .55);
+}
+
+.tunebox.car-day .car-daynight {
+    background: rgba(255, 255, 255, .7);
+}
+
+.tunebox.car-day .page.viz-page .viz-list button {
+    color: #1f2a37;
+}
+
+.tunebox.car-day .page.viz-page .viz-list li.active a {
+    color: #fff;
+}
+
+.tunebox.car-day .history-list li:hover {
+    background: rgba(0, 0, 0, .05);
+}
+
+/* Day/night button, top left. Icon only, so it clears the cover's corner in
+   the narrow window. */
+.tunebox .car-daynight {
+    position:      absolute;
+    z-index:       20;
+    top:           .5rem;
+    left:          .5rem;
+    display:       flex;
+    align-items:   center;
+    justify-content: center;
+    width:         2.4rem;
+    height:        2.4rem;
+    transition:    opacity 300ms ease;
+    color:         #fff;
+    border-radius: 50%;
+    background:    rgba(0, 0, 0, .25);
+}
+
+.tunebox .car-daynight svg {
+    display: none;
+    width:   1.5rem;
+    height:  1.5rem;
+    fill:    currentColor;
+}
+
+.tunebox .car-daynight[data-mode="auto"] .auto,
+.tunebox .car-daynight[data-mode="day"] .day,
+.tunebox .car-daynight[data-mode="night"] .night {
+    display: block;
+}
+
+.tunebox[data-page]:not([data-page="main"]) .car-daynight {
+    pointer-events: none;
+    opacity:        0;
+}
+
+/* Cover sized to the room above the control bar instead of base.css's fixed
+   16rem: fullscreen gains a bigger cover rather than empty bands, and short
+   screens no longer push the title under the bar. 15rem is the bar plus the
+   two text lines and the spacing around them. --car-vh is set by layout.js.
+   Browsers without clamp() keep the base.css size. */
+.tunebox {
+    --car-art-size: clamp(8rem, min(85vw, calc(var(--car-vh, 100vh) - 15rem)), 30rem);
+}
+
+/* base.css sizes the pages from 100vh; see the real-height note in layout.js. */
+.tunebox .container,
+.tunebox .container .page {
+    height: calc(var(--car-vh, 100vh) - 6.5rem);
+}
+
+.tunebox .artwork-image {
+    margin-bottom: 1.5rem;
+}
+
+.tunebox .artwork-image .artwork-img {
+    width:  var(--car-art-size);
+    height: var(--car-art-size);
+}
+
+/* Visualizer menu: two columns of car-sized tap targets. */
+.tunebox .page.viz-page .viz-list {
+    display:               grid;
+    width:                 min(92vw, 26rem);
+    margin:                0;
+    padding:               0;
+    list-style:            none;
+    grid-template-columns: repeat(2, 1fr);
+    gap:                   .6rem;
+}
+
+.tunebox .page.viz-page .viz-list button {
+    font-size:     1rem;
+    display:       block;
+    padding:       .85rem 1rem;
+    transition:    opacity 250ms ease, background 250ms ease;
+    text-align:    center;
+    opacity:       .85;
+    color:         #fff;
+    border:        .1rem solid var(--accent-color, #62a8ea);
+    border-radius: .15rem;
+    background:    transparent;
+}
+
+.tunebox .page.viz-page .viz-list li.active a {
+    opacity:    1;
+    background: var(--accent-color, #62a8ea);
+}
+
+/* Scrim: a dark caption behind the track text in both modes, so the
+   visualizer moving behind it stays out of the way of a glance and the
+   white text has a solid ground even in the light theme. The rounded box
+   covers every line end; a same-colour shadow feathers its edge, which a
+   car's graphics chip draws far cheaper than backdrop blur. .onair is its
+   own stacking context (base.css), so z-index -1 keeps the scrim above
+   the page and below the text. Its width follows the widest line, from
+   ticker.js (--car-scrim-w). */
+.tunebox {
+    --car-scrim: rgba(12, 22, 36, .4);
+}
+
+.tunebox.car-night {
+    --car-scrim: rgba(6, 14, 24, .6);
+}
+
+.tunebox .onair::before {
+    position:       absolute;
+    z-index:        -1;
+    top:            -.4rem;
+    bottom:         -.4rem;
+    left:           50%;
+    width:          calc(var(--car-scrim-w, 100%) + 1.5rem);
+    transform:      translateX(-50%);
+    content:        "";
+    pointer-events: none;
+    border-radius:  1rem;
+    background:     var(--car-scrim);
+    box-shadow:     0 0 1.5rem 1rem var(--car-scrim);
+}
+
+/* Song first: the title is what a glance looks for, the channel rarely
+   changes. The channel's size goes on its inner element. */
+.tunebox .onair .current-channel {
+    font-size: .85rem;
+}
+
+.tunebox .onair .car-channel-line {
+    opacity: .7;
+}
+
+.tunebox .onair .car-title-line {
+    font-size:   1.6rem;
+    font-weight: 500;
+    line-height: 1.35;
+}
+
+.tunebox .onair .car-artist-line {
+    font-size: 1.15rem;
+    opacity:   .9;
+}
+
+/* Which festival set the track comes from, under the artist. */
+.tunebox .onair .car-played-line {
+    font-size: .8rem;
+    opacity:   .65;
+}
+
+.tunebox .onair .car-played-line[hidden] {
+    display: none;
+}
+
+/* Wide windows (data-layout from layout.js): cover left, sized by height, text
+   beside it. The page's ::before/::after auto margins (base.css) centre the row. */
+.tunebox[data-layout="wide"] {
+    --car-art-size: clamp(8rem, min(42vw, calc(var(--car-vh, 100vh) - 10rem)), 32rem);
+}
+
+.tunebox[data-layout="wide"] .page.main {
+    flex-direction: row;
+    box-sizing:     border-box;
+    padding:        0 2rem;
+    gap:            2.5rem;
+}
+
+.tunebox[data-layout="wide"] .artwork-image {
+    flex:          none;
+    margin-bottom: 0;
+}
+
+.tunebox[data-layout="wide"] .onair {
+    flex:       0 1 34rem;
+    width:      auto;
+    min-width:  0;
+    padding:    0;
+    text-align: left;
+}
+
+/* Beside the cover the caption reads as a panel; a wider feather and
+   rounder corners keep it a shadow rather than a box. */
+.tunebox[data-layout="wide"] .onair::before {
+    left:          -.75rem;
+    transform:     none;
+    border-radius: 1.75rem;
+    box-shadow:    0 0 2.5rem 1.5rem var(--car-scrim);
+}
+
+.tunebox[data-layout="wide"] .onair .car-title-line {
+    font-size: 2.1rem;
+}
+
+.tunebox[data-layout="wide"] .onair .car-artist-line {
+    font-size: 1.4rem;
+}
+
+/* Without a volume control (phones) the visualizer button moves next to
+   play, so the two sides of the bar mirror each other. */
+.tunebox .player.no-volume .viz-toggle {
+    margin-left: 0;
+}
+
+.tunebox .player.no-volume .viz-toggle:not(.hidden) + .fullscreen-toggle {
+    margin-left: auto;
+}
+
+.tunebox.car-day .channel {
+    background: rgba(255, 255, 255, .55);
+}
+
+.tunebox.car-day .channel.active {
+    color:      #fff;
+    background: #1f6fbf;
+}
+
+.tunebox.car-day .streams button {
+    border-color: rgba(31, 42, 55, .3);
+}
+
+.tunebox.car-day .btn {
+    border-color: #1f6fbf;
+}

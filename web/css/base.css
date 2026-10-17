@@ -1,0 +1,394 @@
+/* Layout and dark scheme of the player. car.css layers the car theme on top. */
+
+html,
+body {
+    height:     100%;
+    margin:     0;
+    overflow:   hidden;
+    color:      #fff;
+    /* The accent #62a8ea darkened: hsl(209, 77%, 23%) to hsl(209, 77%, 30%). */
+    background: linear-gradient(#0d3a67 0%, #124c86 100%);
+    font:       400 16px/1.4 "Poppins", system-ui, sans-serif;
+}
+
+button {
+    font:       inherit;
+    color:      inherit;
+    padding:    0;
+    cursor:     pointer;
+    border:     0;
+    background: none;
+}
+
+.tunebox {
+    --accent-color: #62a8ea;
+    position:       relative;
+    height:         100%;
+    overflow:       hidden;
+}
+
+.tunebox .hidden {
+    display: none !important;
+}
+
+.tunebox .noscript {
+    padding:    2rem;
+    text-align: center;
+}
+
+.tunebox .icon-fill {
+    fill: #3793e3;
+}
+
+.tunebox svg {
+    display: block;
+}
+
+/* Pages ---------------------------------------------------------------- */
+
+.tunebox .main-container {
+    position:        relative;
+    z-index:         10;
+    display:         flex;
+    flex-direction:  column;
+    justify-content: space-between;
+    height:          100%;
+}
+
+.tunebox .container {
+    z-index:  9;
+    overflow: hidden;
+    height:   calc(100vh - 6.5rem);
+}
+
+.tunebox .container-inner {
+    display:    flex;
+    height:     100%;
+    transition: transform 600ms cubic-bezier(.25, .8, .25, 1);
+}
+
+.tunebox[data-page="history"] .container-inner {
+    transform: translateX(-100%);
+}
+
+.tunebox[data-page="channels"] .container-inner {
+    transform: translateX(-200%);
+}
+
+.tunebox[data-page="viz"] .container-inner {
+    transform: translateX(-300%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tunebox .container-inner {
+        transition: none;
+    }
+}
+
+.tunebox .page {
+    display:        flex;
+    flex:           0 0 100%;
+    flex-direction: column;
+    align-items:    center;
+    box-sizing:     border-box;
+    height:         calc(100vh - 6.5rem);
+    padding:        0 1rem;
+    overflow-x:     hidden;
+    overflow-y:     auto;
+}
+
+/* Auto margins centre short content and let long content scroll from the top. */
+.tunebox .page::before,
+.tunebox .page::after {
+    margin:  auto;
+    content: "";
+}
+
+.tunebox .page h3 {
+    font-weight: 500;
+    margin:      1rem 0;
+}
+
+.tunebox .btn {
+    margin:        1.5rem 0 1rem;
+    padding:       .6rem 1.6rem;
+    border:        .1rem solid var(--accent-color);
+    border-radius: .15rem;
+}
+
+/* Now playing ------------------------------------------------------------ */
+
+.tunebox .artwork-image {
+    position: relative;
+}
+
+.tunebox .artwork-img {
+    position:      relative;
+    z-index:       10;
+    overflow:      hidden;
+    width:         16rem;
+    height:        16rem;
+    border-radius: .3rem;
+    background:    rgba(0, 0, 0, .2);
+}
+
+.tunebox .artwork-img img {
+    display:    block;
+    width:      100%;
+    height:     100%;
+    object-fit: cover;
+}
+
+/* Its own stacking context: car.css puts the caption scrim at z-index -1. */
+.tunebox .onair {
+    position:   relative;
+    z-index:    6;
+    padding:    0 1rem;
+    text-align: center;
+}
+
+/* Control bar ------------------------------------------------------------ */
+
+.tunebox .player {
+    position:    relative;
+    z-index:     10;
+    display:     flex;
+    align-items: center;
+    height:      6.5rem;
+    margin-top:  auto;
+}
+
+.tunebox .center-container {
+    display:         flex;
+    flex:            1 1 auto;
+    align-items:     center;
+    justify-content: center;
+    gap:             1rem;
+    padding:         0 1rem;
+}
+
+.tunebox .others,
+.tunebox .volume-control {
+    display:     flex;
+    flex:        1 1 0;
+    align-items: center;
+    gap:         .75rem;
+}
+
+.tunebox .player svg.icon-fill {
+    width:  2.25rem;
+    height: 2.25rem;
+}
+
+.tunebox .playback {
+    flex:   none;
+    width:  4.5rem;
+    height: 4.5rem;
+}
+
+.tunebox .playback svg {
+    width:  4.5rem;
+    height: 4.5rem;
+}
+
+.tunebox .playback .accent {
+    fill: var(--accent-color);
+}
+
+.tunebox[data-state="stopped"] .stop,
+.tunebox:not([data-state="stopped"]) .play {
+    display: none;
+}
+
+/* Loading and reconnecting: a ring runs around the stop button. */
+.tunebox .circle-preloader {
+    fill:              none;
+    stroke:            #fff;
+    stroke-width:      2.5;
+    stroke-dasharray:  60 160;
+    transform-origin:  50% 50%;
+    opacity:           0;
+}
+
+.tunebox[data-state="loading"] .circle-preloader,
+.tunebox[data-state="reconnecting"] .circle-preloader {
+    animation: tb-spin 1.2s linear infinite;
+    opacity:   1;
+}
+
+@keyframes tb-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.tunebox .volume-icon .muted,
+.tunebox .volume-icon.muted .volume {
+    display: none;
+}
+
+.tunebox .volume-icon.muted .muted {
+    display: block;
+}
+
+.tunebox .volume-slider {
+    width:        6rem;
+    accent-color: var(--accent-color);
+}
+
+/* iOS ignores the volume property; main.js sets .no-volume there. */
+.tunebox .player.no-volume .volume-icon,
+.tunebox .player.no-volume .volume-slider {
+    display: none;
+}
+
+/* History ------------------------------------------------------------------ */
+
+.tunebox .history-list {
+    width:      min(100%, 32rem);
+    margin:     0;
+    padding:    0;
+    list-style: none;
+}
+
+.tunebox .history-list li {
+    display:     flex;
+    align-items: center;
+    gap:         .75rem;
+    padding:     .4rem;
+}
+
+.tunebox .history-list img {
+    flex:          none;
+    width:         3.2rem;
+    height:        3.2rem;
+    object-fit:    cover;
+    border-radius: .2rem;
+    background:    rgba(0, 0, 0, .2);
+}
+
+.tunebox .history-list .what {
+    flex:      1 1 auto;
+    min-width: 0;
+}
+
+.tunebox .history-list .title,
+.tunebox .history-list .artist {
+    overflow:      hidden;
+    white-space:   nowrap;
+    text-overflow: ellipsis;
+}
+
+.tunebox .history-list .artist,
+.tunebox .history-list .ago {
+    font-size: .85rem;
+    opacity:   .7;
+}
+
+.tunebox .history-list .ago {
+    flex:        none;
+    white-space: nowrap;
+}
+
+/* Channels ---------------------------------------------------------------- */
+
+.tunebox .channel-groups {
+    width: min(100%, 32rem);
+}
+
+.tunebox .channel-groups h4 {
+    font-size:      .8rem;
+    font-weight:    500;
+    margin:         1.2rem 0 .4rem;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    opacity:        .7;
+}
+
+.tunebox .channel-groups ul {
+    margin:     0;
+    padding:    0;
+    list-style: none;
+}
+
+.tunebox .channel {
+    display:       flex;
+    align-items:   center;
+    gap:           .75rem;
+    width:         100%;
+    padding:       .5rem;
+    text-align:    left;
+    border:        .1rem solid transparent;
+    border-radius: .2rem;
+    background:    rgba(72, 99, 114, .3);
+}
+
+.tunebox .channel + .streams {
+    margin: .3rem 0 .6rem 3.5rem;
+}
+
+.tunebox li + li {
+    margin-top: .4rem;
+}
+
+.tunebox .channel.active {
+    border-color: #1f6fbf;
+    background:   rgba(42, 130, 214, .5);
+}
+
+.tunebox .channel img {
+    flex:          none;
+    width:         2.6rem;
+    height:        2.6rem;
+    object-fit:    contain;
+    border-radius: .2rem;
+}
+
+.tunebox .streams button {
+    font-size:     .8rem;
+    margin:        0 .3rem .3rem 0;
+    padding:       .25rem .6rem;
+    border:        .08rem solid rgba(255, 255, 255, .3);
+    border-radius: 1rem;
+}
+
+.tunebox .streams button.active {
+    border-color: var(--accent-color);
+    background:   var(--accent-color);
+}
+
+/* Toast and visualizer ------------------------------------------------------ */
+
+.tunebox .toast {
+    position:      fixed;
+    z-index:       99;
+    bottom:        21vh;
+    left:          50%;
+    max-width:     80vw;
+    padding:       .5rem 1rem;
+    transform:     translateX(-50%);
+    font-size:     .85rem;
+    border-radius: .3rem;
+    background:    rgba(0, 0, 0, .7);
+}
+
+.tunebox #analyzer {
+    position: absolute;
+    z-index:  0;
+    top:      0;
+    right:    0;
+    bottom:   0;
+    left:     0;
+}
+
+.tunebox #analyzer canvas {
+    display:    block;
+    background: transparent;
+}
+
+/* Embed: a compact player inside another page. */
+.tunebox[data-embed] .car-daynight,
+.tunebox[data-embed] .fullscreen-toggle,
+.tunebox[data-embed] .popup-toggle {
+    display: none !important;
+}

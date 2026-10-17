@@ -4,10 +4,96 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tunebox</title>
-<link rel="stylesheet" href="status.css">
+<meta name="theme-color" content="#0d3a67">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/car.css">
+<script type="module" src="js/main.js"></script>
 </head>
 <body>
-<h1>tunebox</h1>
-<p><a href="status.html">Status</a></p>
+<!-- Icons: Material Icons, Apache License 2.0. -->
+<div class="tunebox car-day" data-page="main" data-state="stopped" data-layout="stacked">
+  <noscript><p class="noscript">The player needs JavaScript.</p></noscript>
+  <div class="toast hidden" role="status" aria-live="polite"></div>
+  <div class="main-container">
+    <button class="car-daynight" type="button" data-mode="auto" title="Day/night: automatic" aria-label="Day/night: automatic">
+      <svg class="auto" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.85 12.65h2.3L12 9l-1.15 3.65zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM14.3 16l-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9h-1.9z"/></svg>
+      <svg class="day" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0 .39-.39.39-1.03 0-1.41l-1.06-1.06zm1.06-10.96c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z"/></svg>
+      <svg class="night" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></svg>
+    </button>
+    <div class="container">
+      <div class="container-inner">
+        <section class="page main" aria-label="Now playing">
+          <div class="artwork-image">
+            <div class="artwork-img"><img class="artwork" alt="" src="icons/cover.svg"></div>
+          </div>
+          <div class="onair">
+            <div class="ticker car-channel-line"><div class="current-channel"></div></div>
+            <div class="ticker car-title-line"><div class="car-title"></div></div>
+            <div class="ticker car-artist-line"><div class="car-artist"></div></div>
+            <div class="ticker car-played-line" hidden><div class="car-played"></div></div>
+          </div>
+        </section>
+        <section class="page history" aria-label="Recently played">
+          <h3>Recently played</h3>
+          <ul class="history-list"></ul>
+          <p class="history-empty hidden">Nothing played yet.</p>
+          <button class="btn btn-back" type="button">Back</button>
+        </section>
+        <section class="page channels-page" aria-label="Channels">
+          <h3>Channels</h3>
+          <div class="channel-groups"></div>
+          <button class="btn btn-back" type="button">Back</button>
+        </section>
+        <section class="page viz-page" aria-label="Visualizer">
+          <h3>Visualizer</h3>
+          <ul class="viz-list"></ul>
+          <button class="btn btn-back" type="button">Back</button>
+        </section>
+      </div>
+    </div>
+    <div class="player">
+      <div class="center-container">
+        <div class="others">
+          <button class="open-history history-btn" type="button" title="Recently played" aria-label="Recently played">
+            <svg class="icon-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+          </button>
+          <button class="open-channels" type="button" title="Channels" aria-label="Channels">
+            <svg class="icon-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.24 6.15C2.51 6.43 2 7.17 2 8v12c0 1.1.89 2 2 2h16c1.11 0 2-.9 2-2V8c0-1.11-.89-2-2-2H8.3l8.26-3.34L15.88 1 3.24 6.15zM7 20c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-8h-2v-2h-2v2H4V8h16v4z"/></svg>
+          </button>
+        </div>
+        <div class="playback">
+          <button class="play" type="button" title="Play" aria-label="Play">
+            <svg viewBox="0 0 72 72" aria-hidden="true"><circle class="accent" cx="36" cy="36" r="34"/><path d="M29 22.5v27l21-13.5z" fill="#fff"/></svg>
+          </button>
+          <button class="stop" type="button" title="Stop" aria-label="Stop">
+            <svg viewBox="0 0 72 72" aria-hidden="true"><circle class="accent" cx="36" cy="36" r="34"/><circle class="circle-preloader" cx="36" cy="36" r="34"/><rect x="26" y="26" width="20" height="20" rx="2" fill="#fff"/></svg>
+          </button>
+        </div>
+        <div class="volume-control">
+          <button class="volume-icon" type="button" title="Mute" aria-label="Mute">
+            <svg class="icon-fill volume" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+            <svg class="icon-fill muted" viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+          </button>
+          <input class="volume-slider" type="range" min="0" max="100" step="1" value="50" aria-label="Volume">
+          <button class="viz-toggle hidden" type="button" title="Visualizer" aria-label="Visualizer">
+            <svg class="icon-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h2V6H7v12zm4 4h2V2h-2v20zm-8-8h2v-4H3v4zm12 4h2V6h-2v12zm4-8v4h2v-4h-2z"/></svg>
+          </button>
+          <button class="popup-toggle hidden" type="button" title="Open in a small window" aria-label="Open in a small window">
+            <svg class="icon-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+          </button>
+          <button class="fullscreen-toggle hidden" type="button" title="Fullscreen" aria-label="Fullscreen">
+            <svg class="icon-fill enter" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            <svg class="icon-fill exit" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div id="analyzer"></div>
+  </div>
+</div>
 </body>
 </html>
