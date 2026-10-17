@@ -5,7 +5,9 @@ import {bindDayNight} from './daynight.js';
 import {bindDisplay} from './display.js';
 import {createEmitter} from './events.js';
 import {bindLayout} from './layout.js';
+import {bindMedia} from './media.js';
 import {bindPages} from './pages.js';
+import {bindPalette} from './palette.js';
 import {createPlayer} from './player.js';
 import {createSwitcher} from './schedule.js';
 import {createStorage} from './storage.js';
@@ -156,6 +158,8 @@ async function start(root) {
     bindTicker(root);
     bindLayout(app);
     bindDayNight(app);
+    bindPalette(app);
+    bindMedia(app);
     app.selectChannel(pickChannel(channels, params.get('channel'), storage.get('channel'), settings.default_channel));
     // The channel list marks the active channel, so it binds once one is selected.
     bindPages(app);
