@@ -20,6 +20,9 @@ jobs:
         with:
           # The installer that checks the hashes is pinned too.
           version: "0.13.1"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.0"
       - name: Install Python and the pinned dev tools
         run: |
           uv venv --python 3.14 .venv

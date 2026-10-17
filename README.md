@@ -418,8 +418,10 @@ stations `{"error": "unknown_channel"}`.
 
 ## Development
 
-You need [uv](https://docs.astral.sh/uv/). The server uses only the Python
-standard library; the tools below are for development.
+You need [uv](https://docs.astral.sh/uv/) and Node.js 20 or later (CI uses
+24.22.0). The server uses only the Python standard library and the player
+has no build step; the tools below are for development, and no npm packages
+are installed.
 
 ```sh
 uv venv --python 3.14 .venv
@@ -427,16 +429,26 @@ uv pip install --python .venv --require-hashes -r requirements-dev.txt
 .venv/bin/pre-commit install
 ```
 
-The commit hook runs ruff, pyright (strict) and vulture; the push hook runs
-the tests with coverage. To run them by hand:
+The commit hook runs ruff, pyright (strict), vulture, `node --check` and the
+player's tests; the push hook runs the Python tests with coverage. To run
+them by hand:
 
 ```sh
 .venv/bin/pre-commit run --all-files
 .venv/bin/pre-commit run --all-files --hook-stage pre-push
 ```
 
-Tests do not use the network, except one marked `live`
+```sh
+node --test web/tests/*.test.js   # player logic and vendored file hashes
+```
+
+Tests do not use the network, except those marked `live`
 (`.venv/bin/pytest -m live`).
+
+The player is plain ES modules in `web/js/`. Keep to ES2019 syntax (no `?.`,
+`??`, class fields): the car's browser engine is old and unknown, and
+`web/tests/syntax.test.js` enforces it. Vendored files: see
+`web/vendor/README.md`.
 
 Run the server from a checkout:
 

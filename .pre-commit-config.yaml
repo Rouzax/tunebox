@@ -24,6 +24,17 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+      - id: node-check
+        name: node --check
+        entry: sh -c 'for f in "$@"; do node --check "$f" || exit 1; done' --
+        language: system
+        types: [javascript]
+      - id: node-test
+        name: node --test
+        entry: sh -c 'node --test web/tests/*.test.js'
+        language: system
+        files: ^web/
+        pass_filenames: false
       - id: pytest
         name: pytest with coverage
         entry: .venv/bin/pytest --cov

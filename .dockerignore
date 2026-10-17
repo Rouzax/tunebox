@@ -1,5 +1,7 @@
 *
 !tunebox/
 !web/
+web/tests/
+web/package.json
 !tunebox.example.toml
 **/__pycache__
