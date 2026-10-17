@@ -1,11 +1,15 @@
 import {createApi, createPoller} from './api.js';
 import {canPlay, nextChannel, pickChannel, pickStream} from './channels.js';
 import {bindControls} from './controls.js';
+import {bindDayNight} from './daynight.js';
 import {bindDisplay} from './display.js';
 import {createEmitter} from './events.js';
+import {bindLayout} from './layout.js';
+import {bindPages} from './pages.js';
 import {createPlayer} from './player.js';
 import {createSwitcher} from './schedule.js';
 import {createStorage} from './storage.js';
+import {bindTicker} from './ticker.js';
 import {createToast} from './toast.js';
 import {clockOffsetMs, coverFor, displayLines, trackKey} from './tracks.js';
 
@@ -149,9 +153,15 @@ async function start(root) {
     }
     bindDisplay(app);
     bindControls(app);
+    bindTicker(root);
+    bindLayout(app);
+    bindDayNight(app);
     app.selectChannel(pickChannel(channels, params.get('channel'), storage.get('channel'), settings.default_channel));
+    // The channel list marks the active channel, so it binds once one is selected.
+    bindPages(app);
     // A refused autoplay (no user gesture yet) quietly leaves the play button.
-    if (storage.flag('playing')) {
+    // play=1 comes from the main window when it hands playback to a small window.
+    if (params.get('play') === '1' || storage.flag('playing')) {
         app.play();
     }
 }
