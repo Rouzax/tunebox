@@ -249,6 +249,8 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   `data/tunebox.db`, `data/tunebox.db-wal` and `data/tunebox.db-shm`, and
   start it again. History refills from the stations and covers are looked
   up again. Your configuration is not touched.
+- **Logos** are kept in `data/logos/`. Delete that folder to download them
+  again at the next start.
 
 ## Troubleshooting
 
@@ -333,7 +335,12 @@ is reported at startup instead of being ignored.
 For player developers. All answers are JSON.
 
 **`GET /api/channels`** lists the stations: `id`, `name`, `stream_url`,
-`default_image`. It may be cached for five minutes.
+`default_image` and `logo` (a path such as `/logos/owr.png`, or `null` until
+the logo is downloaded or when none is configured). It may be cached for
+five minutes.
+
+**`GET /logos/<file>`** serves a downloaded logo. SVG logos are sent with a
+policy that keeps them from running script.
 
 **`GET /api/channels/<id>/now?buffer_s=<seconds>`** answers what is playing:
 

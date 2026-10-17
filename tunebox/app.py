@@ -16,6 +16,7 @@ from tunebox.catalogs import Catalogs
 from tunebox.channel import Channel
 from tunebox.config import ConfigError, load
 from tunebox.covers import CoverService
+from tunebox.logos import Logos
 from tunebox.logs import configure, event
 from tunebox.server import TuneboxServer
 from tunebox.sources import build_source
@@ -41,13 +42,14 @@ def main() -> int:
 
     store = Store(config.server.data_dir / "tunebox.db")
     covers = CoverService(store, Catalogs(http.get).find)
+    logos = Logos(config.server.data_dir / "logos", http.get)
     channels = {
         c.id: Channel(c, build_source(c.source, http.get), covers, store) for c in config.channels
     }
     web_dir = Path(os.environ.get("TUNEBOX_WEB", str(WEB_DIR)))
     address = (config.server.host, config.server.port)
     try:
-        server = TuneboxServer(address, channels, web_dir)
+        server = TuneboxServer(address, channels, web_dir, logos=logos)
     except OSError as error:
         print(f"tunebox: cannot listen on {address[0]}:{address[1]}: {error}", file=sys.stderr)
         return 2
@@ -67,6 +69,9 @@ def main() -> int:
         threading.Thread(target=c.run, args=(stop,), name=f"channel-{c.config.id}", daemon=True)
         for c in channels.values()
     ]
+    workers.append(
+        threading.Thread(target=logos.fetch_all, args=(config.channels,), name="logos", daemon=True)
+    )
     http_thread = threading.Thread(target=server.serve_forever, name="http", daemon=True)
     for thread in [*workers, http_thread]:
         thread.start()

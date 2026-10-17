@@ -10,6 +10,7 @@ import pytest
 from tests.fakes import FakeSource, NoJitter, channel_config
 from tunebox.channel import Channel
 from tunebox.covers import CoverService
+from tunebox.logos import Logos
 from tunebox.server import TuneboxServer, etag_matches
 from tunebox.store import Store
 from tunebox.tracks import RawEntry
@@ -33,7 +34,12 @@ def server(tmp_path: Path) -> Generator[TuneboxServer]:
         rng=NoJitter(),
     )
     channel.poll_once()
-    httpd = TuneboxServer(("127.0.0.1", 0), {"owr": channel}, web)
+    logo_dir = tmp_path / "logos"
+    logo_dir.mkdir()
+    (logo_dir / "owr.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (logo_dir / "x.svg").write_bytes(b"<svg></svg>")
+    logos = Logos(logo_dir, lambda _url: b"")
+    httpd = TuneboxServer(("127.0.0.1", 0), {"owr": channel}, web, logos=logos)
     # A short poll interval makes shutdown() quick.
     thread = threading.Thread(
         target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
@@ -164,3 +170,25 @@ def test_the_pawtunes_endpoint_marks_the_channel_active(server: TuneboxServer) -
     channel = server.channels["owr"]
     request(server, "/api/pawtunes/owr")
     assert channel.active()
+
+
+def test_logos_are_served_with_their_type(server: TuneboxServer) -> None:
+    status, headers, body = request(server, "/logos/owr.png")
+    assert status == 200
+    assert headers["content-type"] == "image/png"
+    assert body.startswith(b"\x89PNG")
+    status, headers, _ = request(server, "/logos/x.svg")
+    assert headers["content-type"] == "image/svg+xml"
+    # A logo cannot run script even when opened directly.
+    assert headers["content-security-policy"] == "sandbox"
+
+
+@pytest.mark.parametrize("path", ["/logos/missing.png", "/logos/..%2Fweb%2Findex.html", "/logos/"])
+def test_unknown_logos_are_not_found(server: TuneboxServer, path: str) -> None:
+    status, _, _ = request(server, path)
+    assert status == 404
+
+
+def test_channel_list_gives_the_logo_path(server: TuneboxServer) -> None:
+    _, _, body = request(server, "/api/channels")
+    assert json.loads(body)[0]["logo"] == "/logos/owr.png"

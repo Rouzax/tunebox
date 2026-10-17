@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, cast
 
 from tunebox.channel import Channel
+from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
+from tunebox.logos import Logos
 from tunebox.logs import bound, event
 
 log = logging.getLogger(__name__)
@@ -47,10 +49,15 @@ class TuneboxServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(
-        self, address: tuple[str, int], channels: Mapping[str, Channel], web_dir: Path
+        self,
+        address: tuple[str, int],
+        channels: Mapping[str, Channel],
+        web_dir: Path,
+        logos: Logos | None = None,
     ) -> None:
         self.channels = channels
         self.web_dir = web_dir.resolve()
+        self.logos = logos
         super().__init__(address, Handler)
 
 
@@ -110,7 +117,11 @@ class Handler(BaseHTTPRequestHandler):
             status = {cid: channel.status() for cid, channel in channels.items()}
             return self._send_json(200, {"status": "ok", "channels": status}, head)
         if parts == ["api", "channels"]:
-            listing = [channel.info() for channel in channels.values()]
+            logos = self.app.logos
+            listing = [
+                {**channel.info(), "logo": logos.path_for(cid) if logos else None}
+                for cid, channel in channels.items()
+            ]
             return self._send_json(200, listing, head, {"Cache-Control": "max-age=300"})
         if len(parts) == 4 and parts[:2] == ["api", "channels"] and parts[3] == "now":
             channel = channels.get(parts[2])
@@ -134,7 +145,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(200, channel.pawtunes_view(), head, headers)
         if parts and parts[0] == "api":
             return self._send_json(404, {"error": "not_found"}, head)
+        if parts and parts[0] == "logos":
+            return self._logo(parts, head)
         return self._static(path, head)
+
+    def _logo(self, parts: list[str], head: bool) -> None:
+        logos = self.app.logos
+        target = logos.file(urllib.parse.unquote(parts[1])) if logos and len(parts) == 2 else None
+        if target is None:
+            return self._send_json(404, {"error": "not_found"}, head)
+        kind = target.suffix.removeprefix(".")
+        headers = {"Cache-Control": "max-age=86400"}
+        if kind == "svg":
+            headers["Content-Security-Policy"] = "sandbox"
+        self._send(200, target.read_bytes(), LOGO_TYPES[kind], head, headers)
 
     def _static(self, path: str, head: bool) -> None:
         relative = urllib.parse.unquote(path).lstrip("/") or "index.html"
