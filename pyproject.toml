@@ -1,0 +1,37 @@
+[project]
+name = "tunebox"
+version = "0.1.0"
+description = "Radio API and web player for slow in-car browsers and phones"
+requires-python = ">=3.14"
+dependencies = []
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "BLE"]
+
+[tool.pyright]
+include = ["tunebox", "tests"]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = ["--strict-markers", "-m", "not live"]
+markers = ["live: talks to the real upstream services; run with -m live"]
+
+[tool.coverage.run]
+source = ["tunebox"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.vulture]
+paths = ["tunebox", "tests"]
+min_confidence = 80

@@ -1,0 +1,33 @@
+default_install_hook_types: [pre-commit, pre-push]
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: .venv/bin/ruff check --force-exclude
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: .venv/bin/ruff format --check --force-exclude
+        language: system
+        types: [python]
+      - id: pyright
+        name: pyright
+        entry: .venv/bin/pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: vulture
+        name: vulture
+        entry: .venv/bin/vulture
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: pytest
+        name: pytest with coverage
+        entry: .venv/bin/pytest --cov
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
