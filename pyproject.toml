@@ -33,6 +33,8 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
+# Raise this when coverage rises; never lower it without the maintainer's approval.
+fail_under = 91
 
 [tool.vulture]
 paths = ["tunebox", "tests"]

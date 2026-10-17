@@ -51,3 +51,10 @@ def test_memory_only_store() -> None:
     store = Store(None)
     store.save_recent("owr", [make_track()])
     assert len(store.load_recent("owr")) == 1
+
+
+def test_close_releases_the_database(tmp_path: Path) -> None:
+    store = Store(tmp_path / "tunebox.db")
+    store.close()
+    store.close()
+    assert store.get_cover("k") is None

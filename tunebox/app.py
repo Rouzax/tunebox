@@ -77,5 +77,6 @@ def main() -> int:
         pass
     server.shutdown()
     server.server_close()
+    store.close()
     event(log, logging.INFO, "stopped")
     return 0

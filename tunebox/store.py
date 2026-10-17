@@ -78,6 +78,10 @@ class Store:
             self._reported = True
             event(log, logging.ERROR, "store_unavailable", error=str(error))
 
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+
     def get_cover(self, key: str) -> CoverDecision | None:
         with self._lock:
             try:
