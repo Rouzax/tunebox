@@ -11,6 +11,8 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "BLE"]
+# vulture reads its own V-codes from noqa comments.
+external = ["V"]
 
 [tool.pyright]
 include = ["tunebox", "tests"]
