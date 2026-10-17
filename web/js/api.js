@@ -13,8 +13,11 @@ export function createApi(fetchFn) {
     return {
         channels: () => json('/api/channels'),
         player: () => json('/api/player'),
-        async now(channelId, bufferS, etag) {
-            const path = `/api/channels/${encodeURIComponent(channelId)}/now?buffer_s=${bufferS}`;
+        // stream: the index of the stream playing, so tunebox can add the
+        // audio it sent on connect; null when nothing plays.
+        async now(channelId, bufferS, etag, stream) {
+            const query = `buffer_s=${bufferS}${stream === null || stream === undefined ? '' : `&stream=${stream}`}`;
+            const path = `/api/channels/${encodeURIComponent(channelId)}/now?${query}`;
             const headers = etag ? {'If-None-Match': etag} : {};
             const response = await fetchFn(path, {headers, cache: 'no-store'});
             const date = response.headers.get('Date');
@@ -31,7 +34,7 @@ export function createApi(fetchFn) {
 
 // One poll at a time per channel. Every start, stop or refresh opens a new
 // generation, so an answer still on its way for an earlier one is dropped.
-export function createPoller({api, getBufferS, onBody, onDate, onError, setTimer, clearTimer}) {
+export function createPoller({api, getBufferS, getStream, onBody, onDate, onError, setTimer, clearTimer}) {
     let channelId = null;
     let etag = null;
     let generation = 0;
@@ -48,7 +51,7 @@ export function createPoller({api, getBufferS, onBody, onDate, onError, setTimer
     async function poll(own) {
         timer = null;
         try {
-            const answer = await api.now(channelId, getBufferS(), etag);
+            const answer = await api.now(channelId, getBufferS(), etag, getStream());
             if (own !== generation) {
                 return;
             }

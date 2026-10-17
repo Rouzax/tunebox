@@ -11,8 +11,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
+from tunebox.bursts import Bursts
 from tunebox.channel import Channel
-from tunebox.config import PlayerConfig
+from tunebox.config import PlayerConfig, StreamConfig
 from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
 from tunebox.logos import Logos
 from tunebox.logs import bound, event
@@ -67,9 +68,15 @@ def etag_matches(header: str | None, etag: str) -> bool:
     return any(tag.strip().removeprefix("W/") == etag for tag in header.split(","))
 
 
+def _query(target: str, name: str) -> list[str] | None:
+    return urllib.parse.parse_qs(urllib.parse.urlsplit(target).query, keep_blank_values=True).get(
+        name
+    )
+
+
 def _buffer_s(target: str) -> float | None:
     """The player's buffer from ?buffer_s=, 0 when absent, None when unusable."""
-    values = urllib.parse.parse_qs(urllib.parse.urlsplit(target).query).get("buffer_s")
+    values = _query(target, "buffer_s")
     if not values:
         return 0.0
     try:
@@ -78,6 +85,18 @@ def _buffer_s(target: str) -> float | None:
         return None
     # A live stream's buffer is seconds to a minute or two; nan and inf fail here too.
     return value if 0 <= value <= MAX_BUFFER_S else None
+
+
+def _stream(target: str, channel: Channel) -> StreamConfig | None:
+    """The stream the player plays, from ?stream=<index>; None when absent.
+    Raises ValueError when it names no stream of the channel."""
+    values = _query(target, "stream")
+    if not values:
+        return None
+    streams = channel.config.streams
+    if not values[0].isdigit() or int(values[0]) >= len(streams):
+        raise ValueError(values[0])
+    return streams[int(values[0])]
 
 
 class TuneboxServer(ThreadingHTTPServer):
@@ -90,8 +109,10 @@ class TuneboxServer(ThreadingHTTPServer):
         web_dir: Path,
         logos: Logos | None = None,
         player: PlayerConfig | None = None,
+        bursts: Bursts | None = None,
     ) -> None:
         self.channels = channels
+        self.bursts = bursts
         self.web_dir = web_dir.resolve()
         self.logos = logos
         self.player = player or PlayerConfig()
@@ -177,6 +198,15 @@ class Handler(BaseHTTPRequestHandler):
             buffer_s = _buffer_s(self.path)
             if buffer_s is None:
                 return self._send_json(400, {"error": "bad_buffer_s"}, head)
+            try:
+                stream = _stream(self.path, channel)
+            except ValueError:
+                return self._send_json(400, {"error": "bad_stream"}, head)
+            bursts = self.app.bursts
+            if stream and bursts is not None:
+                # The player cannot see the audio its stream sent on connect.
+                bursts.request(stream)
+                buffer_s += bursts.burst_s(stream.url)
             body, etag = channel.now_view(buffer_s)
             if etag_matches(self.headers.get("If-None-Match"), etag):
                 return self._not_modified(etag)

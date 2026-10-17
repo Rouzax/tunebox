@@ -1,4 +1,4 @@
-import {bufferSeconds, createWatchdog, retryDelayMs} from './reconnect.js';
+import {createWatchdog, lagSeconds, retryDelayMs} from './reconnect.js';
 
 // MediaError code 4. Browsers report an unplayable format, a stream refused
 // under CORS and an HTTP error on a new source (a 503 while a server
@@ -16,6 +16,7 @@ export function createPlayer({events, makeAudio, timers, now}) {
     let audio = null;
     let audioCors = true;
     let url = null;
+    let requestedAt = 0;
     let state = 'stopped';
     let attempt = 0;
     let retry = null;
@@ -76,6 +77,7 @@ export function createPlayer({events, makeAudio, timers, now}) {
     function connect() {
         const el = element(!noCors.has(url));
         watchdog.start(now());
+        requestedAt = now();
         el.src = url;
         const started = el.play();
         if (started && started.catch) {
@@ -167,7 +169,7 @@ export function createPlayer({events, makeAudio, timers, now}) {
         },
         state: () => state,
         bufferS() {
-            return audio && state === 'playing' ? bufferSeconds(audio.buffered, audio.currentTime) : 0;
+            return audio && state === 'playing' ? lagSeconds(now() - requestedAt, audio.currentTime) : 0;
         },
         setVolume(level) {
             volume = level;

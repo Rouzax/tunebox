@@ -12,6 +12,7 @@ from pathlib import Path
 from types import FrameType
 
 from tunebox import http
+from tunebox.bursts import Bursts
 from tunebox.catalogs import Catalogs
 from tunebox.channel import Channel
 from tunebox.config import ConfigError, load
@@ -43,13 +44,16 @@ def main() -> int:
     store = Store(config.server.data_dir / "tunebox.db")
     covers = CoverService(store, Catalogs(http.get).find)
     logos = Logos(config.server.data_dir / "logos", http.get)
+    bursts = Bursts(http.stream)
     channels = {
         c.id: Channel(c, build_source(c.source, http.get), covers, store) for c in config.channels
     }
     web_dir = Path(os.environ.get("TUNEBOX_WEB", str(WEB_DIR)))
     address = (config.server.host, config.server.port)
     try:
-        server = TuneboxServer(address, channels, web_dir, logos=logos, player=config.player)
+        server = TuneboxServer(
+            address, channels, web_dir, logos=logos, player=config.player, bursts=bursts
+        )
     except OSError as error:
         print(f"tunebox: cannot listen on {address[0]}:{address[1]}: {error}", file=sys.stderr)
         return 2
@@ -60,7 +64,8 @@ def main() -> int:
     signal.signal(signal.SIGINT, received)
 
     workers = [
-        threading.Thread(target=covers.run_forever, args=(stop,), name="covers", daemon=True)
+        threading.Thread(target=covers.run_forever, args=(stop,), name="covers", daemon=True),
+        threading.Thread(target=bursts.run_forever, args=(stop,), name="bursts", daemon=True),
     ]
     workers += [
         threading.Thread(target=c.run, args=(stop,), name=f"channel-{c.config.id}", daemon=True)

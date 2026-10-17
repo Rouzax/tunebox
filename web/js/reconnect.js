@@ -35,14 +35,13 @@ export function createWatchdog() {
     };
 }
 
-// How far behind the downloaded edge playback runs. After the connect burst
-// that edge is the live edge, so this is how late the listener hears.
-export function bufferSeconds(buffered, currentTime) {
-    if (!buffered || !buffered.length) {
-        return 0;
-    }
-    const ahead = buffered.end(buffered.length - 1) - currentTime;
-    return Math.max(0, Math.min(MAX_BUFFER_S, Math.round(ahead)));
+// How far playback has fallen behind the moment the stream was asked for:
+// start-up, buffering and stalls. The audio the stream sends on connect
+// comes on top; tunebox measures and adds that, because media.buffered
+// cannot show it (Chromium keeps only a couple of seconds there).
+export function lagSeconds(sinceRequestMs, currentTime) {
+    const lag = sinceRequestMs / 1000 - currentTime;
+    return Math.max(0, Math.min(MAX_BUFFER_S, Math.round(lag)));
 }
 
 // A stream routed through Web Audio is silent while its AudioContext is

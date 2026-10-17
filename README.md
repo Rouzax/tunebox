@@ -276,6 +276,9 @@ played_by = '\s*\(Played by ([^)]*)\)\s*$'
   default. Every `url` must be `https://`: the player page is served over
   https and browsers refuse plain-http audio on it. `codec` (`aac` or
   `mp3`) and `kbps` are shown in the choice, for example "High (AAC 256)".
+  Set `kbps` to the stream's real bitrate: tunebox also uses it to work
+  out how far behind live the stream starts (see
+  [Fine-tune when titles change](#fine-tune-when-titles-change)).
   A single `stream_url = "..."` still works and becomes one stream named
   "Default".
 - **`group`** puts stations under a heading on the channel page.
@@ -311,6 +314,14 @@ pawtunes_delay_s = 28  # for PawTunes
 
 - The title changes **before** the song: raise the number.
 - The title changes **after** the song: lower it.
+
+tunebox's own player adds how far behind live it plays, which differs by
+stream: a station sends the last 10 to 30 seconds of audio at once when a
+player connects, so the player starts that far behind. tunebox measures
+that burst itself, the first time a stream is played and then once a day,
+by reading the stream for a few seconds. The log shows each result as
+`burst_measured`. A stream without `kbps` is not measured, and its titles
+change that much early.
 
 Restart tunebox after a change. Both defaults come from a few measured
 song changes, so small adjustments are normal. You can also set a different
@@ -430,7 +441,7 @@ five minutes.
 **`GET /logos/<file>`** serves a downloaded logo. SVG logos are sent with a
 policy that keeps them from running script.
 
-**`GET /api/channels/<id>/now?buffer_s=<seconds>`** answers what is playing:
+**`GET /api/channels/<id>/now?buffer_s=<seconds>&stream=<index>`** answers what is playing:
 
 ```json
 {"current": {"artist": "CAMELPHAT, JOSH GIGANTE, KUUDA",
@@ -444,12 +455,17 @@ policy that keeps them from running script.
  "stale_since": null}
 ```
 
-- `buffer_s` (0 to 120, optional) is how far the player plays behind the
-  live stream; tunebox adds it to `delay_s`. A browser playing these
-  streams is usually about 30 s behind, because the stream starts with a
-  burst of earlier audio. Measure it as
-  `audio.buffered.end(0) - audio.currentTime`, again after every reconnect.
-  An invalid value is a `400` with `{"error": "bad_buffer_s"}`.
+- `buffer_s` (0 to 120, optional) is how far the player has fallen behind
+  the moment it asked for the stream: the seconds since it set the audio
+  source, minus `audio.currentTime`. Start the clock again on every
+  reconnect. tunebox adds it to `delay_s`. An invalid value is a `400`
+  with `{"error": "bad_buffer_s"}`. (`audio.buffered` is no measure of
+  this: Chrome keeps only a couple of seconds there.)
+- `stream` (optional) is the index of the stream playing, in the channel's
+  `streams` list. tunebox then adds the burst of earlier audio that stream
+  sends on connect, which it measures itself; the first answer for a new
+  stream comes without it. Leave it out while nothing plays. An index the
+  channel does not have is a `400` with `{"error": "bad_stream"}`.
 - `current` is `null` during a jingle; show the station name.
 - `upcoming` is the next song, announced but not heard yet. `in_s` counts
   down to the moment it becomes current. It is relative, so a wrong device

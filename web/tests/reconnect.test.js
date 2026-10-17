@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {STALL_MS, bufferSeconds, createWatchdog, keepAudioRunning, retryDelayMs} from '../js/reconnect.js';
+import {STALL_MS, createWatchdog, keepAudioRunning, lagSeconds, retryDelayMs} from '../js/reconnect.js';
 
 test('retries back off and then stay at a minute', () => {
     assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 20].map(retryDelayMs), [2000, 4000, 8000, 16000, 30000, 60000, 60000, 60000]);
@@ -31,13 +31,11 @@ test('healthy after a minute of advancing playback', () => {
     assert.equal(watchdog.healthy(61000), true);
 });
 
-test('buffer seconds from the buffered ranges, clamped', () => {
-    const ranges = (...ends) => ({length: ends.length, end: (i) => ends[i]});
-    assert.equal(bufferSeconds(ranges(10, 40.4), 10), 30);
-    assert.equal(bufferSeconds(ranges(), 0), 0);
-    assert.equal(bufferSeconds(null, 0), 0);
-    assert.equal(bufferSeconds(ranges(5), 10), 0);
-    assert.equal(bufferSeconds(ranges(500), 0), 120);
+test('lag is the time since the stream was asked for, minus the time played, clamped', () => {
+    assert.equal(lagSeconds(12400, 10), 2);
+    assert.equal(lagSeconds(0, 0), 0);
+    assert.equal(lagSeconds(5000, 10), 0);
+    assert.equal(lagSeconds(500000, 0), 120);
 });
 
 test('a suspended or interrupted audio context is resumed while playback is wanted', async () => {

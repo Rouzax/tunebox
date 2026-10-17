@@ -17,8 +17,8 @@ function harness() {
     const timers = [];
     const seen = {bodies: [], errors: 0, dates: []};
     const api = {
-        now(channelId, bufferS, etag) {
-            const call = {channelId, bufferS, etag, ...deferred()};
+        now(channelId, bufferS, etag, stream) {
+            const call = {channelId, bufferS, etag, stream, ...deferred()};
             calls.push(call);
             return call.promise;
         },
@@ -26,6 +26,7 @@ function harness() {
     const poller = createPoller({
         api,
         getBufferS: () => 30,
+        getStream: () => 1,
         onBody: (body) => seen.bodies.push(body),
         onDate: (date) => seen.dates.push(date),
         onError: () => {
@@ -47,7 +48,7 @@ function harness() {
 test('polls with the buffer and the last ETag, and a 304 changes nothing', async () => {
     const {calls, timers, seen, poller, settle} = harness();
     poller.start('owr');
-    assert.deepEqual([calls[0].channelId, calls[0].bufferS, calls[0].etag], ['owr', 30, null]);
+    assert.deepEqual([calls[0].channelId, calls[0].bufferS, calls[0].etag, calls[0].stream], ['owr', 30, null, 1]);
     calls[0].resolve({status: 200, body: {n: 1}, etag: '"a"', date: 'D1'});
     await settle();
     assert.deepEqual(seen.bodies, [{n: 1}]);
@@ -117,4 +118,6 @@ test('the API client asks the right paths and reads the headers', async () => {
     assert.equal(second.status, 304);
     assert.equal(asked[1][0], '/api/channels/radio-538/now?buffer_s=31');
     assert.deepEqual(asked[2][1], {'If-None-Match': '"e"'});
+    await api.now('radio-538', 3, null, 0);
+    assert.equal(asked[3][0], '/api/channels/radio-538/now?buffer_s=3&stream=0');
 });

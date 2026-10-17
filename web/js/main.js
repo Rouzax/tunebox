@@ -73,6 +73,10 @@ async function start(root) {
     const poller = createPoller({
         api,
         getBufferS: () => player.bufferS(),
+        getStream: () => {
+            const index = app.channel.streams.indexOf(app.stream);
+            return player.state() === 'playing' && index >= 0 ? index : null;
+        },
         setTimer: later,
         clearTimer: cancel,
         onDate: (date) => {

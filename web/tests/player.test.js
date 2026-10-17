@@ -64,7 +64,6 @@ function fakeAudio(made) {
         });
         Object.assign(audio, {
             currentTime: 0,
-            buffered: {length: 1, end: () => audio.currentTime + 30},
             volume: 1,
             muted: false,
             crossOrigin: null,
@@ -109,8 +108,37 @@ test('play loads, then plays when audio flows', () => {
     assert.equal(made[0].src, 'https://example.invalid/a.aac');
     made[0].fire('playing');
     assert.deepEqual(log, ['loading', 'audio', 'playing']);
-    made[0].currentTime = 10;
-    assert.equal(player.bufferS(), 30);
+});
+
+test('the buffer is how far playback runs behind the request for the stream', () => {
+    const {timers, made, player} = harness();
+    player.play('https://example.invalid/a.aac');
+    timers.advance(1500);
+    made[0].fire('playing');
+    for (let i = 0; i < 10; i++) {
+        timers.advance(1000);
+        made[0].currentTime += 1;
+    }
+    assert.equal(player.bufferS(), 2);
+});
+
+test('a reconnect measures the buffer from the new request', () => {
+    const {timers, made, player} = harness();
+    player.play('https://example.invalid/a.aac');
+    made[0].fire('playing');
+    for (let i = 0; i < 30; i++) {
+        timers.advance(1000);
+        made[0].currentTime += 1;
+    }
+    made[0].fire('error');
+    // The retry asks for the stream again 2 s later; it plays 2 s after that.
+    timers.advance(4000);
+    made[0].fire('playing');
+    for (let i = 0; i < 5; i++) {
+        timers.advance(1000);
+        made[0].currentTime += 1;
+    }
+    assert.equal(player.bufferS(), 2);
 });
 
 test('a stalled stream reconnects with growing pauses', () => {

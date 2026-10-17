@@ -8,13 +8,26 @@ from pathlib import Path
 import pytest
 
 from tests.fakes import FakeSource, NoJitter, channel_config
+from tunebox.bursts import Bursts
 from tunebox.channel import Channel
-from tunebox.config import PlayerConfig
+from tunebox.config import PlayerConfig, StreamConfig
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
 from tunebox.server import CSP, TuneboxServer, etag_matches
 from tunebox.store import Store
 from tunebox.tracks import RawEntry
+
+
+class FakeBursts(Bursts):
+    def __init__(self) -> None:
+        super().__init__(lambda _url: iter(()))
+        self.requested: list[StreamConfig] = []
+
+    def request(self, stream: StreamConfig) -> None:
+        self.requested.append(stream)
+
+    def burst_s(self, url: str) -> float:
+        return 30.0
 
 
 @pytest.fixture
@@ -46,7 +59,12 @@ def server(tmp_path: Path) -> Generator[TuneboxServer]:
     (logo_dir / "x.svg").write_bytes(b"<svg></svg>")
     logos = Logos(logo_dir, lambda _url: b"")
     httpd = TuneboxServer(
-        ("127.0.0.1", 0), {"owr": channel}, web, logos=logos, player=PlayerConfig(52.0, 5.0, None)
+        ("127.0.0.1", 0),
+        {"owr": channel},
+        web,
+        logos=logos,
+        player=PlayerConfig(52.0, 5.0, None),
+        bursts=FakeBursts(),
     )
     # A short poll interval makes shutdown() quick.
     thread = threading.Thread(
@@ -192,6 +210,35 @@ def test_now_accepts_the_player_buffer(server: TuneboxServer) -> None:
     status, _, body = request(server, "/api/channels/owr/now?buffer_s=29.5")
     assert status == 200
     assert json.loads(body)["current"]["title"] == "Stay"
+
+
+def test_now_adds_the_burst_of_the_stream_played(
+    server: TuneboxServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    channel = server.channels["owr"]
+    seen: list[float] = []
+    original = channel.now_view
+
+    def spy(buffer_s: float = 0) -> tuple[dict[str, object], str]:
+        seen.append(buffer_s)
+        return original(buffer_s)
+
+    monkeypatch.setattr(channel, "now_view", spy)
+    status, _, _ = request(server, "/api/channels/owr/now?buffer_s=2.5&stream=0")
+    assert status == 200
+    assert seen == [32.5]
+    bursts = server.bursts
+    assert isinstance(bursts, FakeBursts)
+    assert bursts.requested == [channel.config.streams[0]]
+    request(server, "/api/channels/owr/now?buffer_s=2.5")
+    assert seen[-1] == 2.5
+
+
+@pytest.mark.parametrize("value", ["x", "-1", "1", "0.5", ""])
+def test_now_rejects_a_bad_stream(server: TuneboxServer, value: str) -> None:
+    status, _, body = request(server, f"/api/channels/owr/now?stream={value}")
+    assert status == 400
+    assert json.loads(body) == {"error": "bad_stream"}
 
 
 @pytest.mark.parametrize("value", ["abc", "-1", "121", "nan", "inf"])
