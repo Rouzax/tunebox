@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,3 +34,15 @@ def fixture_rows() -> list[FixtureRow]:
 
 def make_track(artist: str = "FISHER", title: str = "Stay", started_at: int = 1_000_000) -> Track:
     return clean(RawEntry(artist, title, started_at), RULES, started_at)
+
+
+class FakeHttp:
+    """Stands in for tunebox.http.get; records every URL asked for."""
+
+    def __init__(self, respond: Callable[[str], bytes]) -> None:
+        self.urls: list[str] = []
+        self._respond = respond
+
+    def __call__(self, url: str) -> bytes:
+        self.urls.append(url)
+        return self._respond(url)
