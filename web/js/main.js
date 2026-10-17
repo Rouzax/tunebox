@@ -14,6 +14,7 @@ import {createStorage} from './storage.js';
 import {bindTicker} from './ticker.js';
 import {createToast} from './toast.js';
 import {clockOffsetMs, coverFor, displayLines, trackKey} from './tracks.js';
+import {bindVisualizer} from './visualizer.js';
 
 function browserStorage() {
     try {
@@ -163,6 +164,7 @@ async function start(root) {
     app.selectChannel(pickChannel(channels, params.get('channel'), storage.get('channel'), settings.default_channel));
     // The channel list marks the active channel, so it binds once one is selected.
     bindPages(app);
+    bindVisualizer(app);
     // A refused autoplay (no user gesture yet) quietly leaves the play button.
     // play=1 comes from the main window when it hands playback to a small window.
     if (params.get('play') === '1' || storage.flag('playing')) {
