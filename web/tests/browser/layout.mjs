@@ -7,7 +7,8 @@
 //
 //   node web/tests/browser/layout.mjs http://127.0.0.1:8080 [screenshot folder]
 //
-// Exits 1 and lists every problem when one is found.
+// Exits 1 and lists every problem when one is found, 2 when Chrome could not
+// run the check (it did not start, or the page crashed or stopped answering).
 
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
@@ -34,6 +35,9 @@ const LONG_ARTIST = 'ARTIST ONE, ARTIST TWO, ARTIST THREE, ARTIST FOUR, ARTIST F
 const LONG_PLAYED = 'Played by Somebody With A Long Name Mainstage Tomorrowland Winter 2026';
 // Sub-pixel rounding of transforms and borders.
 const SLACK = 1;
+// No CDP call here takes more than a few seconds; a call that gets no answer
+// means the renderer is gone, and waiting on it would hang the check.
+const CALL_TIMEOUT_MS = 30000;
 
 if (typeof WebSocket === 'undefined') {
     console.error('This Node has no WebSocket client: use Node 22+, or run Node 20 with --experimental-websocket.');
@@ -59,10 +63,16 @@ function findChrome() {
 
 async function connect() {
     const profile = mkdtempSync(join(tmpdir(), 'tunebox-layout-'));
-    const chrome = spawn(findChrome(), [
+    // /dev/shm is 64 MB in a container by default, too small for the
+    // renderer; Chrome refuses to run as root without --no-sandbox.
+    const args = [
         '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-        `--user-data-dir=${profile}`, `--remote-debugging-port=${PORT}`, 'about:blank',
-    ], {stdio: 'ignore'});
+        '--disable-dev-shm-usage', `--user-data-dir=${profile}`, `--remote-debugging-port=${PORT}`,
+    ];
+    if (process.getuid && process.getuid() === 0) {
+        args.push('--no-sandbox');
+    }
+    const chrome = spawn(findChrome(), [...args, 'about:blank'], {stdio: 'ignore'});
     let targets = null;
     for (let i = 0; i < 100 && !targets; i++) {
         await sleep(100);
@@ -81,11 +91,22 @@ async function connect() {
     let id = 0;
     const pending = new Map();
     const errors = [];
+    let lost = null;
+    const failAll = (reason) => {
+        lost = lost || reason;
+        for (const call of pending.values()) {
+            call.reject(new Error(lost));
+        }
+        pending.clear();
+    };
+    ws.addEventListener('close', () => failAll('the connection to Chrome closed'));
     ws.addEventListener('message', (event) => {
         const msg = JSON.parse(event.data);
         if (msg.id && pending.has(msg.id)) {
-            pending.get(msg.id)(msg);
+            pending.get(msg.id).resolve(msg);
             pending.delete(msg.id);
+        } else if (msg.method === 'Inspector.targetCrashed') {
+            failAll('the page crashed in Chrome (too little /dev/shm or memory?)');
         } else if (msg.method === 'Runtime.exceptionThrown') {
             errors.push(msg.params.exceptionDetails.exception
                 ? msg.params.exceptionDetails.exception.description
@@ -95,11 +116,25 @@ async function connect() {
             errors.push(msg.params.entry.text);
         }
     });
-    const send = (method, params = {}) => new Promise((resolve) => {
+    const send = (method, params = {}) => new Promise((resolve, reject) => {
+        if (lost) {
+            reject(new Error(lost));
+            return;
+        }
         id += 1;
-        pending.set(id, resolve);
-        ws.send(JSON.stringify({id, method, params}));
+        const callId = id;
+        const timer = setTimeout(() => {
+            pending.delete(callId);
+            reject(new Error(`${method} got no answer from Chrome in ${CALL_TIMEOUT_MS / 1000} s`));
+        }, CALL_TIMEOUT_MS);
+        const settle = (fn) => (value) => {
+            clearTimeout(timer);
+            fn(value);
+        };
+        pending.set(callId, {resolve: settle(resolve), reject: settle(reject)});
+        ws.send(JSON.stringify({id: callId, method, params}));
     });
+    await send('Inspector.enable');
     await send('Runtime.enable');
     await send('Log.enable');
     const close = async () => {
@@ -262,6 +297,18 @@ function inspect(page, slack) {
                 }
             }
         }
+        // A status message shows on every start and channel change, just
+        // when a glance goes to the track text.
+        const toast = document.querySelector('.toast');
+        const wasHidden = toast.classList.contains('hidden');
+        const oldText = toast.textContent;
+        toast.textContent = 'Playing One World Radio...';
+        toast.classList.remove('hidden');
+        if (overlap(box(toast), text)) {
+            problems.push('a status message covers the track text');
+        }
+        toast.textContent = oldText;
+        toast.classList.toggle('hidden', wasHidden);
     }
     return {problems, layout: root.dataset.layout};
 }

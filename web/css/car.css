@@ -400,33 +400,46 @@
 
 /* Scrim: a dark caption behind the track text in both modes, so the
    visualizer moving behind it stays out of the way of a glance and the
-   white text has a solid ground even in the light theme. The rounded box
-   covers every line end; a same-colour shadow feathers its edge, which a
-   car's graphics chip draws far cheaper than backdrop blur. .onair is its
-   own stacking context (base.css), so z-index -1 keeps the scrim above
+   white text has a solid ground even in the light theme. The box covers
+   every line end plus a feather on each side, where a mask fades it out
+   along an S-curve: a fade that starts on a slope shows its start as an
+   edge. A static mask costs a car's graphics chip far less than backdrop
+   blur. .onair is its own stacking context (base.css), so z-index -1 keeps the scrim above
    the page and below the text. Its width follows the widest line, from
-   ticker.js (--car-scrim-w). */
+   ticker.js (--car-scrim-w). The feathered box reaches past the page's
+   edge, which would make the page scroll; layout containment counts it as
+   painted overflow only, as a shadow is, without clipping it. */
 .tunebox {
-    --car-scrim: rgba(12, 22, 36, .4);
+    --car-scrim:   rgba(12, 22, 36, .4);
+    --car-feather: 2rem;
+    --car-ramp:    3rem;
 }
 
 .tunebox.car-night {
     --car-scrim: rgba(6, 14, 24, .6);
 }
 
+.tunebox .onair {
+    contain: layout;
+}
+
 .tunebox .onair::before {
+    --car-fade: transparent 0, rgba(0, 0, 0, 0.043) calc(var(--car-ramp) * 0.125), rgba(0, 0, 0, 0.156) calc(var(--car-ramp) * 0.25), rgba(0, 0, 0, 0.316) calc(var(--car-ramp) * 0.375), rgba(0, 0, 0, 0.5) calc(var(--car-ramp) * 0.5), rgba(0, 0, 0, 0.684) calc(var(--car-ramp) * 0.625), rgba(0, 0, 0, 0.844) calc(var(--car-ramp) * 0.75), rgba(0, 0, 0, 0.957) calc(var(--car-ramp) * 0.875), #000 var(--car-ramp),
+                #000 calc(100% - var(--car-ramp)), rgba(0, 0, 0, 0.957) calc(100% - var(--car-ramp) * 0.875), rgba(0, 0, 0, 0.844) calc(100% - var(--car-ramp) * 0.75), rgba(0, 0, 0, 0.684) calc(100% - var(--car-ramp) * 0.625), rgba(0, 0, 0, 0.5) calc(100% - var(--car-ramp) * 0.5), rgba(0, 0, 0, 0.316) calc(100% - var(--car-ramp) * 0.375), rgba(0, 0, 0, 0.156) calc(100% - var(--car-ramp) * 0.25), rgba(0, 0, 0, 0.043) calc(100% - var(--car-ramp) * 0.125), transparent 100%;
     position:       absolute;
     z-index:        -1;
-    top:            -.4rem;
-    bottom:         -.4rem;
+    top:            calc(-.4rem - var(--car-feather));
+    bottom:         calc(-.4rem - var(--car-feather));
     left:           50%;
-    width:          calc(var(--car-scrim-w, 100%) + 1.5rem);
+    width:          calc(var(--car-scrim-w, 100%) + 1.5rem + 2 * var(--car-feather));
     transform:      translateX(-50%);
     content:        "";
     pointer-events: none;
-    border-radius:  1rem;
     background:     var(--car-scrim);
-    box-shadow:     0 0 1.5rem 1rem var(--car-scrim);
+    -webkit-mask-image:     linear-gradient(to right, var(--car-fade)), linear-gradient(to bottom, var(--car-fade));
+    -webkit-mask-composite: source-in;
+    mask-image:             linear-gradient(to right, var(--car-fade)), linear-gradient(to bottom, var(--car-fade));
+    mask-composite:         intersect;
 }
 
 /* Song first: the title is what a glance looks for, the channel rarely
@@ -478,27 +491,33 @@
     margin-bottom: 0;
 }
 
+/* The text takes the room a full-width window leaves beside the cover, and
+   its two main lines grow with it; two thirds of the car screen keeps the
+   minimum sizes. */
 .tunebox[data-layout="wide"] .onair {
-    flex:       0 1 34rem;
+    flex:       1 1 34rem;
     width:      auto;
+    max-width:  46rem;
     min-width:  0;
     padding:    0;
     text-align: left;
 }
 
-/* Beside the cover the caption reads as a panel; a wider feather and
-   rounder corners keep it a shadow rather than a box. */
+/* Beside the cover the caption reads as a panel; a wider feather keeps it
+   a shadow rather than a box. */
 .tunebox[data-layout="wide"] .onair::before {
-    left:          -.75rem;
+    --car-feather: 3rem;
+    --car-ramp:    4.5rem;
+    left:          calc(-.75rem - var(--car-feather));
     transform:     none;
-    border-radius: 1.75rem;
-    box-shadow:    0 0 2.5rem 1.5rem var(--car-scrim);
 }
 
 .tunebox[data-layout="wide"] .onair .car-title-line {
     font-size: 2.1rem;
+    font-size: clamp(2.1rem, 3vw, 3rem);
 }
 
 .tunebox[data-layout="wide"] .onair .car-artist-line {
     font-size: 1.4rem;
+    font-size: clamp(1.4rem, 2vw, 2rem);
 }

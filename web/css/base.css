@@ -359,17 +359,21 @@ button {
 
 /* Toast and visualizer ------------------------------------------------------ */
 
+/* At the top, over the cover: the track text above the bar is what a glance
+   looks for, and messages show just when it changes. Taps go through to the
+   day/night button beneath. */
 .tunebox .toast {
-    position:      fixed;
-    z-index:       99;
-    bottom:        21vh;
-    left:          50%;
-    max-width:     80vw;
-    padding:       .5rem 1rem;
-    transform:     translateX(-50%);
-    font-size:     .85rem;
-    border-radius: .3rem;
-    background:    rgba(0, 0, 0, .7);
+    position:       fixed;
+    z-index:        99;
+    top:            1rem;
+    left:           50%;
+    max-width:      80vw;
+    padding:        .5rem 1rem;
+    transform:      translateX(-50%);
+    font-size:      .85rem;
+    pointer-events: none;
+    border-radius:  .3rem;
+    background:     rgba(0, 0, 0, .7);
 }
 
 .tunebox #analyzer {
