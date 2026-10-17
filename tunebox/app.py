@@ -55,12 +55,9 @@ def main() -> int:
         return 2
 
     stop = threading.Event()
-
-    def request_stop(_signum: int, _frame: FrameType | None) -> None:
-        stop.set()
-
-    signal.signal(signal.SIGTERM, request_stop)
-    signal.signal(signal.SIGINT, request_stop)
+    received = StopSignal()
+    signal.signal(signal.SIGTERM, received)
+    signal.signal(signal.SIGINT, received)
 
     workers = [
         threading.Thread(target=covers.run_forever, args=(stop,), name="covers", daemon=True)
@@ -79,11 +76,28 @@ def main() -> int:
 
     # serve_forever runs in its own thread because shutdown() must be called
     # from another one; the main thread only waits for a signal.
-    while not stop.wait(1.0):
-        pass
+    received.wait()
+    stop.set()
     shut_down(server, workers, store)
     event(log, logging.INFO, "stopped")
     return 0
+
+
+class StopSignal:
+    """Records SIGTERM and SIGINT for the main thread. The handler only sets an
+    attribute: Python runs it on the main thread at whatever point that thread
+    is, possibly holding a lock (inside Event.wait, for instance), so a handler
+    that takes a lock, as Event.set() does, can wait for its own thread forever."""
+
+    def __init__(self) -> None:
+        self.received = False
+
+    def __call__(self, _signum: int, _frame: FrameType | None) -> None:
+        self.received = True
+
+    def wait(self, poll_s: float = 0.5) -> None:
+        while not self.received:
+            time.sleep(poll_s)
 
 
 def shut_down(

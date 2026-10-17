@@ -1,4 +1,5 @@
 import logging
+import signal
 import socket
 import threading
 import time
@@ -6,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tunebox.app import main, shut_down
+from tunebox.app import StopSignal, main, shut_down
 from tunebox.server import TuneboxServer
 from tunebox.store import CoverDecision, Store
 
@@ -69,3 +70,32 @@ def test_shutdown_waits_for_workers_before_closing_the_store(
         shut_down(server, [worker], store)
     assert [r.getMessage() for r in caplog.records] == []
     assert not worker.is_alive()
+
+
+def test_a_stop_signal_ends_the_wait() -> None:
+    received = StopSignal()
+    waiter = threading.Thread(target=received.wait, kwargs={"poll_s": 0.01})
+    waiter.start()
+    received(signal.SIGTERM, None)
+    waiter.join(2)
+    assert not waiter.is_alive()
+
+
+def test_the_stop_handler_takes_no_lock() -> None:
+    # Python runs a signal handler on the main thread wherever it happens to
+    # be, possibly holding a lock; a handler that waits for any lock can wait
+    # for its own thread forever. A second signal must be just as harmless.
+    received = StopSignal()
+    held = threading.Lock()
+    done: list[bool] = []
+
+    def land_while_holding() -> None:
+        with held:
+            received(signal.SIGTERM, None)
+            received(signal.SIGINT, None)
+            done.append(received.received)
+
+    caller = threading.Thread(target=land_while_holding)
+    caller.start()
+    caller.join(2)
+    assert done == [True]
