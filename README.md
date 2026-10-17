@@ -1,19 +1,40 @@
 # tunebox
 
-tunebox is a self-hosted web radio companion. You run it on your own
-server. It follows your internet radio stations and always knows which song
-is playing, which one is next and which ones played before, with a matching
+tunebox is a self-hosted web radio player. You run it on your own server
+and listen in a browser: in the car, on a phone or on a computer. It
+follows your internet radio stations and always knows which song is
+playing, which one is next and which ones played before, with a matching
 album cover for each.
 
-It is built for listening in the car and on a phone: titles switch when you
-actually hear the new song, not half a minute early, and slow car browsers
-get small, cheap updates.
+It is built for listening in the car: titles switch when you actually hear
+the new song, not half a minute early, the page fits the car's narrow and
+wide windows, and a dropped connection (a tunnel, a 4G handover) is picked
+up again without a tap.
 
-**Status:** this first release is the back end. It comes with a simple
-status page, and it can feed an existing PawTunes web radio player. tunebox's own player, designed for in-car screens, is the next
-release.
+tunebox can also feed an existing PawTunes player; you do not need PawTunes
+to use it.
 
 ## What you get
+
+For listeners:
+
+- **A player for every screen.** Stations in groups with their logos, a
+  quality choice per station (for example a lower bitrate on 4G), recently
+  played songs with covers, and a layout that puts the cover above the
+  title in a narrow window and beside it in a wide one. Long titles scroll.
+- **Day and night.** A button cycles automatic, day and night; night dims
+  everything but the title.
+- **Visualizer.** Twelve styles, from spectrum bars to a ring around the
+  cover and slow ambient colour fields, coloured from the album cover. It
+  switches itself to a lighter mode on slow hardware.
+- **Lock screen and media keys.** Phones and cars show the song and cover;
+  next and previous change station.
+- **Small window and embedding.** Open the player in a small pop-out window,
+  or put it on another web page.
+- **Reconnects by itself** when the stream drops, with pauses that grow to
+  a minute.
+
+Behind the player:
 
 - **Now playing, next and recently played** for every station, the same on
   every device. The recent list (the last 50 songs) survives a restart.
@@ -29,8 +50,10 @@ release.
   stream.
 
 Supported stations: those whose now-playing information comes from Triton
-Digital, such as One World Radio and the other Tomorrowland channels. The
-example configuration has three of them ready to go.
+Digital (One World Radio and the other Tomorrowland channels, Radio 538,
+Radio 10, Sky Radio, Veronica, SLAM!), Qmusic, and NPO Radio 1, 2 and 3FM.
+The example configuration has the three Tomorrowland channels ready to go;
+`examples/stations-nl.toml` has 50 tested stations to copy from.
 
 ## Before you start
 
@@ -106,16 +129,63 @@ minute.
 If the container stops right away or the page does not load, see
 [Troubleshooting](#troubleshooting).
 
+Then open the player itself at `http://127.0.0.1:8080/`.
+
 `/check.html` reports what a browser supports: the audio formats it plays,
 its dark mode setting, its window size and the features the player uses.
 Open it on the device you want to listen on (a phone, a car) when something
 does not work there.
 
+## Use the player
+
+Open `http://<your host>:<port>/` (or the address your reverse proxy gives
+it). What the buttons do:
+
+- **Play / stop** (middle). Stop drops the stream, so play always starts at
+  what is on air now.
+- **Recently played** (clock, bottom left) and **Stations** (radio). On the
+  stations page, tap a station to switch; under the playing station you can
+  pick its quality, for example "Data saver (AAC 96)" for 4G.
+- **Volume and mute.** Phones that do not let a web page set the volume
+  (iPhones) do not show the slider; use the phone's buttons.
+- **Visualizer** (bars icon), **small window** (box with arrow) and
+  **fullscreen**.
+- **Day/night** (top left) cycles automatic, day and night. Automatic
+  follows sunrise and sunset when `[player]` has a location, otherwise the
+  device's dark mode setting.
+
+The station, quality, volume, visualizer and day/night choice are
+remembered in this browser only; nothing about listeners is stored on the
+server.
+
+Good to know:
+
+- Browsers do not start sound until you have tapped the page once. After a
+  reload the player starts again if it was playing; if the browser refuses,
+  press play.
+- "Reconnecting..." means the stream dropped. The player keeps trying with
+  pauses of 2 seconds up to a minute; you do not need to do anything.
+- The visualizer starts after your first tap or key press on the page.
+- A station nobody listened to for a while shows its name for a few
+  seconds until its first song arrives.
+
+## Embed the player on another page
+
+```html
+<iframe src="https://radio.example/?channel=owr&embed=1" width="420" height="640" allow="autoplay; fullscreen"></iframe>
+```
+
+Replace `radio.example` with your own address. `channel=` is any station
+`id` from `data/tunebox.toml`. `embed=1` gives the compact layout: no
+day/night, fullscreen or small-window buttons, and the cover always above
+the title. The small-window button opens this same address.
+
 ## Reach it from other devices
 
 The compose file only accepts connections from the machine itself, on
 purpose: phones and cars should reach tunebox through your reverse proxy,
-which adds HTTPS. In your proxy, forward a hostname to
+which adds HTTPS. The player needs HTTPS outside your own network: browsers
+block some features on plain-http pages from elsewhere. In your proxy, forward a hostname to
 `http://127.0.0.1:8080` (or the port you chose).
 
 If your proxy runs in Docker on the same network as tunebox, it can use
@@ -123,8 +193,8 @@ If your proxy runs in Docker on the same network as tunebox, it can use
 
 ## Use it with PawTunes
 
-tunebox can supply the song titles, history and covers for an existing
-PawTunes player.
+You only need this while you still use PawTunes. tunebox can supply the
+song titles, history and covers for an existing PawTunes player.
 
 1. In PawTunes' admin panel, open the channel's settings.
 2. Set the stats (now playing) method to **custom**.
@@ -273,7 +343,11 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | `store_unavailable` in the log | The `data` folder is not writable by user id 1000. | `sudo chown 1000:1000 data` and restart. Until then tunebox works but forgets everything on restart. |
 | The status page shows no covers for some songs | The song is in neither Deezer nor iTunes (common for unreleased tracks), or the catalogues could not be reached. | Nothing to do for unreleased tracks. A failed lookup is retried after 10 minutes, a song that was not found after 3 days. Look for `search_failed` in the log. |
 | A station's name on the status page says "(feed unreachable)" | The station's now-playing feed does not answer. | Nothing to do: tunebox keeps showing the last known songs and keeps trying, at most every 2 minutes. |
-| The title changes too early or too late | The delay does not fit this station or player. | See [Fine-tune when titles change](#fine-tune-when-titles-change). |
+| The title changes too early or too late | The delay does not fit this station or player. Stations other than the Tomorrowland channels start at the default and often need their own value. | See [Fine-tune when titles change](#fine-tune-when-titles-change). |
+| No sound, and the ring around the stop button keeps spinning ("Reconnecting...") | The stream cannot be reached from this device or network. | The player keeps trying. Try another quality on the stations page; open `/check.html` on the device to see which formats it plays. |
+| "This browser cannot play AAC" (or MP3) | The browser lacks that codec (common for AAC in some Linux browsers). | Pick a quality with the other codec, usually "Compatible" (MP3). |
+| No visualizer | It starts after the first tap or key press on the page. A stream served without the cross-origin permission plays without it ("No visualizer for this stream"). | Tap the page once. Nothing to do for such a stream. |
+| A station shows only its name, no song | Nobody had listened to it recently, so tunebox only started checking its feed now; or its feed is down. | Wait a few seconds. If it stays empty, `/healthz` shows `stale_since` for that station. |
 | PawTunes shows nothing new | PawTunes cannot reach the URL. | Open the same `/api/pawtunes/<id>` address in a browser from the PawTunes machine; you should see the current song. |
 
 For more detail in the log, set `LOG_LEVEL: info,tunebox.covers=debug` in
