@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from tunebox.config import ConfigError, load, parse
+from tunebox.config import ConfigError, PlayerConfig, StreamConfig, load, parse
 
 EXAMPLE = Path(__file__).parent.parent / "tunebox.example.toml"
 
@@ -27,6 +27,10 @@ def test_example_config_loads() -> None:
     assert owr.pawtunes_delay_s == 28
     assert owr.source.settings == {"mount": "OWR_INTERNATIONAL"}
     assert owr.rules.station_id is not None
+    assert [s.name for s in owr.streams] == ["High", "Standard", "Compatible"]
+    assert [s.name for s in config.channels[2].streams] == ["Standard", "Compatible"]
+    assert all(c.always and c.group == "Tomorrowland" for c in config.channels)
+    assert config.player == PlayerConfig()
     assert config.server.port == 8080
     assert config.server.data_dir == EXAMPLE.parent
 
@@ -85,3 +89,91 @@ def test_missing_or_broken_file(tmp_path: Path) -> None:
     broken.write_text("[server\n", encoding="utf-8")
     with pytest.raises(ConfigError, match=r"broken\.toml"):
         load(broken)
+
+
+def test_stream_url_becomes_one_default_stream(tmp_path: Path) -> None:
+    channel = parse(minimal(), tmp_path).channels[0]
+    assert channel.streams == (
+        StreamConfig("Default", "https://example.invalid/stream.aac", None, None),
+    )
+    assert channel.stream_url == "https://example.invalid/stream.aac"
+
+
+def streams_channel(*streams: object) -> dict[str, Any]:
+    data = minimal()
+    del data["channels"][0]["stream_url"]
+    data["channels"][0]["streams"] = list(streams)
+    return data
+
+
+def test_streams_keep_their_order(tmp_path: Path) -> None:
+    data = streams_channel(
+        {"name": "High", "url": "https://example.invalid/a.aac", "codec": "aac", "kbps": 256},
+        {"name": "Compatible", "url": "https://example.invalid/a.mp3", "codec": "mp3"},
+    )
+    channel = parse(data, tmp_path).channels[0]
+    assert channel.streams == (
+        StreamConfig("High", "https://example.invalid/a.aac", "aac", 256),
+        StreamConfig("Compatible", "https://example.invalid/a.mp3", "mp3", None),
+    )
+    assert channel.stream_url == "https://example.invalid/a.aac"
+
+
+GOOD_STREAM = {"name": "High", "url": "https://example.invalid/a.aac"}
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        ({"channels": [{**minimal()["channels"][0], "streams": [GOOD_STREAM]}]}, "not both"),
+        (streams_channel(), "channels[0].streams"),
+        (
+            {
+                "channels": [
+                    {k: v for k, v in minimal()["channels"][0].items() if k != "stream_url"}
+                ]
+            },
+            "channels[0].streams: required",
+        ),
+        (streams_channel("x"), "channels[0].streams[0]: expected a table"),
+        (
+            streams_channel({**GOOD_STREAM, "url": "http://example.invalid/a"}),
+            "channels[0].streams[0].url",
+        ),
+        (streams_channel(GOOD_STREAM, GOOD_STREAM), "channels[0].streams[1].name: duplicate"),
+        (streams_channel({**GOOD_STREAM, "name": ""}), "channels[0].streams[0].name"),
+        (streams_channel({**GOOD_STREAM, "codec": "flac"}), "channels[0].streams[0].codec"),
+        (streams_channel({**GOOD_STREAM, "kbps": 0}), "channels[0].streams[0].kbps"),
+        (streams_channel({**GOOD_STREAM, "kbps": True}), "channels[0].streams[0].kbps"),
+        (streams_channel({**GOOD_STREAM, "bitrate": 1}), "channels[0].streams[0].bitrate"),
+        (minimal(logo="http://example.invalid/x.png"), "channels[0].logo"),
+        (minimal(group=""), "channels[0].group"),
+        (minimal(always="yes"), "channels[0].always"),
+        ({**minimal(), "player": {"latitude": 52.0}}, "player: give latitude and longitude"),
+        ({**minimal(), "player": {"latitude": 91, "longitude": 4}}, "player.latitude"),
+        ({**minimal(), "player": {"latitude": 52, "longitude": "4"}}, "player.longitude"),
+        ({**minimal(), "player": {"default_channel": "nope"}}, "player.default_channel"),
+        ({**minimal(), "player": {"zoom": 2}}, "player.zoom: unknown key"),
+    ],
+)
+def test_invalid_new_keys_name_the_key(data: dict[str, Any], message: str, tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=re.escape(message)):
+        parse(data, tmp_path)
+
+
+def test_group_logo_and_always(tmp_path: Path) -> None:
+    plain = parse(minimal(), tmp_path).channels[0]
+    assert (plain.group, plain.logo, plain.always) == (None, None, False)
+    data = minimal(group="Tomorrowland", logo="https://example.invalid/l.png", always=True)
+    channel = parse(data, tmp_path).channels[0]
+    assert (channel.group, channel.logo, channel.always) == (
+        "Tomorrowland",
+        "https://example.invalid/l.png",
+        True,
+    )
+
+
+def test_player_settings(tmp_path: Path) -> None:
+    assert parse(minimal(), tmp_path).player == PlayerConfig()
+    data = {**minimal(), "player": {"latitude": 52, "longitude": 4.5, "default_channel": "owr"}}
+    assert parse(data, tmp_path).player == PlayerConfig(52.0, 4.5, "owr")

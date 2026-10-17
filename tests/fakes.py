@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from tunebox.config import ChannelConfig, SourceConfig
+from tunebox.config import ChannelConfig, SourceConfig, StreamConfig
 from tunebox.tracks import RawEntry, Rules, Track, clean
 
 STATION_ID = r"^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b"
@@ -73,12 +73,17 @@ class NoJitter(random.Random):
 
 
 def channel_config(
-    delay_s: float = 7.0, pawtunes_delay_s: float = 28.0, history_size: int = 50
+    delay_s: float = 7.0,
+    pawtunes_delay_s: float = 28.0,
+    history_size: int = 50,
+    always: bool = False,
+    group: str | None = None,
+    logo: str | None = None,
 ) -> ChannelConfig:
     return ChannelConfig(
         id="owr",
         name="One World Radio",
-        stream_url="https://example.invalid/stream.aac",
+        streams=(StreamConfig("Default", "https://example.invalid/stream.aac", None, None),),
         default_image=None,
         source=SourceConfig("triton", {"mount": "OWR_INTERNATIONAL"}),
         rules=RULES,
@@ -86,4 +91,7 @@ def channel_config(
         pawtunes_delay_s=pawtunes_delay_s,
         poll_interval_s=12.0,
         history_size=history_size,
+        group=group,
+        logo=logo,
+        always=always,
     )

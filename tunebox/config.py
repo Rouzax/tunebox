@@ -12,13 +12,28 @@ from tunebox.tracks import Rules
 
 # Source types and the settings each one requires.
 SOURCE_SETTINGS: dict[str, tuple[str, ...]] = {"triton": ("mount",)}
+# Settings whose value must be one of a fixed set, per source type.
+SOURCE_CHOICES: dict[str, dict[str, tuple[str, ...]]] = {}
+CODECS = ("aac", "mp3")
 DEFAULTS: dict[str, float] = {
     "delay_s": 7,
     "pawtunes_delay_s": 28,
     "poll_interval_s": 12,
     "history_size": 50,
 }
-_CHANNEL_KEYS = {"id", "name", "stream_url", "default_image", "source", "rules", *DEFAULTS}
+_CHANNEL_KEYS = {
+    "id",
+    "name",
+    "stream_url",
+    "streams",
+    "default_image",
+    "source",
+    "rules",
+    "group",
+    "logo",
+    "always",
+    *DEFAULTS,
+}
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
@@ -33,10 +48,18 @@ class SourceConfig:
 
 
 @dataclass(frozen=True)
+class StreamConfig:
+    name: str
+    url: str
+    codec: str | None
+    kbps: int | None
+
+
+@dataclass(frozen=True)
 class ChannelConfig:
     id: str
     name: str
-    stream_url: str
+    streams: tuple[StreamConfig, ...]
     default_image: str | None
     source: SourceConfig
     rules: Rules
@@ -44,6 +67,21 @@ class ChannelConfig:
     pawtunes_delay_s: float
     poll_interval_s: float
     history_size: int
+    group: str | None = None
+    logo: str | None = None
+    # A pinned channel is polled even while nobody listens.
+    always: bool = False
+
+    @property
+    def stream_url(self) -> str:
+        return self.streams[0].url
+
+
+@dataclass(frozen=True)
+class PlayerConfig:
+    latitude: float | None = None
+    longitude: float | None = None
+    default_channel: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +95,7 @@ class ServerConfig:
 class Config:
     server: ServerConfig
     channels: tuple[ChannelConfig, ...]
+    player: PlayerConfig = PlayerConfig()
 
 
 def load(path: Path) -> Config:
@@ -70,7 +109,7 @@ def load(path: Path) -> Config:
 
 
 def parse(data: dict[str, Any], base_dir: Path) -> Config:
-    _no_unknown(data, {"server", "defaults", "channels"}, "")
+    _no_unknown(data, {"server", "defaults", "channels", "player"}, "")
     server_table = _table(data, "server", "server")
     _no_unknown(server_table, {"host", "port", "data_dir"}, "server")
     port = _int(server_table, "port", "server.port", 8080)
@@ -99,7 +138,8 @@ def parse(data: dict[str, Any], base_dir: Path) -> Config:
         if any(c.id == channel.id for c in channels):
             raise ConfigError(f"{where}.id: duplicate id {channel.id!r}")
         channels.append(channel)
-    return Config(server, tuple(channels))
+    player = _player(_table(data, "player", "player"), {c.id for c in channels})
+    return Config(server, tuple(channels), player)
 
 
 def _channel(table: dict[str, Any], where: str, defaults: dict[str, float]) -> ChannelConfig:
@@ -107,14 +147,17 @@ def _channel(table: dict[str, Any], where: str, defaults: dict[str, float]) -> C
     channel_id = _str(table, "id", f"{where}.id")
     if not _ID.match(channel_id):
         raise ConfigError(f"{where}.id: lower-case letters, digits and '-' only")
-    stream_url = _str(table, "stream_url", f"{where}.stream_url")
-    if not stream_url.startswith(("https://", "http://")):
-        raise ConfigError(f"{where}.stream_url: must be an http(s) URL")
     numbers = {**defaults, **_numbers(table, where)}
+    group = _optional_str(table, "group", f"{where}.group")
+    if group is not None and not group.strip():
+        raise ConfigError(f"{where}.group: must not be empty")
+    logo = _optional_str(table, "logo", f"{where}.logo")
+    if logo is not None and not logo.startswith("https://"):
+        raise ConfigError(f"{where}.logo: must be an https URL")
     return ChannelConfig(
         id=channel_id,
         name=_str(table, "name", f"{where}.name"),
-        stream_url=stream_url,
+        streams=_streams(table, where),
         default_image=_optional_str(table, "default_image", f"{where}.default_image"),
         source=_source(_table(table, "source", f"{where}.source"), f"{where}.source"),
         rules=_rules(_table(table, "rules", f"{where}.rules"), f"{where}.rules"),
@@ -122,7 +165,59 @@ def _channel(table: dict[str, Any], where: str, defaults: dict[str, float]) -> C
         pawtunes_delay_s=numbers["pawtunes_delay_s"],
         poll_interval_s=numbers["poll_interval_s"],
         history_size=int(numbers["history_size"]),
+        group=group,
+        logo=logo,
+        always=_bool(table, "always", f"{where}.always", False),
     )
+
+
+def _streams(table: dict[str, Any], where: str) -> tuple[StreamConfig, ...]:
+    raw: object = table.get("streams")
+    if "stream_url" in table:
+        if raw is not None:
+            raise ConfigError(f"{where}: give stream_url or streams, not both")
+        url = _str(table, "stream_url", f"{where}.stream_url")
+        # Kept as it was before streams existed: http is accepted here.
+        if not url.startswith(("https://", "http://")):
+            raise ConfigError(f"{where}.stream_url: must be an http(s) URL")
+        return (StreamConfig("Default", url, None, None),)
+    if raw is None:
+        raise ConfigError(f"{where}.streams: required (or stream_url)")
+    if not isinstance(raw, list) or not raw:
+        raise ConfigError(f"{where}.streams: expected at least one [[channels.streams]] table")
+    streams: list[StreamConfig] = []
+    for index, item in enumerate(cast("list[object]", raw)):
+        at = f"{where}.streams[{index}]"
+        if not isinstance(item, dict):
+            raise ConfigError(f"{at}: expected a table")
+        entry = cast("dict[str, Any]", item)
+        _no_unknown(entry, {"name", "url", "codec", "kbps"}, at)
+        name = _str(entry, "name", f"{at}.name")
+        if not name.strip():
+            raise ConfigError(f"{at}.name: must not be empty")
+        if any(s.name == name for s in streams):
+            raise ConfigError(f"{at}.name: duplicate name {name!r}")
+        url = _str(entry, "url", f"{at}.url")
+        # The player page is served over https and browsers block http audio on it.
+        if not url.startswith("https://"):
+            raise ConfigError(f"{at}.url: must be an https URL")
+        codec = _optional_str(entry, "codec", f"{at}.codec")
+        if codec is not None and codec not in CODECS:
+            raise ConfigError(f"{at}.codec: one of {', '.join(CODECS)}")
+        streams.append(StreamConfig(name, url, codec, _optional_int(entry, "kbps", f"{at}.kbps")))
+    return tuple(streams)
+
+
+def _player(table: dict[str, Any], channel_ids: set[str]) -> PlayerConfig:
+    _no_unknown(table, {"latitude", "longitude", "default_channel"}, "player")
+    latitude = _optional_float(table, "latitude", "player.latitude", 90)
+    longitude = _optional_float(table, "longitude", "player.longitude", 180)
+    if (latitude is None) != (longitude is None):
+        raise ConfigError("player: give latitude and longitude together")
+    default = _optional_str(table, "default_channel", "player.default_channel")
+    if default is not None and default not in channel_ids:
+        raise ConfigError(f"player.default_channel: no channel with id {default!r}")
+    return PlayerConfig(latitude, longitude, default)
 
 
 def _source(table: dict[str, Any], where: str) -> SourceConfig:
@@ -132,7 +227,11 @@ def _source(table: dict[str, Any], where: str) -> SourceConfig:
         known = ", ".join(sorted(SOURCE_SETTINGS))
         raise ConfigError(f"{where}.type: unknown source type {source_type!r} (known: {known})")
     _no_unknown(table, {"type", *required}, where)
-    return SourceConfig(source_type, {key: _str(table, key, f"{where}.{key}") for key in required})
+    settings = {key: _str(table, key, f"{where}.{key}") for key in required}
+    for key, allowed in SOURCE_CHOICES.get(source_type, {}).items():
+        if settings[key] not in allowed:
+            raise ConfigError(f"{where}.{key}: one of {', '.join(allowed)}")
+    return SourceConfig(source_type, settings)
 
 
 def _rules(table: dict[str, Any], where: str) -> Rules:
@@ -206,4 +305,32 @@ def _int(table: dict[str, Any], key: str, where: str, default: int) -> int:
     value: object = table.get(key, default)
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"{where}: expected a whole number")
+    return value
+
+
+def _optional_int(table: dict[str, Any], key: str, where: str) -> int | None:
+    if key not in table:
+        return None
+    value: object = table[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConfigError(f"{where}: expected a whole number of at least 1")
+    return value
+
+
+def _optional_float(table: dict[str, Any], key: str, where: str, limit: float) -> float | None:
+    if key not in table:
+        return None
+    value: object = table[key]
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ConfigError(f"{where}: expected a number")
+    # The comparison is also false for nan.
+    if not -limit <= value <= limit:
+        raise ConfigError(f"{where}: must be between {-limit:g} and {limit:g}")
+    return float(value)
+
+
+def _bool(table: dict[str, Any], key: str, where: str, default: bool) -> bool:
+    value: object = table.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"{where}: expected true or false")
     return value

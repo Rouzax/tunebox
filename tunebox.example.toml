@@ -14,11 +14,38 @@ pawtunes_delay_s = 28
 poll_interval_s = 12
 history_size = 50
 
+# [player]
+# Day/night "automatic" follows sunrise and sunset here; without it the
+# browser's own dark mode setting decides.
+# latitude = 52.0
+# longitude = 5.0
+# default_channel = "owr"
+
 [[channels]]
 id = "owr"
 name = "One World Radio"
-stream_url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL_ADP.aac"
+group = "Tomorrowland"
+# Pinned: polled even while nobody listens, so its history has no gaps.
+always = true
 source = { type = "triton", mount = "OWR_INTERNATIONAL" }
+
+[[channels.streams]]
+name = "High"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL_ADP.aac"
+codec = "aac"
+kbps = 256
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONALAAC.aac"
+codec = "aac"
+kbps = 128
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL.mp3"
+codec = "mp3"
+kbps = 192
 
 [channels.rules]
 station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
@@ -27,8 +54,27 @@ played_by = '\s*\(Played by ([^)]*)\)\s*$'
 [[channels]]
 id = "daybreak"
 name = "Daybreak Sessions"
-stream_url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_DAYBREAK_ADP.aac"
+group = "Tomorrowland"
+always = true
 source = { type = "triton", mount = "OWR_DAYBREAK" }
+
+[[channels.streams]]
+name = "High"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_DAYBREAK_ADP.aac"
+codec = "aac"
+kbps = 256
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_DAYBREAKAAC.aac"
+codec = "aac"
+kbps = 128
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_DAYBREAK.mp3"
+codec = "mp3"
+kbps = 128
 
 [channels.rules]
 station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
@@ -37,8 +83,21 @@ played_by = '\s*\(Played by ([^)]*)\)\s*$'
 [[channels]]
 id = "anthems"
 name = "Tomorrowland Anthems"
-stream_url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_ANTHEMS_ADP.aac"
+group = "Tomorrowland"
+always = true
 source = { type = "triton", mount = "OWR_ANTHEMS" }
+
+[[channels.streams]]
+name = "Standard"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_ANTHEMSAAC.aac"
+codec = "aac"
+kbps = 128
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_ANTHEMS.mp3"
+codec = "mp3"
+kbps = 128
 
 [channels.rules]
 station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'

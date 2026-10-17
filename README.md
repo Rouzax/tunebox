@@ -152,8 +152,21 @@ Stations are listed in `data/tunebox.toml`, one `[[channels]]` block each:
 [[channels]]
 id = "owr"                       # short name used in addresses
 name = "One World Radio"         # shown during jingles
-stream_url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL_ADP.aac"
+group = "Tomorrowland"
+always = true
 source = { type = "triton", mount = "OWR_INTERNATIONAL" }
+
+[[channels.streams]]
+name = "High"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL_ADP.aac"
+codec = "aac"
+kbps = 256
+
+[[channels.streams]]
+name = "Compatible"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL.mp3"
+codec = "mp3"
+kbps = 192
 
 [channels.rules]
 station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
@@ -161,8 +174,8 @@ played_by = '\s*\(Played by ([^)]*)\)\s*$'
 ```
 
 - **To remove a station**, delete its block.
-- **To add a Triton station**, copy a block and change `id`, `name`,
-  `stream_url` and `mount`. The `mount` is the station's name in Triton's
+- **To add a Triton station**, copy a block and change `id`, `name`, the
+  stream `url`s and `mount`. The `mount` is the station's name in Triton's
   now-playing feed. For the Tomorrowland channels it is the stream's name
   without `_ADP`. Check that you have the right one by opening this address
   in a browser; it should list recent songs:
@@ -171,6 +184,16 @@ played_by = '\s*\(Played by ([^)]*)\)\s*$'
   https://np.tritondigital.com/public/nowplaying?mountName=OWR_INTERNATIONAL&numberToFetch=5&eventType=track
   ```
 
+- **Streams** are the quality choices listeners see; the first one is the
+  default. Every `url` must be `https://`: the player page is served over
+  https and browsers refuse plain-http audio on it. `codec` (`aac` or
+  `mp3`) and `kbps` are shown in the choice, for example "High (AAC 256)".
+  A single `stream_url = "..."` still works and becomes one stream named
+  "Default".
+- **`group`** puts stations under a heading on the channel page.
+- **`always = true`** keeps tunebox checking the station while nobody
+  listens. Without it, a station is only checked while someone has listened
+  to it in the last ten minutes; its history then has gaps.
 - **`[channels.rules]`** tells tunebox how a station writes its titles. The
   two patterns in the example match Tomorrowland's jingle codes (such as
   `E1700 16 Oct 2026 M19 VO`) and its "(Played by ...)" credits. For
@@ -261,15 +284,26 @@ is reported at startup instead of being ignored.
 | `poll_interval_s` | `12` | Seconds between checks of a station's feed, plus up to 3 s of random spread. After a failure the wait doubles each time, up to 120 s. |
 | `history_size` | `50` | Songs kept per station. |
 
+`[player]` (optional)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `latitude`, `longitude` | none | Where day/night "automatic" takes sunrise and sunset from. Give both or neither. Without them "automatic" follows the browser's dark mode setting. |
+| `default_channel` | the first channel | The channel a first-time listener starts on. |
+
 `[[channels]]`
 
 | Key | Required | Meaning |
 |---|---|---|
 | `id` | yes | Used in addresses. Lower-case letters, digits and `-`. |
 | `name` | yes | Shown during jingles. |
-| `stream_url` | yes | The audio stream, `http://` or `https://`, passed to the player as is. |
+| `streams` | yes, or `stream_url` | One or more `[[channels.streams]]` tables: `name` (required), `url` (required, `https://`), `codec` (`aac` or `mp3`), `kbps` (whole number). The first is the default. |
+| `stream_url` | instead of `streams` | One stream, `http://` or `https://`, named "Default". |
 | `default_image` | no | An image address for the player to show when a song has no cover. |
 | `source` | yes | `{ type = "triton", mount = "<feed mount>" }`. |
+| `group` | no | Heading on the channel page. |
+| `logo` | no | `https://` address of the station logo. tunebox downloads it once into the data folder and serves it from there, so listeners' browsers never contact that address. PNG, JPEG, WebP or SVG, up to 2 MB. |
+| `always` | no, default `false` | Check the station even while nobody listens. |
 
 `[channels.rules]` (optional)
 
