@@ -57,6 +57,12 @@ def _tidy(text: str) -> str:
     return _SPACES.sub(" ", text).strip()
 
 
+def _key_part(text: str) -> str:
+    # norm() keeps only ASCII letters and digits; a name in another script
+    # would otherwise reduce to nothing and share one key with all such names.
+    return norm(text) or _tidy(text).casefold()
+
+
 def clean(raw: RawEntry, rules: Rules, seen_at_ms: int) -> Track:
     separator = rules.artist_separator
     artist = _tidy(raw.artist)
@@ -84,5 +90,5 @@ def clean(raw: RawEntry, rules: Rules, seen_at_ms: int) -> Track:
         full_title=full_title,
         played_by=played_by,
         started_at=started_at,
-        key=f"{norm(' '.join(artists))}|{norm(title)}",
+        key=f"{_key_part(' '.join(artists))}|{_key_part(title)}",
     )

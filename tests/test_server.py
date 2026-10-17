@@ -1,5 +1,6 @@
 import http.client
 import json
+import socket
 import threading
 from collections.abc import Generator
 from pathlib import Path
@@ -125,3 +126,28 @@ def test_etag_matches() -> None:
     assert etag_matches("*", '"a"')
     assert not etag_matches(None, '"a"')
     assert not etag_matches('"b"', '"a"')
+
+
+def test_now_accepts_the_player_buffer(server: TuneboxServer) -> None:
+    status, _, body = request(server, "/api/channels/owr/now?buffer_s=29.5")
+    assert status == 200
+    assert json.loads(body)["current"]["title"] == "Stay"
+
+
+@pytest.mark.parametrize("value", ["abc", "-1", "121", "nan", "inf"])
+def test_now_rejects_a_bad_buffer(server: TuneboxServer, value: str) -> None:
+    status, _, body = request(server, f"/api/channels/owr/now?buffer_s={value}")
+    assert status == 400
+    assert json.loads(body) == {"error": "bad_buffer_s"}
+
+
+def test_a_request_body_is_never_read_as_a_second_request(server: TuneboxServer) -> None:
+    smuggled = b"GET /api/pawtunes/owr HTTP/1.1\r\nHost: x\r\n\r\n"
+    head = f"GET /api/channels HTTP/1.1\r\nHost: x\r\nContent-Length: {len(smuggled)}\r\n\r\n"
+    with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5) as conn:
+        conn.sendall(head.encode() + smuggled)
+        received = b""
+        while chunk := conn.recv(65536):
+            received += chunk
+    assert received.count(b"HTTP/1.1 ") == 1
+    assert b"Connection: close" in received

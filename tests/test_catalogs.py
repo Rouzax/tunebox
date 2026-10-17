@@ -134,3 +134,12 @@ def test_throttle_spaces_calls() -> None:
     throttle.wait()
     throttle.wait()
     assert slept == [3.0]
+
+
+def test_artist_photo_needs_a_comparable_name() -> None:
+    def respond(url: str) -> bytes:
+        if "/search/artist" in url:
+            return body({"data": [{"name": "Ленинград", "picture_xl": ARTIST_PHOTO}]})
+        return body({"data": [], "results": []})
+
+    assert catalogs(FakeHttp(respond)).find(make_track("ЛСП", "Monetka")) is None

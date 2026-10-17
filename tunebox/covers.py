@@ -15,7 +15,7 @@ from tunebox.catalogs import Found, SearchError
 from tunebox.logs import bound, event
 from tunebox.matching import base_title
 from tunebox.store import CoverDecision, Outcome, Store
-from tunebox.tracks import Track
+from tunebox.tracks import Track, norm
 
 log = logging.getLogger(__name__)
 
@@ -39,8 +39,20 @@ class Cover:
     kind: Literal["album", "artist"]
 
 
+def _is_artist_photo(decision: CoverDecision) -> bool:
+    # An error decision keeps the previous URL and match, so the match text,
+    # not the outcome, says what kind of image it is.
+    return decision.outcome == "artist" or (decision.match or "").startswith("deezer artist:")
+
+
 def searchable(track: Track) -> bool:
-    return track.kind == "track" and bool(track.artists) and bool(base_title(track.title))
+    """Matching compares norm() forms; a name or title with nothing left after
+    norm() (another script, punctuation only) can never be matched confidently."""
+    return (
+        track.kind == "track"
+        and bool(norm(" ".join(track.artists)))
+        and bool(norm(base_title(track.title)))
+    )
 
 
 class CoverService:
@@ -88,7 +100,7 @@ class CoverService:
             decision = self._known(track.key)
         if decision is None or decision.url is None:
             return None
-        return Cover(decision.url, "artist" if decision.outcome == "artist" else "album")
+        return Cover(decision.url, "artist" if _is_artist_photo(decision) else "album")
 
     def request(self, track: Track, priority: int) -> None:
         if not searchable(track):
@@ -148,13 +160,15 @@ class CoverService:
             except Exception:  # one broken lookup must not stop the worker
                 fields = {"artist": track.artist, "title": track.title}
                 log.error("cover_search_crashed", exc_info=True, extra={"fields": fields})
-            decision = CoverDecision(
-                track.key,
-                outcome,
-                found.url if found else None,
-                found.match if found else None,
-                self._clock(),
-            )
+            url, match = (found.url, found.match) if found else (None, None)
+            if outcome == "error":
+                # A failed re-search must not wipe a cover found earlier; the
+                # error outcome only schedules the next attempt.
+                with self._lock:
+                    previous = self._known(track.key)
+                if previous is not None:
+                    url, match = previous.url, previous.match
+            decision = CoverDecision(track.key, outcome, url, match, self._clock())
             self._store.put_cover(decision)
             with self._lock:
                 self._remember(decision)

@@ -193,8 +193,11 @@ class Channel:
             "cover_kind": cover.kind if cover else None,
         }
 
-    def now_view(self) -> tuple[dict[str, Any], str]:
-        timeline, stale = self._timeline(self.config.delay_s)
+    def now_view(self, buffer_s: float = 0) -> tuple[dict[str, Any], str]:
+        """buffer_s is how far the asking player plays behind the live stream.
+        Counting it here, rather than in the player, keeps the switch time a
+        relative countdown that a wrong device clock cannot shift."""
+        timeline, stale = self._timeline(self.config.delay_s + buffer_s)
         current = timeline.current
         upcoming: dict[str, Any] | None = None
         if timeline.upcoming is not None:

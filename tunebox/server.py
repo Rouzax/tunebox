@@ -18,6 +18,7 @@ from tunebox.logs import bound, event
 log = logging.getLogger(__name__)
 
 _TEXT_TYPES = {"text/html", "text/javascript", "text/css"}
+MAX_BUFFER_S = 120.0
 
 
 def etag_matches(header: str | None, etag: str) -> bool:
@@ -27,6 +28,19 @@ def etag_matches(header: str | None, etag: str) -> bool:
         return True
     # A compressing reverse proxy hands the ETag out weakened, as W/"...".
     return any(tag.strip().removeprefix("W/") == etag for tag in header.split(","))
+
+
+def _buffer_s(target: str) -> float | None:
+    """The player's buffer from ?buffer_s=, 0 when absent, None when unusable."""
+    values = urllib.parse.parse_qs(urllib.parse.urlsplit(target).query).get("buffer_s")
+    if not values:
+        return 0.0
+    try:
+        value = float(values[0])
+    except ValueError:
+        return None
+    # A live stream's buffer is seconds to a minute or two; nan and inf fail here too.
+    return value if 0 <= value <= MAX_BUFFER_S else None
 
 
 class TuneboxServer(ThreadingHTTPServer):
@@ -65,6 +79,10 @@ class Handler(BaseHTTPRequestHandler):
         started = time.monotonic()
         self._status = 0
         path = urllib.parse.urlsplit(self.path).path
+        # GET and HEAD bodies are never read, so on a kept-alive connection the
+        # body would be parsed as the next request. Answer, then hang up.
+        if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0":
+            self.close_connection = True
         with bound("req"):
             try:
                 self._route(path, head)
@@ -98,7 +116,10 @@ class Handler(BaseHTTPRequestHandler):
             channel = channels.get(parts[2])
             if channel is None:
                 return self._send_json(404, {"error": "unknown_channel"}, head)
-            body, etag = channel.now_view()
+            buffer_s = _buffer_s(self.path)
+            if buffer_s is None:
+                return self._send_json(400, {"error": "bad_buffer_s"}, head)
+            body, etag = channel.now_view(buffer_s)
             if etag_matches(self.headers.get("If-None-Match"), etag):
                 return self._not_modified(etag)
             headers = {"ETag": etag, "Cache-Control": "no-cache"}
@@ -152,6 +173,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         for name, value in (headers or {}).items():
             self.send_header(name, value)
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         if not head:
             self.wfile.write(body)

@@ -7,6 +7,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from types import FrameType
 
@@ -59,15 +60,15 @@ def main() -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
 
-    threads = [
+    workers = [
         threading.Thread(target=covers.run_forever, args=(stop,), name="covers", daemon=True)
     ]
-    threads += [
+    workers += [
         threading.Thread(target=c.run, args=(stop,), name=f"channel-{c.config.id}", daemon=True)
         for c in channels.values()
     ]
-    threads.append(threading.Thread(target=server.serve_forever, name="http", daemon=True))
-    for thread in threads:
+    http_thread = threading.Thread(target=server.serve_forever, name="http", daemon=True)
+    for thread in [*workers, http_thread]:
         thread.start()
     event(log, logging.INFO, "started", port=server.server_address[1], channels=list(channels))
 
@@ -75,8 +76,21 @@ def main() -> int:
     # from another one; the main thread only waits for a signal.
     while not stop.wait(1.0):
         pass
-    server.shutdown()
-    server.server_close()
-    store.close()
+    shut_down(server, workers, store)
     event(log, logging.INFO, "stopped")
     return 0
+
+
+def shut_down(
+    server: TuneboxServer, workers: list[threading.Thread], store: Store, timeout_s: float = 8.0
+) -> None:
+    """Stops serving, lets the workers finish what they are doing, then closes
+    the store; closing it first would turn their last writes into errors."""
+    server.shutdown()
+    server.server_close()
+    # One shared deadline, inside Docker's default 10 s stop grace. A worker
+    # stuck in a slow fetch past it is a daemon thread and ends with the process.
+    deadline = time.monotonic() + timeout_s
+    for worker in workers:
+        worker.join(max(0.0, deadline - time.monotonic()))
+    store.close()

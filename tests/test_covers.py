@@ -133,3 +133,30 @@ def test_a_crashing_finder_does_not_stop_the_worker() -> None:
     assert covers.run_once()
     assert covers.run_once()
     assert covers.lookup(make_track("A", "One")) is None
+
+
+def test_a_failed_research_keeps_the_expired_cover() -> None:
+    now = [0.0]
+    finder = Finder(Found(URL, "album", "m"))
+    covers = service(finder, now)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    now[0] = 91 * DAY
+    finder.result = SearchError("quota")
+    covers.request(make_track(), NOW)
+    assert covers.run_once()
+    assert covers.lookup(make_track()) == Cover(URL, "album")
+    now[0] = 91 * DAY + 599
+    covers.request(make_track(), NOW)
+    assert not covers.run_once()
+    now[0] = 91 * DAY + 601
+    covers.request(make_track(), NOW)
+    assert covers.run_once()
+
+
+def test_names_without_latin_letters_are_never_queued() -> None:
+    finder = Finder()
+    covers = service(finder, [0.0])
+    covers.request(make_track("ЛСП", "Монетка"), NOW)
+    covers.request(make_track("!!!", "Heart Of Hearts"), NOW)
+    assert not covers.run_once()

@@ -277,3 +277,17 @@ def test_info_and_status() -> None:
     assert channel.status() == {"last_poll_ok": None, "stale_since": None}
     channel.poll_once()
     assert channel.status()["last_poll_ok"] == 5_000
+
+
+def test_player_buffer_turns_the_newest_track_into_upcoming() -> None:
+    # The feed lists a track about 20 s after it started, so with the server
+    # delay alone the newest track is already heard by the time it is seen.
+    source = FakeSource()
+    source.responses = [[NEW, OLD]]
+    channel, _, _ = make(source, Clock(1_222_000))
+    channel.poll_once()
+    assert channel.now_view()[0]["upcoming"] is None
+    body, _ = channel.now_view(buffer_s=30)
+    assert body["current"]["title"] == "Stay"
+    assert body["upcoming"]["track"]["title"] == "My People"
+    assert body["upcoming"]["in_s"] == 15

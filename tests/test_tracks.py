@@ -67,3 +67,10 @@ def test_key_and_ident() -> None:
     track = make_track("SOLOMUN", "Somebodys Story", 7)
     assert track.key == "solomun|somebodys story"
     assert track.ident == (7, "solomun|somebodys story")
+
+
+def test_non_latin_names_keep_distinct_keys() -> None:
+    first = make_track("ЛСП", "Монетка")
+    second = make_track("ЛЕНИНГРАД", "Лабутены")
+    assert first.key != second.key
+    assert first.key != "|"

@@ -145,7 +145,13 @@ The configured channels. Browsers may cache it for five minutes.
 
 ### `GET /api/channels/<id>/now`
 
-What is playing now, what comes next, and what played before.
+What is playing now, what comes next, and what played before, for a player
+that plays `buffer_s` seconds behind the live stream:
+`/api/channels/owr/now?buffer_s=30`. A browser playing a live stream is
+typically about 30 s behind, because the stream starts with a burst of past
+audio; measure it as `audio.buffered.end(0) - audio.currentTime` and measure
+again after every reconnect. Without `buffer_s` only the server's `delay_s`
+applies. Values outside 0 to 120 are a `400` with `{"error": "bad_buffer_s"}`.
 
 ```json
 {"current": {"artist": "CAMELPHAT, JOSH GIGANTE, KUUDA",

@@ -161,6 +161,8 @@ class Catalogs:
 
     def _artist_photo(self, track: Track, failures: list[str]) -> Found | None:
         for name in track.artists:
+            if not norm(name):
+                continue  # nothing to compare: any name in another script would "match"
             url = f"{DEEZER}/search/artist?" + urllib.parse.urlencode({"q": name, "limit": 5})
             for item in _items(self._json(url, self._deezer, failures), "data"):
                 picture = _text(item, "picture_xl")
