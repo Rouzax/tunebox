@@ -236,7 +236,7 @@ button {
     accent-color: var(--accent-color);
 }
 
-/* iOS ignores the volume property; main.js sets .no-volume there. */
+/* iOS ignores the volume property; controls.js sets .no-volume there. */
 .tunebox .player.no-volume .volume-icon,
 .tunebox .player.no-volume .volume-slider {
     display: none;
@@ -391,4 +391,35 @@ button {
 .tunebox[data-embed] .fullscreen-toggle,
 .tunebox[data-embed] .popup-toggle {
     display: none !important;
+}
+
+/* Narrow windows (the car's third, phones): the bar keeps play, history,
+   stations, mute, visualizer and fullscreen. The device's own volume
+   control replaces the slider there. */
+@media (max-width: 560px) {
+    .tunebox .volume-slider {
+        display: none;
+    }
+
+    .tunebox .center-container {
+        gap:     .5rem;
+        padding: 0 .75rem;
+    }
+
+    .tunebox .others,
+    .tunebox .volume-control {
+        gap: .5rem;
+    }
+
+    .tunebox .player svg.icon-fill {
+        width:  2rem;
+        height: 2rem;
+    }
+}
+
+/* A small extra window means nothing on a touch screen. */
+@media (hover: none) {
+    .tunebox .popup-toggle {
+        display: none !important;
+    }
 }

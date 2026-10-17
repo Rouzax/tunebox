@@ -1,0 +1,354 @@
+// Layout check for the player: overlap, clipping and sideways scroll at every
+// window size the player is used at, on every page, in day and night, stopped
+// and playing, embedded or not, with long titles.
+//
+// Needs Google Chrome or Chromium (or CHROME=<path>) and a running tunebox.
+// Node 22 or later (Node 20 needs --experimental-websocket):
+//
+//   node web/tests/browser/layout.mjs http://127.0.0.1:8080 [screenshot folder]
+//
+// Exits 1 and lists every problem when one is found.
+
+import {spawn} from 'node:child_process';
+import {existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+
+const BASE = (process.argv[2] || 'http://127.0.0.1:8080').replace(/\/$/, '');
+const SHOTS = process.argv[3] || null;
+const PORT = 9300 + Math.floor(Math.random() * 500);
+
+// The car's browser windows (a third, two thirds and full width of its
+// screen), a phone and a desktop.
+const SIZES = [
+    {name: 'car-third', width: 480, height: 560},
+    {name: 'car-two-thirds', width: 960, height: 560},
+    {name: 'car-full', width: 1440, height: 560},
+    {name: 'phone', width: 390, height: 844, mobile: true},
+    {name: 'phone-landscape', width: 844, height: 390, mobile: true},
+    {name: 'desktop', width: 1280, height: 800},
+];
+const PAGES = ['main', 'history', 'channels', 'viz'];
+const LONG_TITLE = 'An Extremely Long Track Title That Will Never Fit On One Line (Extended Festival Mix)';
+const LONG_ARTIST = 'ARTIST ONE, ARTIST TWO, ARTIST THREE, ARTIST FOUR, ARTIST FIVE';
+const LONG_PLAYED = 'Played by Somebody With A Long Name Mainstage Tomorrowland Winter 2026';
+// Sub-pixel rounding of transforms and borders.
+const SLACK = 1;
+
+if (typeof WebSocket === 'undefined') {
+    console.error('This Node has no WebSocket client: use Node 22+, or run Node 20 with --experimental-websocket.');
+    process.exit(2);
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The first Chrome or Chromium on PATH; CHROME overrides.
+function findChrome() {
+    if (process.env.CHROME) {
+        return process.env.CHROME;
+    }
+    const dirs = (process.env.PATH || '').split(':');
+    for (const name of ['google-chrome', 'chromium', 'chromium-browser']) {
+        const found = dirs.map((dir) => join(dir, name)).find((path) => existsSync(path));
+        if (found) {
+            return found;
+        }
+    }
+    return 'google-chrome';
+}
+
+async function connect() {
+    const profile = mkdtempSync(join(tmpdir(), 'tunebox-layout-'));
+    const chrome = spawn(findChrome(), [
+        '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+        `--user-data-dir=${profile}`, `--remote-debugging-port=${PORT}`, 'about:blank',
+    ], {stdio: 'ignore'});
+    let targets = null;
+    for (let i = 0; i < 100 && !targets; i++) {
+        await sleep(100);
+        try {
+            targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
+        } catch (error) {
+            // Chrome is still starting.
+        }
+    }
+    if (!targets) {
+        chrome.kill();
+        throw new Error('Chrome did not start (is google-chrome or chromium installed?)');
+    }
+    const ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
+    await new Promise((resolve) => ws.addEventListener('open', resolve));
+    let id = 0;
+    const pending = new Map();
+    const errors = [];
+    ws.addEventListener('message', (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.id && pending.has(msg.id)) {
+            pending.get(msg.id)(msg);
+            pending.delete(msg.id);
+        } else if (msg.method === 'Runtime.exceptionThrown') {
+            errors.push(msg.params.exceptionDetails.exception
+                ? msg.params.exceptionDetails.exception.description
+                : msg.params.exceptionDetails.text);
+        } else if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error'
+            && !/Failed to load resource/.test(msg.params.entry.text)) {
+            errors.push(msg.params.entry.text);
+        }
+    });
+    const send = (method, params = {}) => new Promise((resolve) => {
+        id += 1;
+        pending.set(id, resolve);
+        ws.send(JSON.stringify({id, method, params}));
+    });
+    await send('Runtime.enable');
+    await send('Log.enable');
+    const close = async () => {
+        ws.close();
+        const exited = new Promise((resolve) => chrome.once('exit', resolve));
+        chrome.kill();
+        await Promise.race([exited, sleep(3000)]);
+        try {
+            rmSync(profile, {recursive: true, force: true});
+        } catch (error) {
+            // Chrome can still be writing its profile; it is only a temp folder.
+        }
+    };
+    return {send, errors, close};
+}
+
+// Runs in the page: measures everything and returns the problems found.
+function inspect(page, slack) {
+    const problems = [];
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    const root = document.querySelector('.tunebox');
+    // Faded-out controls (opacity 0, as the day/night button behind text
+    // pages) cannot be seen or tapped.
+    const faded = (el) => {
+        for (let node = el; node && node !== document.body; node = node.parentElement) {
+            const style = getComputedStyle(node);
+            if (style.opacity === '0' || style.pointerEvents === 'none') {
+                return true;
+            }
+        }
+        return false;
+    };
+    const visible = (el) => {
+        if (el.closest('.hidden') || el.closest('[hidden]') || faded(el)) {
+            return false;
+        }
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+    const label = (el) => {
+        const cls = typeof el.className === 'string' && el.className ? `.${el.className.trim().split(/\s+/).join('.')}` : '';
+        const text = (el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 30);
+        return `${el.tagName.toLowerCase()}${cls}${text ? ` "${text}"` : ''}`;
+    };
+    const box = (el) => el.getBoundingClientRect();
+    const overlap = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > slack
+        && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > slack;
+    const inside = (r, area) => r.left >= area.left - slack && r.right <= area.right + slack
+        && r.top >= area.top - slack && r.bottom <= area.bottom + slack;
+    const viewport = {left: 0, top: 0, right: vw, bottom: vh};
+
+    if (document.documentElement.scrollWidth > vw + slack) {
+        problems.push(`page scrolls sideways (${document.documentElement.scrollWidth} > ${vw})`);
+    }
+    const container = document.querySelector('.container');
+    if (container.scrollLeft !== 0 || container.scrollTop !== 0) {
+        problems.push(`page container is scrolled (${container.scrollLeft}, ${container.scrollTop})`);
+    }
+
+    // The active page fills the area above the bar.
+    const activePage = document.querySelector(`.page.${page === 'channels' ? 'channels-page' : page === 'viz' ? 'viz-page' : page}`);
+    const pageRect = box(activePage);
+    if (!inside(pageRect, viewport)) {
+        problems.push(`active page is not within the window (${Math.round(pageRect.left)},${Math.round(pageRect.top)} ${Math.round(pageRect.width)}x${Math.round(pageRect.height)})`);
+    }
+    const bar = document.querySelector('.player');
+    const barRect = box(bar);
+    if (!inside(barRect, viewport)) {
+        problems.push(`control bar is not within the window (top ${Math.round(barRect.top)}, bottom ${Math.round(barRect.bottom)} of ${vh})`);
+    }
+    if (overlap(pageRect, barRect)) {
+        problems.push('active page runs under the control bar');
+    }
+
+    // Every control a listener can reach on this view: inside the window
+    // (or, on a scrolling page, inside the page horizontally and reachable by
+    // scrolling) and not covered by anything else.
+    const controls = [...document.querySelectorAll('button, input, a')].filter(visible).filter((el) => {
+        const owner = el.closest('.page');
+        return !owner || owner === activePage;
+    });
+    for (const el of controls) {
+        const r = box(el);
+        const scrolls = el.closest('.page') === activePage;
+        if (scrolls) {
+            if (r.left < pageRect.left - slack || r.right > pageRect.right + slack) {
+                problems.push(`${label(el)} sticks out of the page sideways`);
+            }
+            const visibleNow = r.bottom > pageRect.top && r.top < pageRect.bottom;
+            if (!visibleNow) {
+                continue;
+            }
+        } else if (!inside(r, viewport)) {
+            problems.push(`${label(el)} is outside the window (${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)})`);
+            continue;
+        }
+        const x = Math.min(Math.max(r.left + r.width / 2, 0), vw - 1);
+        const y = Math.min(Math.max(r.top + r.height / 2, Math.max(0, pageRect.top)), (scrolls ? pageRect.bottom : vh) - 1);
+        const hit = document.elementFromPoint(x, y);
+        if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
+            problems.push(`${label(el)} is covered by ${label(hit)}`);
+        }
+    }
+
+    // Controls in the bar never touch each other.
+    const barControls = controls.filter((el) => bar.contains(el));
+    for (let i = 0; i < barControls.length; i++) {
+        for (let j = i + 1; j < barControls.length; j++) {
+            if (overlap(box(barControls[i]), box(barControls[j]))) {
+                problems.push(`${label(barControls[i])} overlaps ${label(barControls[j])}`);
+            }
+        }
+    }
+    const daynight = document.querySelector('.car-daynight');
+    if (visible(daynight) && page === 'main') {
+        const art = box(document.querySelector('.artwork-img'));
+        if (overlap(box(daynight), art)) {
+            problems.push('day/night button covers the cover');
+        }
+    }
+
+    if (page === 'main') {
+        // Now playing fits its page: a scrollbar there means something is cut.
+        if (activePage.scrollHeight > activePage.clientHeight + slack) {
+            problems.push(`now playing page needs scrolling (${activePage.scrollHeight} > ${activePage.clientHeight})`);
+        }
+        const art = box(document.querySelector('.artwork-img'));
+        const lines = [...document.querySelectorAll('.onair .ticker')].filter(visible);
+        const text = lines.map(box).reduce((a, b) => ({
+            left: Math.min(a.left, b.left), top: Math.min(a.top, b.top),
+            right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom),
+        }));
+        if (art.width < 64) {
+            problems.push(`cover is too small (${Math.round(art.width)} px)`);
+        }
+        if (!inside(art, viewport)) {
+            problems.push('cover is not within the window');
+        }
+        if (overlap(art, text)) {
+            problems.push('cover and track text overlap');
+        }
+        if (text.bottom > barRect.top + slack) {
+            problems.push(`track text runs under the control bar (${Math.round(text.bottom)} > ${Math.round(barRect.top)})`);
+        }
+        if (text.top < 0 || text.left < -slack || text.right > vw + slack) {
+            problems.push('track text is outside the window');
+        }
+        for (const ticker of lines) {
+            const inner = ticker.firstElementChild;
+            if (inner.scrollWidth > ticker.clientWidth + slack && !ticker.classList.contains('scrolling')) {
+                problems.push(`"${inner.textContent.slice(0, 30)}" does not fit and does not scroll`);
+            }
+        }
+        for (let i = 0; i < lines.length; i++) {
+            for (let j = i + 1; j < lines.length; j++) {
+                if (overlap(box(lines[i]), box(lines[j]))) {
+                    problems.push(`text lines ${i + 1} and ${j + 1} overlap`);
+                }
+            }
+        }
+    }
+    return {problems, layout: root.dataset.layout};
+}
+
+async function run() {
+    const {send, errors, close} = await connect();
+    const evaluate = async (expression) => {
+        const answer = await send('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true});
+        if (answer.result.exceptionDetails) {
+            throw new Error(`${expression.slice(0, 60)}: ${answer.result.exceptionDetails.text}`);
+        }
+        return answer.result.result.value;
+    };
+    const failures = [];
+    let views = 0;
+    if (SHOTS) {
+        mkdirSync(SHOTS, {recursive: true});
+    }
+    try {
+        for (const size of SIZES) {
+            await send('Emulation.setDeviceMetricsOverride', {
+                width: size.width, height: size.height, deviceScaleFactor: 1, mobile: Boolean(size.mobile),
+            });
+            for (const embed of [false, true]) {
+                for (const mode of ['day', 'night']) {
+                    await send('Page.navigate', {url: `${BASE}/check.html`});
+                    await sleep(200);
+                    await evaluate(`localStorage.clear(); localStorage.setItem('tunebox.daynight', '${mode}'); localStorage.setItem('tunebox.visualizer', 'off')`);
+                    await send('Page.navigate', {url: `${BASE}/${embed ? '?embed=1' : ''}`});
+                    await sleep(2500);
+                    for (const state of ['stopped', 'playing']) {
+                        // Layout only: the state and the long text are set directly.
+                        await evaluate(`(() => {
+                            document.querySelector('.tunebox').dataset.state = '${state}';
+                            document.querySelector('.car-title').textContent = ${JSON.stringify(LONG_TITLE)};
+                            document.querySelector('.car-artist').textContent = ${JSON.stringify(LONG_ARTIST)};
+                            document.querySelector('.car-played').textContent = ${JSON.stringify(LONG_PLAYED)};
+                            document.querySelector('.car-played').parentNode.hidden = false;
+                        })()`);
+                        for (const page of PAGES) {
+                            await evaluate(`(() => {
+                                const root = document.querySelector('.tunebox');
+                                const open = {history: '.open-history', channels: '.open-channels', viz: '.viz-toggle'}['${page}'];
+                                if (root.dataset.page !== 'main') {
+                                    root.querySelector('.page:not(.main) .btn-back') && [...root.querySelectorAll('.btn-back')][0].click();
+                                }
+                                if (open) {
+                                    root.querySelector(open).click();
+                                }
+                            })()`);
+                            // Page slide (600 ms), ticker measuring and fonts.
+                            await sleep(900);
+                            const view = `${size.name} ${embed ? 'embed ' : ''}${mode} ${state} ${page}`;
+                            const result = await evaluate(`(${inspect.toString()})('${page}', ${SLACK})`);
+                            views += 1;
+                            for (const problem of result.problems) {
+                                failures.push(`${view} [${result.layout}]: ${problem}`);
+                            }
+                            if (SHOTS && state === 'playing') {
+                                const shot = await send('Page.captureScreenshot', {format: 'png'});
+                                writeFileSync(join(SHOTS, `${view.replace(/ /g, '-')}.png`), Buffer.from(shot.result.data, 'base64'));
+                            }
+                        }
+                        await evaluate(`document.querySelector('.tunebox').dataset.page !== 'main' && document.querySelector('.btn-back') && [...document.querySelectorAll('.btn-back')].forEach((b) => b.offsetParent && b.click())`);
+                        await sleep(700);
+                    }
+                }
+            }
+        }
+    } finally {
+        await close();
+    }
+    for (const error of errors) {
+        failures.push(`page error: ${error}`);
+    }
+    console.log(`${views} views checked`);
+    if (failures.length) {
+        console.log(`${failures.length} problem(s):`);
+        for (const failure of failures) {
+            console.log(`  ${failure}`);
+        }
+        process.exit(1);
+    }
+    console.log('no overlap, clipping or sideways scroll found');
+}
+
+run().catch((error) => {
+    console.error(error);
+    process.exit(2);
+});

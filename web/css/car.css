@@ -61,10 +61,10 @@
     }
 }
 
-/* Right edge of the bar, mirroring the history button on the left. */
+/* The fullscreen button ends the right-hand group; the gap before it
+   comes from the group (base.css). */
 .tunebox .player .fullscreen-toggle {
-    margin-left: auto;
-    cursor:      pointer;
+    cursor: pointer;
 }
 
 .tunebox .player .fullscreen-toggle .exit,
@@ -76,15 +76,11 @@
     display: inline;
 }
 
-/* Visualizer button: the first icon of the right-hand group takes the auto
-   margin, whichever of the two the browser supports. */
+/* The visualizer button starts the right-hand icons and pushes them to the
+   edge, mirroring history and stations on the left. */
 .tunebox .player .viz-toggle {
     margin-left: auto;
     cursor:      pointer;
-}
-
-.tunebox .player .viz-toggle:not(.hidden) + .fullscreen-toggle {
-    margin-left: .75rem;
 }
 
 /* History, channels and the visualizer menu are read and tapped; the
@@ -303,7 +299,7 @@
     color: #1f2a37;
 }
 
-.tunebox.car-day .page.viz-page .viz-list li.active a {
+.tunebox.car-day .page.viz-page .viz-list li.active button {
     color: #fff;
 }
 
@@ -349,11 +345,12 @@
 
 /* Cover sized to the room above the control bar instead of base.css's fixed
    16rem: fullscreen gains a bigger cover rather than empty bands, and short
-   screens no longer push the title under the bar. 15rem is the bar plus the
-   two text lines and the spacing around them. --car-vh is set by layout.js.
+   screens no longer push the title under the bar. 17rem is the bar plus the
+   three text lines (channel, title, artist) with the Played-by line and the
+   spacing around them. --car-vh is set by layout.js.
    Browsers without clamp() keep the base.css size. */
 .tunebox {
-    --car-art-size: clamp(8rem, min(85vw, calc(var(--car-vh, 100vh) - 15rem)), 30rem);
+    --car-art-size: clamp(8rem, min(85vw, calc(var(--car-vh, 100vh) - 17rem)), 30rem);
 }
 
 /* base.css sizes the pages from 100vh; see the real-height note in layout.js. */
@@ -385,6 +382,7 @@
 .tunebox .page.viz-page .viz-list button {
     font-size:     1rem;
     display:       block;
+    width:         100%;
     padding:       .85rem 1rem;
     transition:    opacity 250ms ease, background 250ms ease;
     text-align:    center;
@@ -395,7 +393,7 @@
     background:    transparent;
 }
 
-.tunebox .page.viz-page .viz-list li.active a {
+.tunebox .page.viz-page .viz-list li.active button {
     opacity:    1;
     background: var(--accent-color, #62a8ea);
 }
@@ -503,31 +501,4 @@
 
 .tunebox[data-layout="wide"] .onair .car-artist-line {
     font-size: 1.4rem;
-}
-
-/* Without a volume control (phones) the visualizer button moves next to
-   play, so the two sides of the bar mirror each other. */
-.tunebox .player.no-volume .viz-toggle {
-    margin-left: 0;
-}
-
-.tunebox .player.no-volume .viz-toggle:not(.hidden) + .fullscreen-toggle {
-    margin-left: auto;
-}
-
-.tunebox.car-day .channel {
-    background: rgba(255, 255, 255, .55);
-}
-
-.tunebox.car-day .channel.active {
-    color:      #fff;
-    background: #1f6fbf;
-}
-
-.tunebox.car-day .streams button {
-    border-color: rgba(31, 42, 55, .3);
-}
-
-.tunebox.car-day .btn {
-    border-color: #1f6fbf;
 }

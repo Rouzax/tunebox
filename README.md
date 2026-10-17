@@ -146,10 +146,11 @@ it). What the buttons do:
 - **Recently played** (clock, bottom left) and **Stations** (radio). On the
   stations page, tap a station to switch; under the playing station you can
   pick its quality, for example "Data saver (AAC 96)" for 4G.
-- **Volume and mute.** Phones that do not let a web page set the volume
-  (iPhones) do not show the slider; use the phone's buttons.
-- **Visualizer** (bars icon), **small window** (box with arrow) and
-  **fullscreen**.
+- **Volume and mute.** Narrow windows (the car's third, phones) and phones
+  that do not let a web page set the volume (iPhones) show only mute; use
+  the device's own volume control there.
+- **Visualizer** (bars icon), **small window** (box with arrow; not on
+  touch screens) and **fullscreen**.
 - **Day/night** (top left) cycles automatic, day and night. Automatic
   follows sunrise and sunset when `[player]` has a location, otherwise the
   device's dark mode setting.
@@ -515,6 +516,18 @@ them by hand:
 ```sh
 node --test web/tests/*.test.js   # player logic and vendored file hashes
 ```
+
+The layout check loads the player in headless Chrome at the car's window
+sizes, a phone and a desktop, on every page, in day and night, and reports
+any control outside the window or covered, overlapping parts, clipped text
+and sideways scrolling. It needs Chrome or Chromium and a running tunebox:
+
+```sh
+node web/tests/browser/layout.mjs http://127.0.0.1:8080 /tmp/layout-shots
+```
+
+(Node 20 needs `--experimental-websocket`; the second argument is optional
+and saves a screenshot of every view.)
 
 Tests do not use the network, except those marked `live`
 (`.venv/bin/pytest -m live`).
