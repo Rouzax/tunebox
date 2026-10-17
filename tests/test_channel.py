@@ -1,10 +1,12 @@
 import logging
+import threading
+import time
 
 import pytest
 
 from tests.fakes import FakeSource, NoJitter, channel_config
 from tunebox.catalogs import Found
-from tunebox.channel import FIRST_FETCH, STEADY_FETCH, Channel
+from tunebox.channel import ACTIVE_MS, FIRST_FETCH, STEADY_FETCH, Channel
 from tunebox.config import ChannelConfig
 from tunebox.covers import CoverService
 from tunebox.sources.base import SourceError
@@ -274,7 +276,7 @@ def test_info_and_status() -> None:
         "stream_url": "https://example.invalid/stream.aac",
         "default_image": None,
     }
-    assert channel.status() == {"last_poll_ok": None, "stale_since": None}
+    assert channel.status() == {"last_poll_ok": None, "stale_since": None, "active": False}
     channel.poll_once()
     assert channel.status()["last_poll_ok"] == 5_000
 
@@ -291,3 +293,56 @@ def test_player_buffer_turns_the_newest_track_into_upcoming() -> None:
     assert body["current"]["title"] == "Stay"
     assert body["upcoming"]["track"]["title"] == "My People"
     assert body["upcoming"]["in_s"] == 15
+
+
+def test_a_pinned_channel_is_always_active() -> None:
+    channel, _, _ = make(FakeSource(), Clock(5_000), channel_config(always=True))
+    assert channel.active()
+
+
+def test_a_request_keeps_an_unpinned_channel_active_for_ten_minutes() -> None:
+    clock = Clock(5_000)
+    channel, _, _ = make(FakeSource(), clock)
+    assert not channel.active()
+    channel.touch()
+    clock.ms += ACTIVE_MS - 1
+    assert channel.active()
+    clock.ms += 1
+    assert not channel.active()
+
+
+def test_an_idle_channel_waits_for_a_request_and_then_polls() -> None:
+    source = FakeSource()
+    source.responses = [[NEW]]
+    channel, _, _ = make(source, Clock(1_300_000))
+    stop = threading.Event()
+    worker = threading.Thread(target=channel.run, args=(stop,), daemon=True)
+    worker.start()
+    time.sleep(0.3)
+    assert source.counts == []
+    channel.touch()
+    deadline = time.monotonic() + 3
+    while not source.counts and time.monotonic() < deadline:
+        time.sleep(0.02)
+    stop.set()
+    worker.join(3)
+    assert source.counts == [FIRST_FETCH]
+
+
+def test_after_idling_the_next_poll_fetches_a_full_list_again() -> None:
+    source = FakeSource()
+    source.responses = [[OLD], [NEW]]
+    channel, _, _ = make(source, Clock(1_300_000))
+    channel.poll_once()
+    stop = threading.Event()
+    stop.set()
+    channel.sleep_until_active(stop)
+    channel.poll_once()
+    assert source.counts == [FIRST_FETCH, FIRST_FETCH]
+
+
+def test_status_reports_whether_the_channel_is_active() -> None:
+    channel, _, _ = make(FakeSource(), Clock(5_000))
+    assert channel.status()["active"] is False
+    channel.touch()
+    assert channel.status()["active"] is True

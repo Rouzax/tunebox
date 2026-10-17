@@ -116,6 +116,7 @@ class Handler(BaseHTTPRequestHandler):
             channel = channels.get(parts[2])
             if channel is None:
                 return self._send_json(404, {"error": "unknown_channel"}, head)
+            channel.touch()
             buffer_s = _buffer_s(self.path)
             if buffer_s is None:
                 return self._send_json(400, {"error": "bad_buffer_s"}, head)
@@ -128,6 +129,7 @@ class Handler(BaseHTTPRequestHandler):
             channel = channels.get(parts[2])
             if channel is None:
                 return self._send_json(404, {"error": "unknown_channel"}, head)
+            channel.touch()
             headers = {"Cache-Control": "no-cache"}
             return self._send_json(200, channel.pawtunes_view(), head, headers)
         if parts and parts[0] == "api":

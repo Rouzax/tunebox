@@ -287,7 +287,7 @@ is reported at startup instead of being ignored.
 |---|---|---|
 | `delay_s` | `7` | Seconds after a song's start at which `/api/channels/<id>/now` reports it as current. |
 | `pawtunes_delay_s` | `28` | The same for `/api/pawtunes/<id>`. |
-| `poll_interval_s` | `12` | Seconds between checks of a station's feed, plus up to 3 s of random spread. After a failure the wait doubles each time, up to 120 s. |
+| `poll_interval_s` | `12` | Seconds between checks of a station's feed, plus up to 3 s of random spread. After a failure the wait doubles each time, up to 120 s. Only while the station is active (see `always`). |
 | `history_size` | `50` | Songs kept per station. |
 
 `[player]` (optional)
@@ -379,8 +379,10 @@ source reads: `artist`, `title` (with its credit), `artwork` (optional) and
 milliseconds and optional `artwork`).
 
 **`GET /healthz`** is `200` while the server runs, with each station's last
-successful check and `stale_since`. An unreachable station does not make it
-fail.
+successful check, `stale_since` and `active`. An unreachable station does
+not make it fail. `active` is `false` for a station nobody has listened to in
+the last ten minutes (and that has no `always = true`); tunebox does not
+check its feed then, so an old `last_poll_ok` is expected.
 
 Everything else is served from the web folder (`/` is the status page).
 Unknown addresses are a `404` with `{"error": "not_found"}`, unknown

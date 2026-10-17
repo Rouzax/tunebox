@@ -151,3 +151,16 @@ def test_a_request_body_is_never_read_as_a_second_request(server: TuneboxServer)
             received += chunk
     assert received.count(b"HTTP/1.1 ") == 1
     assert b"Connection: close" in received
+
+
+def test_asking_what_is_playing_marks_the_channel_active(server: TuneboxServer) -> None:
+    channel = server.channels["owr"]
+    assert not channel.active()
+    request(server, "/api/channels/owr/now")
+    assert channel.active()
+
+
+def test_the_pawtunes_endpoint_marks_the_channel_active(server: TuneboxServer) -> None:
+    channel = server.channels["owr"]
+    request(server, "/api/pawtunes/owr")
+    assert channel.active()

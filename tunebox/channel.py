@@ -31,6 +31,10 @@ JITTER_S = 3.0
 HISTORY_LOOKUPS = 20
 # PawTunes' browser keeps at most 20 history entries.
 PAWTUNES_HISTORY = 20
+# A channel that is not pinned keeps polling this long after the last request.
+ACTIVE_MS = 600_000
+# How often an idle poller looks again; a request wakes it at once.
+IDLE_CHECK_S = 1.0
 
 
 def now_ms() -> int:
@@ -63,9 +67,14 @@ class Channel:
         self._stale_since: int | None = None
         self._last_ok: int | None = None
         self._frozen_artwork: dict[tuple[int, str], str | None] = {}
+        self._active_until = 0
+        self._wake = threading.Event()
 
     def run(self, stop: threading.Event) -> None:
         while not stop.is_set():
+            if not self.active():
+                self.sleep_until_active(stop)
+                continue
             with bound("poll"):
                 try:
                     delay = self.poll_once()
@@ -74,6 +83,29 @@ class Channel:
                     log.error("poll_crashed", exc_info=True, extra={"fields": fields})
                     delay = self._failed(error)
             stop.wait(delay)
+
+    def touch(self) -> None:
+        """Marks the channel as listened to; an idle poller wakes at once."""
+        with self._lock:
+            self._active_until = self._clock() + ACTIVE_MS
+        self._wake.set()
+
+    def active(self) -> bool:
+        if self.config.always:
+            return True
+        with self._lock:
+            return self._clock() < self._active_until
+
+    def sleep_until_active(self, stop: threading.Event) -> None:
+        """Waits without network traffic until a request or stop."""
+        # Back after a gap, the feed may have moved on by more than a few entries.
+        self._polled = False
+        event(log, logging.DEBUG, "channel_idle", channel=self.config.id)
+        while not stop.is_set() and not self.active():
+            self._wake.wait(IDLE_CHECK_S)
+            self._wake.clear()
+        if not stop.is_set():
+            event(log, logging.DEBUG, "channel_active", channel=self.config.id)
 
     def poll_once(self) -> float:
         """Polls the source once; returns the seconds to wait before the next poll."""
@@ -172,8 +204,13 @@ class Channel:
         }
 
     def status(self) -> dict[str, Any]:
+        active = self.active()
         with self._lock:
-            return {"last_poll_ok": self._last_ok, "stale_since": self._stale_since}
+            return {
+                "last_poll_ok": self._last_ok,
+                "stale_since": self._stale_since,
+                "active": active,
+            }
 
     def _timeline(self, delay_s: float) -> tuple[Timeline, int | None]:
         with self._lock:
