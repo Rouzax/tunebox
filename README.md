@@ -79,8 +79,8 @@ the background. It restarts automatically after a reboot.
 
 ## Check that it works
 
-Open `http://127.0.0.1:8080/` in a browser on the same machine (use your
-own port if you changed it in step 3).
+Open the status page, `http://127.0.0.1:8080/status.html`, in a browser on
+the same machine (use your own port if you changed it in step 3).
 
 You should see one section per station with the song playing now, often the
 next one, and the five songs before it. Covers fill in during the first
@@ -105,6 +105,11 @@ minute.
 
 If the container stops right away or the page does not load, see
 [Troubleshooting](#troubleshooting).
+
+`/check.html` reports what a browser supports: the audio formats it plays,
+its dark mode setting, its window size and the features the player uses.
+Open it on the device you want to listen on (a phone, a car) when something
+does not work there.
 
 ## Reach it from other devices
 
@@ -335,8 +340,10 @@ is reported at startup instead of being ignored.
 For player developers. All answers are JSON.
 
 **`GET /api/channels`** lists the stations: `id`, `name`, `stream_url`,
-`default_image` and `logo` (a path such as `/logos/owr.png`, or `null` until
-the logo is downloaded or when none is configured). It may be cached for
+`default_image`, `group`, `streams` (each with `name`, `url`, `codec`,
+`kbps`; `stream_url` is the first one's address) and `logo` (a path such as
+`/logos/owr.png`, or `null` until the logo is downloaded or when none is
+configured). It may be cached for
 five minutes.
 
 **`GET /logos/<file>`** serves a downloaded logo. SVG logos are sent with a
@@ -391,7 +398,15 @@ not make it fail. `active` is `false` for a station nobody has listened to in
 the last ten minutes (and that has no `always = true`); tunebox does not
 check its feed then, so an old `last_poll_ok` is expected.
 
-Everything else is served from the web folder (`/` is the status page).
+**`GET /api/player`** gives the player's settings from `[player]`:
+`latitude`, `longitude` (both `null` when not set) and `default_channel`
+(the configured one, else the first station). It may be cached for five
+minutes.
+
+Everything else is served from the web folder. Pages are sent with a
+Content-Security-Policy that allows scripts, styles and fonts only from
+tunebox itself, so pages in that folder must not use inline scripts or
+styles. Only known file types are served.
 Unknown addresses are a `404` with `{"error": "not_found"}`, unknown
 stations `{"error": "unknown_channel"}`.
 

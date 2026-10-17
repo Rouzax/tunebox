@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import mimetypes
 import time
 import urllib.parse
 from collections.abc import Mapping
@@ -13,14 +12,46 @@ from pathlib import Path
 from typing import Any, cast
 
 from tunebox.channel import Channel
+from tunebox.config import PlayerConfig
 from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
 from tunebox.logos import Logos
 from tunebox.logs import bound, event
 
 log = logging.getLogger(__name__)
 
-_TEXT_TYPES = {"text/html", "text/javascript", "text/css"}
 MAX_BUFFER_S = 120.0
+
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json",
+    ".webmanifest": "application/manifest+json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+    ".txt": "text/plain; charset=utf-8",
+}
+# Folders here carry their version in the name. Everything else (the player's
+# own code has no build step to fingerprint it) is revalidated on every load.
+IMMUTABLE_DIRS = ("vendor/",)
+# Covers come from catalogue CDNs and streams from redirect targets whose
+# hosts vary, hence https: for images and media.
+CSP = "; ".join(
+    [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self'",
+        "font-src 'self'",
+        "img-src 'self' https: data:",
+        "media-src https:",
+        "connect-src 'self'",
+        "frame-ancestors *",
+        "base-uri 'none'",
+        "form-action 'none'",
+    ]
+)
 
 
 def etag_matches(header: str | None, etag: str) -> bool:
@@ -54,10 +85,12 @@ class TuneboxServer(ThreadingHTTPServer):
         channels: Mapping[str, Channel],
         web_dir: Path,
         logos: Logos | None = None,
+        player: PlayerConfig | None = None,
     ) -> None:
         self.channels = channels
         self.web_dir = web_dir.resolve()
         self.logos = logos
+        self.player = player or PlayerConfig()
         super().__init__(address, Handler)
 
 
@@ -123,6 +156,14 @@ class Handler(BaseHTTPRequestHandler):
                 for cid, channel in channels.items()
             ]
             return self._send_json(200, listing, head, {"Cache-Control": "max-age=300"})
+        if parts == ["api", "player"]:
+            player = self.app.player
+            body = {
+                "latitude": player.latitude,
+                "longitude": player.longitude,
+                "default_channel": player.default_channel or next(iter(channels)),
+            }
+            return self._send_json(200, body, head, {"Cache-Control": "max-age=300"})
         if len(parts) == 4 and parts[:2] == ["api", "channels"] and parts[3] == "now":
             channel = channels.get(parts[2])
             if channel is None:
@@ -170,14 +211,22 @@ class Handler(BaseHTTPRequestHandler):
             target = candidate if inside else None
         except OSError, ValueError:  # ValueError: an embedded NUL byte
             target = None
-        if target is None:
+        content_type = CONTENT_TYPES.get(target.suffix) if target else None
+        if target is None or content_type is None:
             return self._send_json(404, {"error": "not_found"}, head)
-        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-        # The page and its code must update with a new image; other files may be cached a day.
-        cache = "no-cache" if content_type in _TEXT_TYPES else "max-age=86400"
-        if content_type.startswith("text/"):
-            content_type += "; charset=utf-8"
-        self._send(200, target.read_bytes(), content_type, head, {"Cache-Control": cache})
+        stat = target.stat()
+        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        if etag_matches(self.headers.get("If-None-Match"), etag):
+            return self._not_modified(etag)
+        immutable = relative.startswith(IMMUTABLE_DIRS)
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "max-age=31536000, immutable" if immutable else "no-cache",
+        }
+        if target.suffix == ".html":
+            headers["Content-Security-Policy"] = CSP
+            headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        self._send(200, target.read_bytes(), content_type, head, headers)
 
     def _send_json(
         self, status: int, payload: object, head: bool, headers: Mapping[str, str] | None = None
@@ -197,6 +246,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         if self.close_connection:
@@ -209,5 +259,6 @@ class Handler(BaseHTTPRequestHandler):
         self._status = 304
         self.send_response(304)
         self.send_header("ETag", etag)
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", "0")
         self.end_headers()

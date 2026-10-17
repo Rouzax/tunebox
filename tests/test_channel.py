@@ -275,6 +275,15 @@ def test_info_and_status() -> None:
         "name": "One World Radio",
         "stream_url": "https://example.invalid/stream.aac",
         "default_image": None,
+        "group": None,
+        "streams": [
+            {
+                "name": "Default",
+                "url": "https://example.invalid/stream.aac",
+                "codec": None,
+                "kbps": None,
+            }
+        ],
     }
     assert channel.status() == {"last_poll_ok": None, "stale_since": None, "active": False}
     channel.poll_once()

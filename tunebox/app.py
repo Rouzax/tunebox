@@ -49,7 +49,7 @@ def main() -> int:
     web_dir = Path(os.environ.get("TUNEBOX_WEB", str(WEB_DIR)))
     address = (config.server.host, config.server.port)
     try:
-        server = TuneboxServer(address, channels, web_dir, logos=logos)
+        server = TuneboxServer(address, channels, web_dir, logos=logos, player=config.player)
     except OSError as error:
         print(f"tunebox: cannot listen on {address[0]}:{address[1]}: {error}", file=sys.stderr)
         return 2

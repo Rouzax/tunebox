@@ -9,9 +9,10 @@ import pytest
 
 from tests.fakes import FakeSource, NoJitter, channel_config
 from tunebox.channel import Channel
+from tunebox.config import PlayerConfig
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
-from tunebox.server import TuneboxServer, etag_matches
+from tunebox.server import CSP, TuneboxServer, etag_matches
 from tunebox.store import Store
 from tunebox.tracks import RawEntry
 
@@ -22,6 +23,11 @@ def server(tmp_path: Path) -> Generator[TuneboxServer]:
     web.mkdir()
     (web / "index.html").write_text("<!doctype html><title>t</title>", encoding="utf-8")
     (tmp_path / "secret.txt").write_text("secret", encoding="utf-8")
+    (web / "app.js").write_text("export {};", encoding="utf-8")
+    (web / "vendor").mkdir()
+    (web / "vendor" / "lib-1.0.js").write_text("export {};", encoding="utf-8")
+    (web / "font.woff2").write_bytes(b"wOF2")
+    (web / "notes.md").write_text("# x", encoding="utf-8")
     source = FakeSource()
     source.responses = [[RawEntry("FISHER", "Stay", 1_000_000)]]
     store = Store(None)
@@ -39,7 +45,9 @@ def server(tmp_path: Path) -> Generator[TuneboxServer]:
     (logo_dir / "owr.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     (logo_dir / "x.svg").write_bytes(b"<svg></svg>")
     logos = Logos(logo_dir, lambda _url: b"")
-    httpd = TuneboxServer(("127.0.0.1", 0), {"owr": channel}, web, logos=logos)
+    httpd = TuneboxServer(
+        ("127.0.0.1", 0), {"owr": channel}, web, logos=logos, player=PlayerConfig(52.0, 5.0, None)
+    )
     # A short poll interval makes shutdown() quick.
     thread = threading.Thread(
         target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
@@ -117,13 +125,59 @@ def test_not_found(server: TuneboxServer, path: str) -> None:
 def test_static_index_and_head(server: TuneboxServer) -> None:
     status, headers, body = request(server, "/")
     assert status == 200
-    assert headers["content-type"].startswith("text/html")
+    assert headers["content-type"] == "text/html; charset=utf-8"
     assert headers["cache-control"] == "no-cache"
+    assert headers["content-security-policy"] == CSP
+    assert headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert headers["x-content-type-options"] == "nosniff"
     assert body.startswith(b"<!doctype html>")
     status, headers, body = request(server, "/", method="HEAD")
     assert status == 200
     assert int(headers["content-length"]) > 0
     assert body == b""
+
+
+@pytest.mark.parametrize(
+    ("path", "content_type", "cache"),
+    [
+        ("/app.js", "text/javascript; charset=utf-8", "no-cache"),
+        ("/vendor/lib-1.0.js", "text/javascript; charset=utf-8", "max-age=31536000, immutable"),
+        ("/font.woff2", "font/woff2", "no-cache"),
+    ],
+)
+def test_static_types_and_caching(
+    server: TuneboxServer, path: str, content_type: str, cache: str
+) -> None:
+    status, headers, _ = request(server, path)
+    assert status == 200
+    assert headers["content-type"] == content_type
+    assert headers["cache-control"] == cache
+    assert "content-security-policy" not in headers
+
+
+def test_static_files_answer_304_to_their_etag(server: TuneboxServer) -> None:
+    _, headers, _ = request(server, "/app.js")
+    status, after, body = request(server, "/app.js", headers={"If-None-Match": headers["etag"]})
+    assert status == 304
+    assert body == b""
+    assert after["x-content-type-options"] == "nosniff"
+
+
+def test_files_of_unknown_type_are_not_served(server: TuneboxServer) -> None:
+    status, _, _ = request(server, "/notes.md")
+    assert status == 404
+
+
+def test_player_settings(server: TuneboxServer) -> None:
+    status, headers, body = request(server, "/api/player")
+    assert status == 200
+    assert headers["cache-control"] == "max-age=300"
+    assert json.loads(body) == {"latitude": 52.0, "longitude": 5.0, "default_channel": "owr"}
+
+
+def test_json_answers_carry_nosniff(server: TuneboxServer) -> None:
+    _, headers, _ = request(server, "/api/channels")
+    assert headers["x-content-type-options"] == "nosniff"
 
 
 def test_etag_matches() -> None:
