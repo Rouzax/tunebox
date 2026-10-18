@@ -1,3 +1,4 @@
+import dataclasses
 import http.client
 import json
 import socket
@@ -13,6 +14,7 @@ from tunebox.channel import Channel
 from tunebox.config import PlayerConfig, StreamConfig
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
+from tunebox.runtime import Snapshot
 from tunebox.server import CSP, TuneboxServer, etag_matches
 from tunebox.store import Store
 from tunebox.tracks import RawEntry
@@ -60,14 +62,8 @@ def server(tmp_path: Path) -> Generator[TuneboxServer]:
     (logo_dir / "small").mkdir()
     (logo_dir / "small" / "owr.png").write_bytes(b"\x89PNG\r\n\x1a\nsmall")
     logos = Logos(logo_dir, lambda _url: b"")
-    httpd = TuneboxServer(
-        ("127.0.0.1", 0),
-        {"owr": channel},
-        web,
-        logos=logos,
-        player=PlayerConfig(52.0, 5.0, None),
-        bursts=FakeBursts(),
-    )
+    snapshot = Snapshot(1, {"owr": channel}, PlayerConfig(52.0, 5.0, None))
+    httpd = TuneboxServer(("127.0.0.1", 0), lambda: snapshot, web, logos=logos, bursts=FakeBursts())
     # A short poll interval makes shutdown() quick.
     thread = threading.Thread(
         target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
@@ -93,7 +89,8 @@ def test_channels_list(server: TuneboxServer) -> None:
     status, headers, body = request(server, "/api/channels")
     assert status == 200
     assert headers["content-type"].startswith("application/json")
-    assert headers["cache-control"] == "max-age=300"
+    assert headers["cache-control"] == "no-cache"
+    assert headers["x-tunebox-version"] == "1"
     assert json.loads(body)[0]["id"] == "owr"
 
 
@@ -219,13 +216,15 @@ def test_now_accepts_the_player_buffer(server: TuneboxServer) -> None:
 def test_now_adds_the_burst_of_the_stream_played(
     server: TuneboxServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    channel = server.channels["owr"]
+    channel = server.current().channels["owr"]
     seen: list[float] = []
     original = channel.now_view
 
-    def spy(buffer_s: float = 0) -> tuple[dict[str, object], str]:
+    def spy(
+        buffer_s: float = 0, version: int = 0, stream: str | None = None
+    ) -> tuple[dict[str, object], str]:
         seen.append(buffer_s)
-        return original(buffer_s)
+        return original(buffer_s, version, stream)
 
     monkeypatch.setattr(channel, "now_view", spy)
     status, _, _ = request(server, "/api/channels/owr/now?buffer_s=2.5&stream=0")
@@ -265,14 +264,14 @@ def test_a_request_body_is_never_read_as_a_second_request(server: TuneboxServer)
 
 
 def test_asking_what_is_playing_marks_the_channel_active(server: TuneboxServer) -> None:
-    channel = server.channels["owr"]
+    channel = server.current().channels["owr"]
     assert not channel.active()
     request(server, "/api/channels/owr/now")
     assert channel.active()
 
 
 def test_the_pawtunes_endpoint_marks_the_channel_active(server: TuneboxServer) -> None:
-    channel = server.channels["owr"]
+    channel = server.current().channels["owr"]
     request(server, "/api/pawtunes/owr")
     assert channel.active()
 
@@ -318,3 +317,49 @@ def test_csp_allows_the_streams_the_config_accepts() -> None:
     # such a stream must not be refused by the policy itself.
     media = next(part for part in CSP.split("; ") if part.startswith("media-src"))
     assert media.split()[1:] == ["https:", "http:"]
+
+
+def test_a_new_version_changes_the_now_etag(server: TuneboxServer) -> None:
+    _, headers, body = request(server, "/api/channels/owr/now")
+    assert json.loads(body)["version"] == 1
+    old = server.current()
+    newer = Snapshot(2, old.channels, old.player)
+    server.current = lambda: newer
+    status, _, body = request(
+        server, "/api/channels/owr/now", headers={"If-None-Match": headers["etag"]}
+    )
+    assert status == 200
+    assert json.loads(body)["version"] == 2
+
+
+def test_stream_by_name_and_by_position(server: TuneboxServer) -> None:
+    status, _, body = request(server, "/api/channels/owr/now?stream=Default")
+    assert status == 200
+    assert json.loads(body)["stream"] == "Default"
+    status, _, body = request(server, "/api/channels/owr/now?stream=0")
+    assert status == 200
+    assert json.loads(body)["stream"] == "Default"
+    status, _, _ = request(server, "/api/channels/owr/now?stream=Nope")
+    assert status == 400
+
+
+def test_stream_name_wins_over_position(server: TuneboxServer) -> None:
+    channel = server.current().channels["owr"]
+    two = (
+        StreamConfig("1", "https://example.invalid/one.aac", None, None),
+        StreamConfig("Other", "https://example.invalid/other.aac", None, None),
+    )
+    channel.replace_config(dataclasses.replace(channel.config, streams=two))
+    _, _, body = request(server, "/api/channels/owr/now?stream=1")
+    assert json.loads(body)["stream"] == "1"
+
+
+def test_player_settings_without_channels(server: TuneboxServer) -> None:
+    empty = Snapshot(1, {}, PlayerConfig())
+    server.current = lambda: empty
+    status, _, body = request(server, "/api/player")
+    assert status == 200
+    assert json.loads(body)["default_channel"] is None
+    status, _, body = request(server, "/api/channels")
+    assert status == 200
+    assert json.loads(body) == []

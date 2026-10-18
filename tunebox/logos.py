@@ -1,16 +1,16 @@
-"""Station logos: downloaded once from the configured address, then served by
-tunebox, so listeners' browsers never contact the logo host. A large PNG
-also gets a small copy in small/, for the station list: logo hosts often
-offer 512 px for an icon shown at about 40, and on mobile data the list
-would cost megabytes. The original stays for the cover."""
+"""Station logos: downloaded from the configured address when it is new or
+changes, then served by tunebox, so listeners' browsers never contact the
+logo host. A large PNG also gets a small copy in small/, for the station
+list: logo hosts often offer 512 px for an icon shown at about 40, and on
+mobile data the list would cost megabytes. The original stays for the cover."""
 
 from __future__ import annotations
 
 import logging
+import queue
 import re
 import stat
 import threading
-from collections.abc import Iterable
 from pathlib import Path
 
 from tunebox.config import ChannelConfig
@@ -55,6 +55,8 @@ class Logos:
     def __init__(self, directory: Path, http_get: HttpGet) -> None:
         self._dir = directory
         self._get = http_get
+        self._queue: queue.Queue[ChannelConfig] = queue.Queue()
+        self._unavailable_reported = False
 
     def _folder(self, small: bool) -> Path:
         return self._dir / "small" if small else self._dir
@@ -79,22 +81,30 @@ class Logos:
         path = self._folder(small) / name
         return path if path.is_file() else None
 
-    def fetch_all(
-        self, channels: Iterable[ChannelConfig], stop: threading.Event | None = None
-    ) -> None:
-        """Downloads each logo whose address is new; runs once at startup and
-        ends early when tunebox stops."""
+    def request(self, channel: ChannelConfig) -> None:
+        """Queues a channel whose logo is new or changed."""
+        self._queue.put(channel)
+
+    def run_forever(self, stop: threading.Event) -> None:
+        while not stop.is_set():
+            try:
+                channel = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            self.refresh(channel)
+
+    def refresh(self, channel: ChannelConfig) -> None:
+        """Downloads the logo when its address is new and keeps the small copy in step."""
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
         except OSError as error:
-            event(log, logging.WARNING, "logos_unavailable", error=str(error))
+            if not self._unavailable_reported:
+                self._unavailable_reported = True
+                event(log, logging.WARNING, "logos_unavailable", error=str(error))
             return
-        for channel in channels:
-            if stop is not None and stop.is_set():
-                return
-            if channel.logo and not self._current(channel.id, channel.logo):
-                self._fetch(channel.id, channel.logo)
-            self._make_small(channel.id)
+        if channel.logo and not self._current(channel.id, channel.logo):
+            self._fetch(channel.id, channel.logo)
+        self._make_small(channel.id)
 
     def _make_small(self, channel_id: str) -> None:
         """Keeps small/<id>.png in step with the logo: made when the logo is

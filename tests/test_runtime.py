@@ -1,0 +1,177 @@
+import dataclasses
+import threading
+import time
+from collections.abc import Generator
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tests.fakes import FakeHttp, FakeSource, NoJitter
+from tunebox.channel import Channel
+from tunebox.config import ChannelConfig, ChannelRow, ConfigState
+from tunebox.covers import CoverService
+from tunebox.logos import Logos
+from tunebox.runtime import LIVE_FIELDS, POLLER_FIELDS, Runtime, needs_restart
+from tunebox.settings import Settings
+from tunebox.store import Store
+
+
+def doc(channel_id: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "id": channel_id,
+        "name": channel_id.upper(),
+        "stream_url": "https://example.invalid/stream.aac",
+        "source": {"type": "triton", "mount": "OWR_INTERNATIONAL"},
+        **extra,
+    }
+
+
+def rows(*docs: dict[str, Any]) -> ConfigState:
+    return ConfigState(channels=tuple(ChannelRow(d["id"], None, True, d) for d in docs))
+
+
+class RecordingLogos(Logos):
+    def __init__(self, directory: Path) -> None:
+        super().__init__(directory, FakeHttp(lambda _url: b""))
+        self.requested: list[str | None] = []
+
+    def request(self, channel: ChannelConfig) -> None:
+        self.requested.append(channel.logo)
+
+
+class Harness:
+    def __init__(self, tmp_path: Path) -> None:
+        self.settings = Settings(tmp_path / "t.db")
+        self.store = Store(None)
+        self.covers = CoverService(self.store, lambda _track: None)
+        self.made: list[tuple[str, Channel | None]] = []
+        self.logos = RecordingLogos(tmp_path / "logos")
+        self.runtime = Runtime(self.settings, self.make, self.logos)
+
+    def make(self, config: ChannelConfig, carry: Channel | None) -> Channel:
+        self.made.append((config.id, carry))
+        return Channel(config, FakeSource(), self.covers, self.store, rng=NoJitter(), carry=carry)
+
+    def commit(self, state: ConfigState) -> int:
+        _, version = self.settings.load()
+        return self.settings.commit(state, version, "test")
+
+
+@pytest.fixture
+def harness(tmp_path: Path) -> Generator[Harness]:
+    made = Harness(tmp_path)
+    yield made
+    made.runtime.stop_and_join(time.monotonic() + 5)
+    made.settings.close()
+
+
+def test_every_channel_field_is_classified() -> None:
+    names = {f.name for f in dataclasses.fields(ChannelConfig)}
+    assert names == POLLER_FIELDS | LIVE_FIELDS
+    assert not POLLER_FIELDS & LIVE_FIELDS
+
+
+def test_apply_starts_swaps_restarts_and_stops(harness: Harness) -> None:
+    harness.commit(rows(doc("a"), doc("b")))
+    assert harness.runtime.apply() == 1
+    first = harness.runtime.snapshot
+    assert list(first.channels) == ["a", "b"]
+    a, b = first.channels["a"], first.channels["b"]
+
+    # a: display change, swapped in place; b: poll change, restarted; c: new.
+    harness.commit(rows(doc("a", name="Renamed"), doc("b", poll_interval_s=30), doc("c")))
+    assert harness.runtime.apply() == 2
+    second = harness.runtime.snapshot
+    assert second.channels["a"] is a
+    assert a.config.name == "Renamed"
+    assert second.channels["b"] is not b
+    assert ("b", b) in harness.made
+    assert list(second.channels) == ["a", "b", "c"]
+
+    harness.commit(rows(doc("c")))
+    harness.runtime.apply()
+    assert list(harness.runtime.snapshot.channels) == ["c"]
+
+
+def test_apply_without_a_new_version_does_nothing(harness: Harness) -> None:
+    assert harness.runtime.apply() == 0
+    harness.commit(rows(doc("a")))
+    harness.runtime.apply()
+    made = len(harness.made)
+    assert harness.runtime.apply() == 1
+    assert len(harness.made) == made
+
+
+def test_only_new_or_changed_logos_are_requested(harness: Harness) -> None:
+    harness.commit(rows(doc("a", logo="https://example.invalid/a.png")))
+    harness.runtime.apply()
+    harness.commit(rows(doc("a", logo="https://example.invalid/a.png", name="X")))
+    harness.runtime.apply()
+    harness.commit(rows(doc("a", logo="https://example.invalid/b.png")))
+    harness.runtime.apply()
+    assert harness.logos.requested == [
+        "https://example.invalid/a.png",
+        "https://example.invalid/b.png",
+    ]
+
+
+def test_requests_during_apply_never_fail(harness: Harness) -> None:
+    harness.commit(rows(*(doc(f"c{i}") for i in range(20))))
+    harness.runtime.apply()
+    failures: list[BaseException] = []
+    done = threading.Event()
+
+    def reader() -> None:
+        while not done.is_set():
+            try:
+                time.sleep(0)
+                for channel in harness.runtime.snapshot.channels.values():
+                    channel.info()
+            except Exception as error:  # noqa: BLE001 - any failure fails the test
+                failures.append(error)
+
+    threads = [threading.Thread(target=reader) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for size in (5, 20, 1, 20):
+        harness.commit(rows(*(doc(f"c{i}") for i in range(size))))
+        harness.runtime.apply()
+    done.set()
+    for thread in threads:
+        thread.join(5)
+    assert failures == []
+
+
+def test_needs_restart_only_for_poller_fields(harness: Harness) -> None:
+    harness.commit(rows(doc("a")))
+    harness.runtime.apply()
+    config = harness.runtime.snapshot.channels["a"].config
+    assert not needs_restart(config, dataclasses.replace(config, name="X", delay_s=9))
+    assert needs_restart(config, dataclasses.replace(config, history_size=10))
+
+
+def test_a_stored_state_that_no_longer_validates_keeps_what_runs(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    harness.commit(rows(doc("a")))
+    harness.runtime.apply()
+    # Written behind the validator's back, as a future schema change could.
+    harness.settings._db.execute(  # pyright: ignore[reportPrivateUsage]
+        "UPDATE channels SET doc_json = '{}'"
+    )
+    harness.settings._db.execute(  # pyright: ignore[reportPrivateUsage]
+        "UPDATE config_version SET version = 2"
+    )
+    assert harness.runtime.apply() == 1
+    assert list(harness.runtime.snapshot.channels) == ["a"]
+    assert "apply_failed" in caplog.text
+
+
+def test_stop_and_join_does_not_wait_out_the_idle_check(harness: Harness) -> None:
+    harness.commit(rows(doc("a")))
+    harness.runtime.apply()
+    time.sleep(0.1)  # the poller is now in its idle wait
+    started = time.monotonic()
+    harness.runtime.stop_and_join(time.monotonic() + 5)
+    assert time.monotonic() - started < 0.5

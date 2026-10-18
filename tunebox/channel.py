@@ -53,6 +53,7 @@ class Channel:
         store: Store,
         clock_ms: Callable[[], int] = now_ms,
         rng: random.Random | None = None,
+        carry: Channel | None = None,
     ) -> None:
         self.config = config
         self._source = source
@@ -63,6 +64,7 @@ class Channel:
         self._lock = threading.Lock()
         self._recent: list[Track] = store.load_recent(config.id)[: config.history_size]
         self._polled = False
+        self._retired = False
         self._failures = 0
         self._stale_since: int | None = None
         self._last_ok: int | None = None
@@ -72,6 +74,8 @@ class Channel:
         # Set by a successful poll; cleared while idle. What was current
         # before an idle spell is long over, so nothing is current until then.
         self._fresh = threading.Event()
+        if carry is not None:
+            self._carry_from(carry)
 
     def run(self, stop: threading.Event) -> None:
         while not stop.is_set():
@@ -99,6 +103,34 @@ class Channel:
     def wait_fresh(self, timeout_s: float) -> bool:
         """Waits up to timeout_s for a successful poll since waking."""
         return self._fresh.wait(timeout_s)
+
+    def _carry_from(self, old: Channel) -> None:
+        """A restart for new poll settings keeps what listeners see: the
+        recent list, PawTunes' artwork decisions, the activity window and,
+        when the source is the same, the freshness of the last poll."""
+        with old._lock:
+            self._recent = list(old._recent)[: self.config.history_size]
+            self._frozen_artwork = dict(old._frozen_artwork)
+            self._active_until = old._active_until
+            fresh = old._fresh.is_set() and old.config.source == self.config.source
+        if fresh:
+            self._fresh.set()
+
+    def retire(self) -> None:
+        """Called when a replacement takes over: a poll still in flight then
+        ends without writing over the replacement's recent list."""
+        self._retired = True
+        self.wake()
+
+    def wake(self) -> None:
+        """Ends an idle wait at once, so a stop is seen without waiting out
+        the idle check."""
+        self._wake.set()
+
+    def replace_config(self, config: ChannelConfig) -> None:
+        """Swaps settings that do not change what is polled (name, streams,
+        delays, logo); readers see the old or the new one, never a mix."""
+        self.config = config
 
     def active(self) -> bool:
         if self.config.always:
@@ -142,7 +174,7 @@ class Channel:
             self._failures = 0
             self._last_ok = now
             recovered_from, self._stale_since = self._stale_since, None
-        if added:
+        if added and not self._retired:
             self._store.save_recent(self.config.id, recent)
         if had_tracks:
             for track in added:
@@ -253,10 +285,14 @@ class Channel:
             "cover_kind": cover.kind if cover else None,
         }
 
-    def now_view(self, buffer_s: float = 0) -> tuple[dict[str, Any], str]:
+    def now_view(
+        self, buffer_s: float = 0, version: int = 0, stream: str | None = None
+    ) -> tuple[dict[str, Any], str]:
         """buffer_s is how far the asking player plays behind the live stream.
         Counting it here, rather than in the player, keeps the switch time a
-        relative countdown that a wrong device clock cannot shift."""
+        relative countdown that a wrong device clock cannot shift. version is
+        the configuration version; it is in the ETag, so a player on an
+        unchanged track still learns of a change."""
         timeline, stale = self._timeline(self.config.delay_s + buffer_s)
         current = timeline.current
         history = list(timeline.history)
@@ -278,6 +314,8 @@ class Channel:
             "upcoming": upcoming,
             "history": [self._track_json(t) for t in history],
             "stale_since": stale,
+            "version": version,
+            "stream": stream,
         }
         return body, _etag(body)
 

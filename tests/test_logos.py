@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -43,8 +44,8 @@ def test_fetch_saves_once_and_remembers_the_address(tmp_path: Path) -> None:
     http = FakeHttp(lambda _url: PNG)
     logos = Logos(tmp_path, http)
     channels = [channel_config(logo=URL)]
-    logos.fetch_all(channels)
-    logos.fetch_all(channels)
+    logos.refresh(channels[0])
+    logos.refresh(channels[0])
     assert http.urls == [URL]
     assert (tmp_path / "owr.png").read_bytes() == PNG
     assert (logos.path_for("owr") or "").startswith("/logos/owr.png?v=")
@@ -54,16 +55,16 @@ def test_fetch_saves_once_and_remembers_the_address(tmp_path: Path) -> None:
 def test_the_logo_path_changes_with_the_file(tmp_path: Path) -> None:
     # Logos are cached for a year, so a replaced logo needs a new address.
     logos = Logos(tmp_path, FakeHttp(lambda _url: PNG))
-    logos.fetch_all([channel_config(logo=URL)])
+    logos.refresh(channel_config(logo=URL))
     before = logos.path_for("owr")
     os.utime(tmp_path / "owr.png", ns=(1, 1))
     assert logos.path_for("owr") != before
 
 
 def test_a_changed_address_fetches_again_and_replaces_the_old_file(tmp_path: Path) -> None:
-    Logos(tmp_path, FakeHttp(lambda _url: PNG)).fetch_all([channel_config(logo=URL)])
+    Logos(tmp_path, FakeHttp(lambda _url: PNG)).refresh(channel_config(logo=URL))
     other = "https://example.invalid/owr.svg"
-    Logos(tmp_path, FakeHttp(lambda _url: SVG)).fetch_all([channel_config(logo=other)])
+    Logos(tmp_path, FakeHttp(lambda _url: SVG)).refresh(channel_config(logo=other))
     assert not (tmp_path / "owr.png").exists()
     later = Logos(tmp_path, FakeHttp(lambda _url: b""))
     assert (later.path_for("owr") or "").startswith("/logos/owr.svg?v=")
@@ -74,25 +75,25 @@ def test_a_page_instead_of_an_image_is_not_saved(
 ) -> None:
     caplog.set_level(logging.WARNING)
     logos = Logos(tmp_path, FakeHttp(lambda _url: b"<html>"))
-    logos.fetch_all([channel_config(logo=URL)])
+    logos.refresh(channel_config(logo=URL))
     assert logos.path_for("owr") is None
     assert "logo_rejected" in caplog.text
 
 
 def test_a_failed_download_keeps_the_old_logo(tmp_path: Path) -> None:
-    Logos(tmp_path, FakeHttp(lambda _url: PNG)).fetch_all([channel_config(logo=URL)])
+    Logos(tmp_path, FakeHttp(lambda _url: PNG)).refresh(channel_config(logo=URL))
 
     def fail(_url: str) -> bytes:
         raise HttpError("down")
 
     logos = Logos(tmp_path, fail)
-    logos.fetch_all([channel_config(logo="https://example.invalid/new.png")])
+    logos.refresh(channel_config(logo="https://example.invalid/new.png"))
     assert (logos.path_for("owr") or "").startswith("/logos/owr.png?v=")
 
 
 def test_channels_without_a_logo_are_skipped(tmp_path: Path) -> None:
     http = FakeHttp(lambda _url: PNG)
-    Logos(tmp_path, http).fetch_all([channel_config()])
+    Logos(tmp_path, http).refresh(channel_config())
     assert http.urls == []
 
 
@@ -108,8 +109,9 @@ def test_an_unusable_folder_is_reported_not_raised(
     blocker = tmp_path / "file"
     blocker.write_text("x", encoding="utf-8")
     logos = Logos(blocker / "logos", FakeHttp(lambda _url: PNG))
-    logos.fetch_all([channel_config(logo=URL)])
-    assert "logos_unavailable" in caplog.text
+    logos.refresh(channel_config(logo=URL))
+    logos.refresh(channel_config(logo=URL))
+    assert [r.getMessage() for r in caplog.records].count("logos_unavailable") == 1
 
 
 def test_a_large_png_gets_a_small_copy_for_the_station_list(
@@ -117,7 +119,7 @@ def test_a_large_png_gets_a_small_copy_for_the_station_list(
 ) -> None:
     caplog.set_level(logging.INFO)
     logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG))
-    logos.fetch_all([channel_config(logo=URL)])
+    logos.refresh(channel_config(logo=URL))
     small = read((tmp_path / "small" / "owr.png").read_bytes())
     assert (small.width, small.height) == (SMALL_PX, SMALL_PX // 2)
     assert (logos.path_for("owr", small=True) or "").startswith("/logos/small/owr.png?v=")
@@ -131,7 +133,7 @@ def test_logos_saved_before_get_their_small_copy_without_a_download(tmp_path: Pa
     (tmp_path / "owr.url").write_text(URL, encoding="utf-8")
     http = FakeHttp(lambda _url: BIG_PNG)
     logos = Logos(tmp_path, http)
-    logos.fetch_all([channel_config(logo=URL)])
+    logos.refresh(channel_config(logo=URL))
     assert http.urls == []
     assert logos.path_for("owr", small=True) is not None
 
@@ -139,15 +141,15 @@ def test_logos_saved_before_get_their_small_copy_without_a_download(tmp_path: Pa
 def test_a_logo_that_is_small_already_has_no_copy(tmp_path: Path) -> None:
     tiny = write(Image(64, 64, bytes((0, 0, 0, 255)) * 64 * 64))
     logos = Logos(tmp_path, FakeHttp(lambda _url: tiny))
-    logos.fetch_all([channel_config(logo=URL)])
+    logos.refresh(channel_config(logo=URL))
     assert logos.path_for("owr", small=True) is None
 
 
 def test_a_replaced_logo_drops_or_renews_its_small_copy(tmp_path: Path) -> None:
-    Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG)).fetch_all([channel_config(logo=URL)])
+    Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG)).refresh(channel_config(logo=URL))
     other = "https://example.invalid/owr.svg"
     logos = Logos(tmp_path, FakeHttp(lambda _url: SVG))
-    logos.fetch_all([channel_config(logo=other)])
+    logos.refresh(channel_config(logo=other))
     assert not (tmp_path / "small" / "owr.png").exists()
     assert logos.path_for("owr", small=True) is None
 
@@ -158,15 +160,23 @@ def test_an_unreadable_png_is_kept_as_it_is(
     caplog.set_level(logging.WARNING)
     broken = PNG[:8] + b"\x00\x00\x00\x0dIHDR" + b"\x00\x00\x02\x00" * 2 + b"\x08\x02\x00\x00\x00"
     logos = Logos(tmp_path, FakeHttp(lambda _url: broken))
-    logos.fetch_all([channel_config(logo=URL)])
+    logos.refresh(channel_config(logo=URL))
     assert (logos.path_for("owr") or "").startswith("/logos/owr.png?v=")
     assert logos.path_for("owr", small=True) is None
     assert "logo_not_shrunk" in caplog.text
 
 
-def test_fetching_stops_when_tunebox_stops(tmp_path: Path) -> None:
+def test_requested_logos_are_fetched_by_the_worker(tmp_path: Path) -> None:
     http = FakeHttp(lambda _url: PNG)
+    logos = Logos(tmp_path, http)
+    logos.request(channel_config(logo=URL))
     stop = threading.Event()
+    worker = threading.Thread(target=logos.run_forever, args=(stop,))
+    worker.start()
+    deadline = time.monotonic() + 5
+    while logos.path_for("owr") is None and time.monotonic() < deadline:
+        time.sleep(0.01)
     stop.set()
-    Logos(tmp_path, http).fetch_all([channel_config(logo=URL)], stop)
-    assert http.urls == []
+    worker.join(5)
+    assert http.urls == [URL]
+    assert not worker.is_alive()

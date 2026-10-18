@@ -6,17 +6,18 @@ import json
 import logging
 import time
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
-from tunebox.config import PlayerConfig, StreamConfig
+from tunebox.config import StreamConfig
 from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
 from tunebox.logos import Logos
 from tunebox.logs import bound, event
+from tunebox.runtime import Snapshot
 
 log = logging.getLogger(__name__)
 
@@ -88,15 +89,19 @@ def _buffer_s(target: str) -> float | None:
 
 
 def _stream(target: str, channel: Channel) -> StreamConfig | None:
-    """The stream the player plays, from ?stream=<index>; None when absent.
-    Raises ValueError when it names no stream of the channel."""
+    """The stream the player plays, from ?stream=<name>; None when absent.
+    A number names a position, as players before stream names send; a name
+    that is a number wins. Raises ValueError when it names no stream."""
     values = _query(target, "stream")
     if not values:
         return None
     streams = channel.config.streams
-    if not values[0].isdigit() or int(values[0]) >= len(streams):
-        raise ValueError(values[0])
-    return streams[int(values[0])]
+    for stream in streams:
+        if stream.name == values[0]:
+            return stream
+    if values[0].isdigit() and int(values[0]) < len(streams):
+        return streams[int(values[0])]
+    raise ValueError(values[0])
 
 
 class TuneboxServer(ThreadingHTTPServer):
@@ -105,17 +110,15 @@ class TuneboxServer(ThreadingHTTPServer):
     def __init__(
         self,
         address: tuple[str, int],
-        channels: Mapping[str, Channel],
+        snapshot: Callable[[], Snapshot],
         web_dir: Path,
         logos: Logos | None = None,
-        player: PlayerConfig | None = None,
         bursts: Bursts | None = None,
     ) -> None:
-        self.channels = channels
+        self.current = snapshot
         self.bursts = bursts
         self.web_dir = web_dir.resolve()
         self.logos = logos
-        self.player = player or PlayerConfig()
         super().__init__(address, Handler)
 
 
@@ -170,7 +173,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route(self, path: str, head: bool) -> None:
         parts = [p for p in path.split("/") if p]
-        channels = self.app.channels
+        # One snapshot per request: a reload in the meantime cannot mix two.
+        snapshot = self.app.current()
+        channels = snapshot.channels
         if path == "/healthz":
             status = {cid: channel.status() for cid, channel in channels.items()}
             return self._send_json(200, {"status": "ok", "channels": status}, head)
@@ -184,13 +189,14 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 for cid, channel in channels.items()
             ]
-            return self._send_json(200, listing, head, {"Cache-Control": "max-age=300"})
+            headers = {"Cache-Control": "no-cache", "X-Tunebox-Version": str(snapshot.version)}
+            return self._send_json(200, listing, head, headers)
         if parts == ["api", "player"]:
-            player = self.app.player
+            player = snapshot.player
             body = {
                 "latitude": player.latitude,
                 "longitude": player.longitude,
-                "default_channel": player.default_channel or next(iter(channels)),
+                "default_channel": player.default_channel or next(iter(channels), None),
             }
             return self._send_json(200, body, head, {"Cache-Control": "max-age=300"})
         if len(parts) == 4 and parts[:2] == ["api", "channels"] and parts[3] == "now":
@@ -211,7 +217,8 @@ class Handler(BaseHTTPRequestHandler):
                 # The player cannot see the audio its stream sent on connect.
                 bursts.request(stream)
                 buffer_s += bursts.burst_s(stream.url)
-            body, etag = channel.now_view(buffer_s)
+            name = stream.name if stream else None
+            body, etag = channel.now_view(buffer_s, version=snapshot.version, stream=name)
             if etag_matches(self.headers.get("If-None-Match"), etag):
                 return self._not_modified(etag)
             headers = {"ETag": etag, "Cache-Control": "no-cache"}

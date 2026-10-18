@@ -7,8 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from tunebox.app import StopSignal, main, shut_down
+from tunebox.app import StopSignal, main, open_settings, shut_down
+from tunebox.config import state_from_toml
+from tunebox.runtime import EMPTY, Runtime
 from tunebox.server import TuneboxServer
+from tunebox.settings import Settings
 from tunebox.store import CoverDecision, Store
 
 
@@ -63,11 +66,13 @@ def test_shutdown_waits_for_workers_before_closing_the_store(
 
     worker = threading.Thread(target=late_writer)
     worker.start()
-    server = TuneboxServer(("127.0.0.1", 0), {}, tmp_path)
+    settings = Settings(tmp_path / "t.db")
+    runtime = Runtime(settings, lambda _config, _carry: pytest.fail("no channels expected"))
+    server = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path)
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}).start()
     stop.set()
     with caplog.at_level(logging.ERROR):
-        shut_down(server, [worker], store)
+        shut_down(server, [worker], store, runtime, settings)
     assert [r.getMessage() for r in caplog.records] == []
     assert not worker.is_alive()
 
@@ -99,3 +104,46 @@ def test_the_stop_handler_takes_no_lock() -> None:
     caller.start()
     caller.join(2)
     assert done == [True]
+
+
+CHANNEL_TOML = (
+    '[[channels]]\nid = "owr"\nname = "One World Radio"\n'
+    'stream_url = "https://example.invalid/stream.aac"\n'
+    'source = { type = "triton", mount = "OWR_INTERNATIONAL" }\n'
+)
+
+
+def test_a_corrupt_database_stops_startup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "tunebox.db").write_bytes(b"not a database" * 100)
+    config = tmp_path / "tunebox.toml"
+    config.write_text(CHANNEL_TOML, encoding="utf-8")
+    monkeypatch.setenv("LOG_LEVEL", "info")
+    monkeypatch.setenv("TUNEBOX_CONFIG", str(config))
+    assert main() == 2
+    assert "tunebox.db" in capsys.readouterr().err
+    assert (tmp_path / "tunebox.db").read_bytes().startswith(b"not a database")
+
+
+def test_open_settings_adopts_the_file_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    state = state_from_toml(
+        {
+            "channels": [
+                {
+                    "id": "owr",
+                    "name": "One World Radio",
+                    "stream_url": "https://example.invalid/stream.aac",
+                    "source": {"type": "triton", "mount": "OWR_INTERNATIONAL"},
+                }
+            ]
+        }
+    )
+    with caplog.at_level(logging.INFO):
+        open_settings(tmp_path / "t.db", state).close()
+        settings = open_settings(tmp_path / "t.db", state)
+    assert settings.load()[1] == 1
+    settings.close()
+    assert [r.getMessage() for r in caplog.records].count("config_from_file") == 1

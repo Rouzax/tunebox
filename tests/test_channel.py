@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import threading
 import time
@@ -7,7 +8,7 @@ import pytest
 from tests.fakes import FakeSource, NoJitter, channel_config
 from tunebox.catalogs import Found
 from tunebox.channel import ACTIVE_MS, FIRST_FETCH, STEADY_FETCH, Channel
-from tunebox.config import ChannelConfig
+from tunebox.config import ChannelConfig, SourceConfig
 from tunebox.covers import CoverService
 from tunebox.sources.base import SourceError
 from tunebox.store import Store
@@ -44,12 +45,19 @@ def make(
     clock: Clock,
     config: ChannelConfig | None = None,
     store: Store | None = None,
+    carry: Channel | None = None,
 ) -> tuple[Channel, CoverService, Finder]:
     finder = Finder()
     store = store or Store(None)
     covers = CoverService(store, finder, clock=lambda: clock.ms / 1000)
     channel = Channel(
-        config or channel_config(), source, covers, store, clock_ms=clock, rng=NoJitter()
+        config or channel_config(),
+        source,
+        covers,
+        store,
+        clock_ms=clock,
+        rng=NoJitter(),
+        carry=carry,
     )
     return channel, covers, finder
 
@@ -411,3 +419,75 @@ def test_an_idle_channel_is_not_reported_stale() -> None:
     # Idle, it does not poll, so nothing is known about the feed.
     channel.sleep_until_active(stop)
     assert channel.status()["stale_since"] is None
+
+
+def test_a_retired_channel_does_not_save() -> None:
+    source = FakeSource()
+    store = Store(None)
+    channel, _, _ = make(source, Clock(1_300_000), store=store)
+    gate = threading.Event()
+    entered = threading.Event()
+
+    def blocking_fetch(count: int) -> list[RawEntry]:
+        entered.set()
+        gate.wait(5)
+        return [OLD]
+
+    source.fetch = blocking_fetch  # type: ignore[method-assign]
+    worker = threading.Thread(target=channel.poll_once)
+    worker.start()
+    assert entered.wait(5)
+    channel.retire()
+    gate.set()
+    worker.join(5)
+    assert store.load_recent("owr") == []
+
+
+def test_a_restart_carries_the_pawtunes_freeze_and_activity() -> None:
+    source = FakeSource()
+    source.responses = [[OLD]]
+    clock = Clock(1_300_000)
+    old, covers, finder = make(source, clock)
+    old.poll_once()
+    old.touch()
+    # Decided while no cover is known: PawTunes gets none for this track.
+    assert "artwork" not in old.pawtunes_view()
+    # The cover turns up after the decision; the replacement shares the
+    # cover service, as it does in the app.
+    finder.covers["Stay"] = M_URL
+    drain(covers)
+    config = dataclasses.replace(channel_config(), poll_interval_s=20.0)
+    new = Channel(config, FakeSource(), covers, Store(None), clock_ms=clock, carry=old)
+    assert "artwork" not in new.pawtunes_view()
+    assert new.active()
+    assert new.now_view()[0]["current"]["title"] == "Stay"
+
+
+def test_a_new_source_does_not_carry_freshness() -> None:
+    source = FakeSource()
+    source.responses = [[OLD]]
+    clock = Clock(1_300_000)
+    old, _, _ = make(source, clock)
+    old.poll_once()
+    other = dataclasses.replace(channel_config(), source=SourceConfig("triton", {"mount": "X"}))
+    new, _, _ = make(FakeSource(), clock, other, carry=old)
+    assert new.now_view()[0]["current"] is None
+
+
+def test_replace_config_swaps_display_fields_in_place() -> None:
+    channel, _, _ = make(FakeSource(), Clock(1_300_000))
+    channel.replace_config(dataclasses.replace(channel_config(), name="Renamed"))
+    assert channel.info()["name"] == "Renamed"
+
+
+def test_version_and_stream_are_part_of_the_etag() -> None:
+    source = FakeSource()
+    source.responses = [[OLD]]
+    channel, _, _ = make(source, Clock(1_300_000))
+    channel.poll_once()
+    body, first = channel.now_view(version=1)
+    assert body["version"] == 1
+    assert body["stream"] is None
+    assert channel.now_view(version=2)[1] != first
+    assert channel.now_view(version=1, stream="High")[1] != first
+    assert channel.now_view(version=1)[1] == first
