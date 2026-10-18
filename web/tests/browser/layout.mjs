@@ -366,6 +366,9 @@ async function run() {
                     // On mobile data every page open pays for what it loads: the
                     // channel logos wait for the channel page. The cover may
                     // show the current channel's logo.
+                    if (await evaluate(`Boolean(document.querySelector('.debug'))`)) {
+                        failures.push(`${size.name}: the debug panel shows without ?debug=1`);
+                    }
                     const logos = await evaluate(`performance.getEntriesByType('resource').filter((e) => e.name.indexOf('/logos/') >= 0).length`);
                     if (logos > 1) {
                         failures.push(`${size.name} ${embed ? 'embed ' : ''}${mode}: page open loads ${logos} station logos`);

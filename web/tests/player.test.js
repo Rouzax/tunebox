@@ -97,6 +97,7 @@ function harness() {
     for (const name of ['state', 'audio', 'webaudio-unavailable', 'autoplay-refused']) {
         events.on(name, (value) => log.push(name === 'state' ? value : name));
     }
+    events.on('debug', (note) => log.push(`debug: ${note}`));
     const player = createPlayer({events, makeAudio: fakeAudio(made), timers, now: timers.now});
     return {timers, made, log, player};
 }
@@ -171,6 +172,17 @@ test('a slow start that is still receiving audio is not cut off', () => {
     assert.equal(made[0].plays, 1);
     made[0].fire('playing');
     assert.equal(player.state(), 'playing');
+});
+
+test('reconnect decisions are reported for the debug panel', () => {
+    const {timers, made, player, log} = harness();
+    player.play('https://example.invalid/a.aac');
+    timers.advance(9000);
+    made[0].error = {code: 2};
+    timers.advance(2000);
+    made[0].fire('error');
+    const notes = log.filter((entry) => entry.startsWith('debug:'));
+    assert.deepEqual(notes, ['debug: stalled, reconnecting in 2 s', 'debug: media error 2, reconnecting in 4 s']);
 });
 
 test('coming back online reconnects at once and drops the pending retry', () => {

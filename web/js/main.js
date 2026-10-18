@@ -2,6 +2,7 @@ import {createApi, createPoller} from './api.js';
 import {canPlay, nextChannel, pickChannel, pickStream} from './channels.js';
 import {bindControls} from './controls.js';
 import {bindDayNight} from './daynight.js';
+import {bindDebug} from './debug.js';
 import {bindDisplay} from './display.js';
 import {createEmitter} from './events.js';
 import {bindLayout} from './layout.js';
@@ -50,6 +51,10 @@ async function start(root) {
         history: [],
         clockOffset: 0,
     };
+    // First, so it sees the first play.
+    if (params.get('debug') === '1') {
+        bindDebug(app);
+    }
     let shown = null;
     let unreachable = false;
 

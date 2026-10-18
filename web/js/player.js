@@ -11,7 +11,8 @@ const TICK_MS = 1000;
 // One live stream. Stop drops the source instead of pausing, so play always
 // starts at live and nothing keeps downloading. While a stream is wanted the
 // player never gives up by itself: dead streams are retried with backoff.
-// Events: state, audio ({element, cors}), webaudio-unavailable, autoplay-refused.
+// Events: state, audio ({element, cors}), webaudio-unavailable, autoplay-refused,
+// debug (a reconnect decision, as text).
 export function createPlayer({events, makeAudio, timers, now}) {
     let audio = null;
     let audioCors = true;
@@ -70,7 +71,7 @@ export function createPlayer({events, makeAudio, timers, now}) {
         });
         el.addEventListener('ended', () => {
             if (el === audio && url) {
-                failed(0);
+                scheduleRetry('stream ended');
             }
         });
         audio = el;
@@ -99,19 +100,22 @@ export function createPlayer({events, makeAudio, timers, now}) {
     function failed(code) {
         if (code === NOT_SUPPORTED && !played.has(url) && !noCors.has(url)) {
             noCors.add(url);
+            events.emit('debug', 'media error 4 before playing, retrying without CORS');
             events.emit('webaudio-unavailable');
             connect();
             return;
         }
-        scheduleRetry();
+        scheduleRetry(`media error ${code}`);
     }
 
-    function scheduleRetry() {
+    // The reason goes to the ?debug=1 panel.
+    function scheduleRetry(reason) {
         if (retry !== null) {
             return;
         }
         setState('reconnecting');
         const delay = retryDelayMs(attempt);
+        events.emit('debug', `${reason}, reconnecting in ${delay / 1000} s`);
         attempt += 1;
         retry = timers.setTimeout(() => {
             retry = null;
@@ -127,7 +131,7 @@ export function createPlayer({events, makeAudio, timers, now}) {
         }
         const at = now();
         if (watchdog.observe(audio.currentTime, at) === 'stalled') {
-            scheduleRetry();
+            scheduleRetry('stalled');
         } else if (watchdog.healthy(at)) {
             attempt = 0;
         }
