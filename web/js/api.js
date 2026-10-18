@@ -1,22 +1,33 @@
 // The tunebox API and the /now poller.
 export const POLL_MS = 10000;
 
+function failed(path, status) {
+    const error = new Error(`${path}: ${status}`);
+    error.status = status;
+    return error;
+}
+
 export function createApi(fetchFn) {
-    async function json(path) {
+    async function get(path) {
         const response = await fetchFn(path, {headers: {}, cache: 'no-store'});
         if (!response.ok) {
-            throw new Error(`${path}: ${response.status}`);
+            throw failed(path, response.status);
         }
-        return response.json();
+        return response;
     }
 
     return {
-        channels: () => json('/api/channels'),
-        player: () => json('/api/player'),
-        // stream: the index of the stream playing, so tunebox can add the
+        // version: the configuration version; /now reports it too, and a
+        // different one there means this list is out of date.
+        async channels() {
+            const response = await get('/api/channels');
+            return {channels: await response.json(), version: Number(response.headers.get('X-Tunebox-Version')) || 0};
+        },
+        player: async () => (await get('/api/player')).json(),
+        // stream: the name of the stream playing, so tunebox can add the
         // audio it sent on connect; null when nothing plays.
         async now(channelId, bufferS, etag, stream) {
-            const query = `buffer_s=${bufferS}${stream === null || stream === undefined ? '' : `&stream=${stream}`}`;
+            const query = `buffer_s=${bufferS}${stream === null || stream === undefined ? '' : `&stream=${encodeURIComponent(stream)}`}`;
             const path = `/api/channels/${encodeURIComponent(channelId)}/now?${query}`;
             const headers = etag ? {'If-None-Match': etag} : {};
             const response = await fetchFn(path, {headers, cache: 'no-store'});
@@ -25,7 +36,7 @@ export function createApi(fetchFn) {
                 return {status: 304, date};
             }
             if (!response.ok) {
-                throw new Error(`${path}: ${response.status}`);
+                throw failed(path, response.status);
             }
             return {status: 200, body: await response.json(), etag: response.headers.get('ETag'), date};
         },
@@ -34,8 +45,9 @@ export function createApi(fetchFn) {
 
 // One poll at a time per channel. Every start, stop or refresh opens a new
 // generation, so an answer still on its way for an earlier one is dropped.
-// onReached: any answer, 304 included; onError: no answer at all.
-export function createPoller({api, getBufferS, getStream, onBody, onReached, onDate, onError, setTimer, clearTimer}) {
+// onReached: any answer, 304 included; onMissing: a 404 or 400, the
+// channel or stream is no longer there; onError: no answer at all.
+export function createPoller({api, getBufferS, getStream, onBody, onReached, onMissing, onDate, onError, setTimer, clearTimer}) {
     let channelId = null;
     let etag = null;
     let generation = 0;
@@ -66,7 +78,12 @@ export function createPoller({api, getBufferS, getStream, onBody, onReached, onD
             }
         } catch (error) {
             if (own === generation) {
-                onError(error);
+                if (error.status === 404 || error.status === 400) {
+                    onReached();
+                    onMissing();
+                } else {
+                    onError(error);
+                }
             }
         }
         if (own === generation && running) {

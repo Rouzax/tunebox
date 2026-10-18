@@ -48,6 +48,18 @@ export function pickStream(channel, savedName, playable = () => true) {
     return channel.streams.find(playable) || channel.streams[0];
 }
 
+// After the channel list changed: the same channel and stream by id and
+// name, another stream when that one is gone (replaced: the audio must
+// switch too), null when the channel is gone.
+export function keepSelection(channels, channelId, streamName, playable = () => true) {
+    const channel = channels.find((candidate) => candidate.id === channelId);
+    if (!channel) {
+        return null;
+    }
+    const same = channel.streams.find((stream) => stream.name === streamName);
+    return {channel, stream: same || pickStream(channel, null, playable), replaced: !same};
+}
+
 export function pickChannel(channels, requested, saved, fallback) {
     for (const id of [requested, saved, fallback]) {
         if (id && channels.some((channel) => channel.id === id)) {

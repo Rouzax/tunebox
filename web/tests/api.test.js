@@ -15,7 +15,7 @@ function deferred() {
 function harness() {
     const calls = [];
     const timers = [];
-    const seen = {bodies: [], errors: 0, dates: [], reached: 0};
+    const seen = {bodies: [], errors: 0, dates: [], reached: 0, missing: 0};
     const api = {
         now(channelId, bufferS, etag, stream) {
             const call = {channelId, bufferS, etag, stream, ...deferred()};
@@ -28,6 +28,9 @@ function harness() {
         getBufferS: () => 30,
         getStream: () => 1,
         onBody: (body) => seen.bodies.push(body),
+        onMissing: () => {
+            seen.missing += 1;
+        },
         onReached: () => {
             seen.reached += 1;
         },
@@ -114,7 +117,7 @@ test('the API client asks the right paths and reads the headers', async () => {
         };
     };
     const api = createApi(fetchFn);
-    assert.deepEqual(await api.channels(), {ok: true});
+    assert.deepEqual(await api.channels(), {channels: {ok: true}, version: 0});
     const first = await api.now('radio-538', 31, null);
     assert.deepEqual(first, {status: 200, body: {ok: true}, etag: '"e"', date: 'Sat, 17 Oct 2026 13:00:00 GMT'});
     const second = await api.now('radio-538', 31, '"e"');
@@ -134,4 +137,39 @@ test('every answer, 304 included, reports tunebox reached', async () => {
     calls[1].resolve({status: 304, date: 'D2'});
     await settle();
     assert.equal(seen.reached, 2);
+});
+
+test('a 404 or 400 from /now reports a missing channel or stream, not lost contact', async () => {
+    const {calls, seen, poller, settle} = harness();
+    poller.start('owr');
+    calls[0].reject(Object.assign(new Error('gone'), {status: 404}));
+    await settle();
+    assert.equal(seen.missing, 1);
+    assert.equal(seen.errors, 0);
+    assert.equal(seen.reached, 1);
+});
+
+test('channels() returns the list with the configuration version', async () => {
+    const api = createApi(async () => ({
+        ok: true,
+        status: 200,
+        headers: {get: (name) => (name === 'X-Tunebox-Version' ? '3' : null)},
+        json: async () => [{id: 'owr'}],
+    }));
+    assert.deepEqual(await api.channels(), {channels: [{id: 'owr'}], version: 3});
+});
+
+test('now() sends the stream by name, encoded', async () => {
+    const paths = [];
+    const api = createApi(async (path) => {
+        paths.push(path);
+        return {ok: true, status: 200, headers: {get: () => null}, json: async () => ({})};
+    });
+    await api.now('owr', 30, null, 'High & Low');
+    assert.match(paths[0], /stream=High%20%26%20Low$/);
+});
+
+test('a failed request carries its status', async () => {
+    const api = createApi(async () => ({ok: false, status: 400, headers: {get: () => null}}));
+    await assert.rejects(api.now('owr', 0, null, null), (error) => error.status === 400);
 });

@@ -1,5 +1,5 @@
 import {createApi, createPoller} from './api.js';
-import {canPlay, nextChannel, pickChannel, pickStream} from './channels.js';
+import {canPlay, keepSelection, nextChannel, pickChannel, pickStream} from './channels.js';
 import {bindControls} from './controls.js';
 import {bindDayNight} from './daynight.js';
 import {bindDebug} from './debug.js';
@@ -34,23 +34,29 @@ async function start(root) {
     const api = createApi((input, init) => window.fetch(input, init));
     const toast = createToast(root, window);
     const player = createPlayer({events, makeAudio: () => new Audio(), timers: window, now: () => Date.now()});
-    let channels;
+    let listing;
     let settings;
     try {
-        [channels, settings] = await Promise.all([api.channels(), api.player()]);
+        [listing, settings] = await Promise.all([api.channels(), api.player()]);
     } catch (error) {
         toast.show('Could not reach tunebox. Reload the page to try again.', 0);
         return;
     }
     const params = new URLSearchParams(window.location.search);
     const app = {
-        root, events, storage, player, toast, channels, settings,
+        root, events, storage, player, toast, settings,
+        channels: listing.channels,
+        version: listing.version,
         embed: params.get('embed') === '1',
         channel: null,
         stream: null,
         history: [],
         clockOffset: 0,
     };
+    if (!app.channels.length) {
+        toast.show('No stations yet.', 0);
+        return;
+    }
     // First, so it sees the first play.
     if (params.get('debug') === '1') {
         bindDebug(app);
@@ -87,8 +93,8 @@ async function start(root) {
         api,
         getBufferS: () => player.bufferS(),
         getStream: () => {
-            const index = app.channel.streams.indexOf(app.stream);
-            return player.state() === 'playing' && index >= 0 ? index : null;
+            const known = app.channel.streams.indexOf(app.stream) >= 0;
+            return player.state() === 'playing' && known ? app.stream.name : null;
         },
         setTimer: later,
         clearTimer: cancel,
@@ -99,10 +105,14 @@ async function start(root) {
             unreachable = false;
         },
         onBody: (body) => {
+            if (body.version !== undefined && body.version !== app.version) {
+                refreshChannels();
+            }
             switcher.update(body);
             app.history = body.history;
             events.emit('history', {history: body.history, channel: app.channel});
         },
+        onMissing: () => refreshChannels(),
         onError: () => {
             if (!unreachable) {
                 unreachable = true;
@@ -111,11 +121,44 @@ async function start(root) {
         },
     });
 
+    // The configuration changed: take the new list and keep what plays. A
+    // channel that is gone keeps playing without titles until another is picked.
+    let refreshing = false;
+    async function refreshChannels() {
+        if (refreshing) {
+            return;
+        }
+        refreshing = true;
+        try {
+            const fresh = await api.channels();
+            app.channels = fresh.channels;
+            app.version = fresh.version;
+            const kept = keepSelection(app.channels, app.channel.id, app.stream && app.stream.name, playable);
+            if (kept) {
+                app.channel = kept.channel;
+                app.stream = kept.stream;
+                // Playing on would leave the old stream's audio under the
+                // new stream's name, and its burst in the title timing.
+                if (kept.replaced && player.state() !== 'stopped') {
+                    app.play();
+                }
+            } else {
+                poller.stop();
+            }
+            events.emit('channels', {channels: app.channels});
+            events.emit('stream', {channel: app.channel, stream: app.stream});
+        } catch (error) {
+            // The next poll tries again.
+        } finally {
+            refreshing = false;
+        }
+    }
+
     const probe = document.createElement('audio');
     const playable = (stream) => canPlay(stream, (type) => probe.canPlayType(type));
 
     app.selectChannel = (id) => {
-        app.channel = channels.find((channel) => channel.id === id);
+        app.channel = app.channels.find((channel) => channel.id === id);
         app.stream = pickStream(app.channel, storage.get(`stream.${id}`), playable);
         storage.set('channel', id);
         switcher.reset();
@@ -137,7 +180,7 @@ async function start(root) {
             app.play();
         }
     };
-    app.step = (delta) => app.selectChannel(nextChannel(channels, app.channel.id, delta));
+    app.step = (delta) => app.selectChannel(nextChannel(app.channels, app.channel.id, delta));
     app.play = () => {
         if (!playable(app.stream)) {
             // Never leave the previous station playing under this one's titles.
@@ -194,7 +237,7 @@ async function start(root) {
     bindDayNight(app);
     bindPalette(app);
     bindMedia(app);
-    app.selectChannel(pickChannel(channels, params.get('channel'), storage.get('channel'), settings.default_channel));
+    app.selectChannel(pickChannel(app.channels, params.get('channel'), storage.get('channel'), settings.default_channel));
     // The channel list marks the active channel, so it binds once one is selected.
     bindPages(app);
     bindVisualizer(app);

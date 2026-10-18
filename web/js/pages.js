@@ -188,6 +188,13 @@ export function bindPages(app) {
     });
     events.on('channel', markActive);
     events.on('stream', markActive);
+    events.on('channels', () => {
+        renderChannels();
+        if (page === 'channels') {
+            loadLogos();
+        }
+        markActive();
+    });
 
     renderChannels();
     markActive();
