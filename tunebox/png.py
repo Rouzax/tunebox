@@ -13,7 +13,8 @@ from dataclasses import dataclass
 
 SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # A logo larger than this is not a logo; refuse before allocating for it.
-MAX_PIXELS = 4096 * 4096
+# Decoding is pure Python, about half a second per million pixels.
+MAX_PIXELS = 2048 * 2048
 # Channels per pixel for each colour type.
 _CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
 _DEPTHS = {0: (8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (8, 16)}
@@ -109,11 +110,16 @@ def read(data: bytes) -> Image:
     channels = _CHANNELS[color]
     bits = channels * depth
     stride = (width * bits + 7) // 8
+    # Inflate no further than the image needs: a few kilobytes of crafted
+    # data can expand to gigabytes.
+    needed = (stride + 1) * height
     try:
-        raw = zlib.decompress(b"".join(body for kind, body in chunks if kind == b"IDAT"))
+        raw = zlib.decompressobj().decompress(
+            b"".join(body for kind, body in chunks if kind == b"IDAT"), needed
+        )
     except zlib.error as error:
         raise PngError(f"bad image data: {error}") from None
-    if len(raw) < (stride + 1) * height:
+    if len(raw) < needed:
         raise PngError("image data too short")
     rows = _unfilter(raw, height, stride, max(1, bits // 8))
     out = bytearray(width * height * 4)
@@ -128,7 +134,9 @@ def read(data: bytes) -> Image:
                 step = depth // 8
                 start = x * channels * step
                 values = [row[start + c * step] for c in range(channels)]
-                if alpha and color in (0, 2):
+                # A colour key holds one 16-bit sample per channel; any other
+                # length is malformed and ignored.
+                if len(alpha) == channels * 2 and color in (0, 2):
                     sample = row[start : start + channels * step]
                     full = [
                         int.from_bytes(sample[c * step : c * step + step]) for c in range(channels)

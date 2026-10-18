@@ -11,7 +11,8 @@ const TICK_MS = 1000;
 // One live stream. Stop drops the source instead of pausing, so play always
 // starts at live and nothing keeps downloading. While a stream is wanted the
 // player never gives up by itself: dead streams are retried with backoff.
-// Events: state, audio ({element, cors}), webaudio-unavailable, autoplay-refused,
+// Events: state, audio ({element, cors}), webaudio-unavailable, autoplay-refused
+// ({resumed}: refused on a reconnect), interrupted (paused from outside),
 // debug (a reconnect decision, as text).
 export function createPlayer({events, makeAudio, timers, now}) {
     let audio = null;
@@ -69,6 +70,15 @@ export function createPlayer({events, makeAudio, timers, now}) {
                 failed(el.error ? el.error.code : 0);
             }
         });
+        // A pause the player did not ask for (a phone call, headphones
+        // unplugged) is a stop: resuming on a stall would undo it. The
+        // player never pauses; it drops the source, which clears url first.
+        el.addEventListener('pause', () => {
+            if (el === audio && url && el.paused && !el.ended) {
+                halt();
+                events.emit('interrupted');
+            }
+        });
         el.addEventListener('ended', () => {
             if (el === audio && url) {
                 scheduleRetry('stream ended');
@@ -81,6 +91,7 @@ export function createPlayer({events, makeAudio, timers, now}) {
     }
 
     function connect() {
+        const resumed = state === 'reconnecting';
         const el = element(!noCors.has(url));
         watchdog.start(now());
         requestedAt = now();
@@ -91,7 +102,7 @@ export function createPlayer({events, makeAudio, timers, now}) {
                 // Other rejections come with an error event, handled there.
                 if (el === audio && url && error && error.name === 'NotAllowedError') {
                     halt();
-                    events.emit('autoplay-refused');
+                    events.emit('autoplay-refused', {resumed});
                 }
             });
         }

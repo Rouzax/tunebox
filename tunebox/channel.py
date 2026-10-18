@@ -111,6 +111,11 @@ class Channel:
         # Back after a gap, the feed may have moved on by more than a few entries.
         self._polled = False
         self._fresh.clear()
+        # Idle, the feed is not polled, so an earlier failure says nothing
+        # about it now; the next poll after waking decides afresh.
+        with self._lock:
+            self._stale_since = None
+            self._failures = 0
         event(log, logging.DEBUG, "channel_idle", channel=self.config.id)
         while not stop.is_set() and not self.active():
             self._wake.wait(IDLE_CHECK_S)

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
-    DEFAULT_COVER, clockOffsetMs, coverFor, displayLines, pageTitle, timeAgo, trackKey,
+    DEFAULT_COVER, clockOffsetMs, coverFor, displayLines, nextCover, pageTitle, timeAgo, trackKey,
 } from '../js/tracks.js';
 
 const TRACK = {artist: 'ADRIATIQUE, WHOMADEWHO', title: 'Miracle', played_by: 'WhoMadeWho Crystal Garden TML 24', started_at: 1000, cover: 'https://example.invalid/c.jpg'};
@@ -55,4 +55,13 @@ test('cover falls back to the channel image, then the logo, then the default', (
     assert.equal(coverFor({...TRACK, cover: null}, channel), '/logos/owr.png');
     assert.equal(coverFor(null, {default_image: 'https://example.invalid/d.png', logo: '/logos/owr.png'}), 'https://example.invalid/d.png');
     assert.equal(coverFor(null, {default_image: null, logo: null}), DEFAULT_COVER);
+});
+
+test('a cover that fails gives way to the next image down to the built-in one', () => {
+    const channel = {default_image: 'https://example.invalid/d.png', logo: '/logos/owr.png'};
+    assert.equal(nextCover(TRACK.cover, channel), channel.default_image);
+    assert.equal(nextCover(channel.default_image, channel), channel.logo);
+    assert.equal(nextCover(channel.logo, channel), DEFAULT_COVER);
+    assert.equal(nextCover(DEFAULT_COVER, channel), null);
+    assert.equal(nextCover(TRACK.cover, {default_image: null, logo: null}), DEFAULT_COVER);
 });

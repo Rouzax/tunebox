@@ -163,6 +163,8 @@ def test_static_index_and_head(server: TuneboxServer) -> None:
         ("/app.js", "text/javascript; charset=utf-8", "no-cache"),
         ("/vendor/lib-1.0.js", "text/javascript; charset=utf-8", "max-age=31536000, immutable"),
         ("/font.woff2", "font/woff2", "no-cache"),
+        # Not a vendor file once the path is resolved.
+        ("/vendor/../app.js", "text/javascript; charset=utf-8", "no-cache"),
     ],
 )
 def test_static_types_and_caching(

@@ -45,3 +45,11 @@ export function clockOffsetMs(dateHeader, localNowMs) {
 export function coverFor(track, channel) {
     return (track && track.cover) || channel.default_image || channel.logo || DEFAULT_COVER;
 }
+
+// The image to try when `failed` did not load: the next of the channel's
+// own images, then the built-in cover; null when that failed too.
+export function nextCover(failed, channel) {
+    const chain = [channel.default_image, channel.logo, DEFAULT_COVER].filter(Boolean);
+    const at = chain.indexOf(failed);
+    return at < 0 ? chain[0] : chain[at + 1] || null;
+}

@@ -398,3 +398,16 @@ def test_waiting_for_the_first_poll_after_waking() -> None:
     worker.start()
     assert channel.wait_fresh(2) is True
     worker.join()
+
+
+def test_an_idle_channel_is_not_reported_stale() -> None:
+    source = FakeSource()
+    source.responses = [SourceError("down")]
+    channel, _, _ = make(source, Clock(1_300_000))
+    channel.poll_once()
+    assert channel.status()["stale_since"] == 1_300_000
+    stop = threading.Event()
+    stop.set()
+    # Idle, it does not poll, so nothing is known about the feed.
+    channel.sleep_until_active(stop)
+    assert channel.status()["stale_since"] is None

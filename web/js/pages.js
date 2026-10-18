@@ -1,5 +1,5 @@
 import {groupChannels, streamLabel} from './channels.js';
-import {coverFor, timeAgo} from './tracks.js';
+import {coverFor, nextCover, timeAgo} from './tracks.js';
 
 export const PAGES = ['main', 'history', 'channels', 'viz'];
 const HISTORY_SHOWN = 20;
@@ -72,6 +72,13 @@ export function bindPages(app) {
             image.alt = '';
             image.loading = 'lazy';
             image.src = coverFor(track, app.channel);
+            const channel = app.channel;
+            image.addEventListener('error', () => {
+                const next = nextCover(image.getAttribute('src'), channel);
+                if (next) {
+                    image.src = next;
+                }
+            });
             const what = element('div', 'what');
             what.append(element('div', 'title', track.title), element('div', 'artist', track.artist));
             item.append(image, what, element('span', 'ago', timeAgo(track.started_at, now)));

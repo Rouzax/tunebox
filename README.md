@@ -166,6 +166,8 @@ Good to know:
   press play.
 - "Reconnecting..." means the stream dropped. The player keeps trying with
   pauses of 2 seconds up to a minute; you do not need to do anything.
+- When the phone or car takes the sound away (a call, unplugged headphones),
+  the player stops and says so; press play to listen again.
 - The visualizer starts after your first tap or key press on the page.
 - Opening a station nobody listened to for a while takes a moment: tunebox
   checks its feed first, so what you see is what is on now.

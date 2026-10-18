@@ -72,7 +72,9 @@ def main() -> int:
         for c in channels.values()
     ]
     workers.append(
-        threading.Thread(target=logos.fetch_all, args=(config.channels,), name="logos", daemon=True)
+        threading.Thread(
+            target=logos.fetch_all, args=(config.channels, stop), name="logos", daemon=True
+        )
     )
     http_thread = threading.Thread(target=server.serve_forever, name="http", daemon=True)
     for thread in [*workers, http_thread]:

@@ -1,4 +1,5 @@
 import struct
+import tracemalloc
 import zlib
 
 import pytest
@@ -178,3 +179,24 @@ def test_the_shrunk_logo_is_much_smaller() -> None:
     big = make_png(256, 256, 6, 8, rows, 4)
     small = shrink(big, 32) or b""
     assert 0 < len(small) < len(big) / 10
+
+
+def test_a_short_colour_key_is_ignored() -> None:
+    key = chunk(b"tRNS", b"\x00\x01")
+    image = read(make_png(1, 1, 2, 8, [bytes([1, 2, 3])], 3, extra=key))
+    assert image.pixel(0, 0) == (1, 2, 3, 255)
+
+
+def test_image_data_is_inflated_only_as_far_as_the_image_needs() -> None:
+    # 200 MB of zeros compress to about 200 kB; only the 4 bytes a 1x1 RGB
+    # image needs may be inflated.
+    bomb = zlib.compress(bytes(200_000_000), 9)
+    data = SIGNATURE + ihdr(1, 1) + chunk(b"IDAT", bomb) + chunk(b"IEND", b"")
+    tracemalloc.start()
+    try:
+        image = read(data)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert image.pixel(0, 0) == (0, 0, 0, 255)
+    assert peak < 10_000_000

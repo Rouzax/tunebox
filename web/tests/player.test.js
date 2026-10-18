@@ -64,6 +64,8 @@ function fakeAudio(made) {
         });
         Object.assign(audio, {
             currentTime: 0,
+            paused: true,
+            ended: false,
             volume: 1,
             muted: false,
             crossOrigin: null,
@@ -71,6 +73,7 @@ function fakeAudio(made) {
             plays: 0,
             playResult: null,
             play() {
+                audio.paused = false;
                 audio.plays += 1;
                 return audio.playResult || Promise.resolve();
             },
@@ -94,12 +97,14 @@ function harness() {
     const events = createEmitter();
     const made = [];
     const log = [];
-    for (const name of ['state', 'audio', 'webaudio-unavailable', 'autoplay-refused']) {
+    for (const name of ['state', 'audio', 'webaudio-unavailable', 'autoplay-refused', 'interrupted']) {
         events.on(name, (value) => log.push(name === 'state' ? value : name));
     }
     events.on('debug', (note) => log.push(`debug: ${note}`));
     const player = createPlayer({events, makeAudio: fakeAudio(made), timers, now: timers.now});
-    return {timers, made, log, player};
+    const refusals = [];
+    events.on('autoplay-refused', (value) => refusals.push(value));
+    return {timers, made, log, player, refusals};
 }
 
 test('play loads, then plays when audio flows', () => {
@@ -239,6 +244,44 @@ test('a refused autoplay stops quietly', async () => {
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(player.state(), 'stopped');
     assert.ok(log.includes('autoplay-refused'));
+});
+
+test('a refused restart during a reconnect is reported as one', async () => {
+    const {timers, made, player, refusals} = harness();
+    player.play('https://example.invalid/a.aac');
+    made[0].fire('playing');
+    made[0].playResult = Promise.reject(Object.assign(new Error('no'), {name: 'NotAllowedError'}));
+    made[0].fire('error');
+    timers.advance(2000);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(player.state(), 'stopped');
+    assert.deepEqual(refusals, [{resumed: true}]);
+});
+
+test('a pause from outside the player stops it instead of being undone', () => {
+    const {timers, made, player, log} = harness();
+    player.play('https://example.invalid/a.aac');
+    made[0].fire('playing');
+    made[0].currentTime = 3;
+    // The system takes the audio (a phone call): the element pauses.
+    made[0].paused = true;
+    made[0].fire('pause');
+    assert.equal(player.state(), 'stopped');
+    assert.ok(log.includes('interrupted'));
+    timers.advance(20000);
+    assert.equal(made[0].plays, 1);
+});
+
+test('the pause at the end of a stream is not an interruption', () => {
+    const {made, player, log} = harness();
+    player.play('https://example.invalid/a.aac');
+    made[0].fire('playing');
+    made[0].paused = true;
+    made[0].ended = true;
+    made[0].fire('pause');
+    made[0].fire('ended');
+    assert.equal(player.state(), 'reconnecting');
+    assert.ok(!log.includes('interrupted'));
 });
 
 test('stop clears the stream and nothing retries afterwards', () => {

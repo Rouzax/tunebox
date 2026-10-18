@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,10 @@ BIG_PNG = write(Image(300, 150, bytes((200, 30, 30, 255)) * 300 * 150))
         (WEBP, "webp"),
         (SVG, "svg"),
         (b"  <svg></svg>", "svg"),
+        (b"\xef\xbb\xbf<svg></svg>", "svg"),
+        (b"<!-- made by hand -->\n<svg></svg>", "svg"),
+        (b'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN">\n<svg></svg>', "svg"),
+        (b"<!-- page -->\n<html><body><svg></svg></body></html>", None),
         (b"<!doctype html><html>", None),
         (b"", None),
         (b"RIFF\x10\x00\x00\x00WAVE", None),
@@ -157,3 +162,11 @@ def test_an_unreadable_png_is_kept_as_it_is(
     assert (logos.path_for("owr") or "").startswith("/logos/owr.png?v=")
     assert logos.path_for("owr", small=True) is None
     assert "logo_not_shrunk" in caplog.text
+
+
+def test_fetching_stops_when_tunebox_stops(tmp_path: Path) -> None:
+    http = FakeHttp(lambda _url: PNG)
+    stop = threading.Event()
+    stop.set()
+    Logos(tmp_path, http).fetch_all([channel_config(logo=URL)], stop)
+    assert http.urls == []

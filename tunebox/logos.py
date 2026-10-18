@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import re
 import stat
+import threading
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -39,8 +40,13 @@ def sniff(body: bytes) -> str | None:
         return "jpg"
     if body[:4] == b"RIFF" and body[8:12] == b"WEBP":
         return "webp"
-    head = body[:1024].lstrip().lower()
-    if head.startswith(b"<svg") or (head.startswith(b"<?xml") and b"<svg" in head):
+    head = body[:1024].removeprefix(b"\xef\xbb\xbf").lstrip().lower()
+    if head.startswith(b"<svg"):
+        return "svg"
+    # An XML declaration, comment or SVG doctype may come first; an HTML
+    # page may hold an inline <svg> and is not a logo.
+    prologue = head.startswith((b"<?xml", b"<!--", b"<!doctype svg"))
+    if prologue and b"<svg" in head and b"<html" not in head:
         return "svg"
     return None
 
@@ -73,14 +79,19 @@ class Logos:
         path = self._folder(small) / name
         return path if path.is_file() else None
 
-    def fetch_all(self, channels: Iterable[ChannelConfig]) -> None:
-        """Downloads each logo whose address is new; runs once at startup."""
+    def fetch_all(
+        self, channels: Iterable[ChannelConfig], stop: threading.Event | None = None
+    ) -> None:
+        """Downloads each logo whose address is new; runs once at startup and
+        ends early when tunebox stops."""
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             event(log, logging.WARNING, "logos_unavailable", error=str(error))
             return
         for channel in channels:
+            if stop is not None and stop.is_set():
+                return
             if channel.logo and not self._current(channel.id, channel.logo):
                 self._fetch(channel.id, channel.logo)
             self._make_small(channel.id)

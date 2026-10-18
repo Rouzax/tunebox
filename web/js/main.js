@@ -57,6 +57,14 @@ async function start(root) {
     }
     let shown = null;
     let unreachable = false;
+    // Whether to resume after a reload. Only the full player keeps it: the
+    // pop-out and embeds share this storage, and the pop-out resumes from
+    // its own ?play=1, so its playing must not make the main window play too.
+    const remember = (playing) => {
+        if (!app.embed) {
+            storage.set('playing', playing ? 1 : 0);
+        }
+    };
 
     // Only a change of what is shown is announced: rewriting the same text
     // would restart the ticker on every poll.
@@ -87,8 +95,10 @@ async function start(root) {
         onDate: (date) => {
             app.clockOffset = clockOffsetMs(date, Date.now());
         },
-        onBody: (body) => {
+        onReached: () => {
             unreachable = false;
+        },
+        onBody: (body) => {
             switcher.update(body);
             app.history = body.history;
             events.emit('history', {history: body.history, channel: app.channel});
@@ -135,12 +145,12 @@ async function start(root) {
             toast.show(`This browser cannot play ${app.stream.codec.toUpperCase()}. Pick another quality on the channel page.`, 8000);
             return;
         }
-        storage.set('playing', 1);
+        remember(true);
         toast.show(`Loading ${app.channel.name}...`);
         player.play(app.stream.url);
     };
     app.stop = () => {
-        storage.set('playing', 0);
+        remember(false);
         player.stop();
         toast.show('Player stopped.');
     };
@@ -154,7 +164,17 @@ async function start(root) {
             toast.show('Reconnecting...', 0);
         }
     });
-    events.on('autoplay-refused', () => storage.set('playing', 0));
+    events.on('autoplay-refused', ({resumed}) => {
+        remember(false);
+        // On a page load the play button says it all; mid-listen it does not.
+        if (resumed) {
+            toast.show('The browser stopped playback. Press play to continue.', 0);
+        }
+    });
+    events.on('interrupted', () => {
+        remember(false);
+        toast.show('Paused by the system. Press play to continue.', 0);
+    });
     window.addEventListener('online', () => player.online());
     document.addEventListener('visibilitychange', () => {
         if (document.hidden && player.state() === 'stopped') {
@@ -180,7 +200,7 @@ async function start(root) {
     bindVisualizer(app);
     // A refused autoplay (no user gesture yet) quietly leaves the play button.
     // play=1 comes from the main window when it hands playback to a small window.
-    if (params.get('play') === '1' || storage.flag('playing')) {
+    if (params.get('play') === '1' || (!app.embed && storage.flag('playing'))) {
         app.play();
     }
 }

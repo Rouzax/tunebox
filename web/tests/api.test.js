@@ -15,7 +15,7 @@ function deferred() {
 function harness() {
     const calls = [];
     const timers = [];
-    const seen = {bodies: [], errors: 0, dates: []};
+    const seen = {bodies: [], errors: 0, dates: [], reached: 0};
     const api = {
         now(channelId, bufferS, etag, stream) {
             const call = {channelId, bufferS, etag, stream, ...deferred()};
@@ -28,6 +28,9 @@ function harness() {
         getBufferS: () => 30,
         getStream: () => 1,
         onBody: (body) => seen.bodies.push(body),
+        onReached: () => {
+            seen.reached += 1;
+        },
         onDate: (date) => seen.dates.push(date),
         onError: () => {
             seen.errors += 1;
@@ -120,4 +123,15 @@ test('the API client asks the right paths and reads the headers', async () => {
     assert.deepEqual(asked[2][1], {'If-None-Match': '"e"'});
     await api.now('radio-538', 3, null, 0);
     assert.equal(asked[3][0], '/api/channels/radio-538/now?buffer_s=3&stream=0');
+});
+
+test('every answer, 304 included, reports tunebox reached', async () => {
+    const {calls, timers, seen, poller, settle} = harness();
+    poller.start('owr');
+    calls[0].resolve({status: 200, body: {n: 1}, etag: '"a"', date: 'D1'});
+    await settle();
+    timers[0].fn();
+    calls[1].resolve({status: 304, date: 'D2'});
+    await settle();
+    assert.equal(seen.reached, 2);
 });

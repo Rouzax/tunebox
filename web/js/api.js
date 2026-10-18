@@ -34,7 +34,8 @@ export function createApi(fetchFn) {
 
 // One poll at a time per channel. Every start, stop or refresh opens a new
 // generation, so an answer still on its way for an earlier one is dropped.
-export function createPoller({api, getBufferS, getStream, onBody, onDate, onError, setTimer, clearTimer}) {
+// onReached: any answer, 304 included; onError: no answer at all.
+export function createPoller({api, getBufferS, getStream, onBody, onReached, onDate, onError, setTimer, clearTimer}) {
     let channelId = null;
     let etag = null;
     let generation = 0;
@@ -55,6 +56,7 @@ export function createPoller({api, getBufferS, getStream, onBody, onDate, onErro
             if (own !== generation) {
                 return;
             }
+            onReached();
             if (answer.date) {
                 onDate(answer.date);
             }

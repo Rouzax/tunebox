@@ -261,7 +261,8 @@ class Handler(BaseHTTPRequestHandler):
         etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
         if etag_matches(self.headers.get("If-None-Match"), etag):
             return self._not_modified(etag)
-        immutable = relative.startswith(IMMUTABLE_DIRS)
+        # Judged on the resolved path: /vendor/../app.js is not a vendor file.
+        immutable = target.relative_to(web_dir).as_posix().startswith(IMMUTABLE_DIRS)
         headers = {
             "ETag": etag,
             "Cache-Control": "max-age=31536000, immutable" if immutable else "no-cache",
