@@ -232,7 +232,7 @@ class Handler(BaseHTTPRequestHandler):
         if target is None:
             return self._send_json(404, {"error": "not_found"}, head)
         kind = target.suffix.removeprefix(".")
-        headers = {"Cache-Control": "max-age=86400"}
+        headers = {"Cache-Control": "max-age=31536000, immutable"}
         if kind == "svg":
             headers["Content-Security-Policy"] = "sandbox"
         self._send(200, target.read_bytes(), LOGO_TYPES[kind], head, headers)

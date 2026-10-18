@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import re
+import stat
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -44,9 +45,16 @@ class Logos:
         self._get = http_get
 
     def path_for(self, channel_id: str) -> str | None:
+        """The logo's address, versioned by the file's modification time so
+        it can be cached for good: a replaced logo gets a new address."""
         for ext in EXTENSIONS:
-            if (self._dir / f"{channel_id}.{ext}").is_file():
-                return f"/logos/{channel_id}.{ext}"
+            try:
+                saved = (self._dir / f"{channel_id}.{ext}").stat()
+            except OSError:
+                continue
+            if not stat.S_ISREG(saved.st_mode):
+                continue
+            return f"/logos/{channel_id}.{ext}?v={saved.st_mtime_ns:x}"
         return None
 
     def file(self, name: str) -> Path | None:

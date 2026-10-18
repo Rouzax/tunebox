@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -39,8 +40,17 @@ def test_fetch_saves_once_and_remembers_the_address(tmp_path: Path) -> None:
     logos.fetch_all(channels)
     assert http.urls == [URL]
     assert (tmp_path / "owr.png").read_bytes() == PNG
-    assert logos.path_for("owr") == "/logos/owr.png"
+    assert (logos.path_for("owr") or "").startswith("/logos/owr.png?v=")
     assert logos.file("owr.png") == tmp_path / "owr.png"
+
+
+def test_the_logo_path_changes_with_the_file(tmp_path: Path) -> None:
+    # Logos are cached for a year, so a replaced logo needs a new address.
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG))
+    logos.fetch_all([channel_config(logo=URL)])
+    before = logos.path_for("owr")
+    os.utime(tmp_path / "owr.png", ns=(1, 1))
+    assert logos.path_for("owr") != before
 
 
 def test_a_changed_address_fetches_again_and_replaces_the_old_file(tmp_path: Path) -> None:
@@ -48,7 +58,8 @@ def test_a_changed_address_fetches_again_and_replaces_the_old_file(tmp_path: Pat
     other = "https://example.invalid/owr.svg"
     Logos(tmp_path, FakeHttp(lambda _url: SVG)).fetch_all([channel_config(logo=other)])
     assert not (tmp_path / "owr.png").exists()
-    assert Logos(tmp_path, FakeHttp(lambda _url: b"")).path_for("owr") == "/logos/owr.svg"
+    later = Logos(tmp_path, FakeHttp(lambda _url: b""))
+    assert (later.path_for("owr") or "").startswith("/logos/owr.svg?v=")
 
 
 def test_a_page_instead_of_an_image_is_not_saved(
@@ -69,7 +80,7 @@ def test_a_failed_download_keeps_the_old_logo(tmp_path: Path) -> None:
 
     logos = Logos(tmp_path, fail)
     logos.fetch_all([channel_config(logo="https://example.invalid/new.png")])
-    assert logos.path_for("owr") == "/logos/owr.png"
+    assert (logos.path_for("owr") or "").startswith("/logos/owr.png?v=")
 
 
 def test_channels_without_a_logo_are_skipped(tmp_path: Path) -> None:

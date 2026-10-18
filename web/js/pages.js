@@ -46,6 +46,7 @@ export function bindPages(app) {
         if (page === 'history') {
             renderHistory();
         } else if (page === 'channels') {
+            loadLogos();
             markActive();
             centreActive();
         }
@@ -105,8 +106,7 @@ export function bindPages(app) {
                 if (channel.logo) {
                     const logo = element('img');
                     logo.alt = '';
-                    logo.loading = 'lazy';
-                    logo.src = channel.logo;
+                    logo.dataset.src = channel.logo;
                     button.append(logo);
                 }
                 button.append(element('span', 'name', channel.name));
@@ -117,6 +117,16 @@ export function bindPages(app) {
             return section;
         });
         replaceContent(groups, sections);
+    }
+
+    // Logos load when the channel page is first opened, not with the page:
+    // loading="lazy" does not hold them back on the hidden page, and on
+    // mobile data they are most of what a page open costs.
+    function loadLogos() {
+        for (const logo of groups.querySelectorAll('img[data-src]')) {
+            logo.src = logo.dataset.src;
+            logo.removeAttribute('data-src');
+        }
     }
 
     // Scrolls the channel page only. scrollIntoView() would also scroll the

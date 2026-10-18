@@ -342,8 +342,11 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   `data/tunebox.db`, `data/tunebox.db-wal` and `data/tunebox.db-shm`, and
   start it again. History refills from the stations and covers are looked
   up again. Your configuration is not touched.
-- **Logos** are kept in `data/logos/`. Delete that folder to download them
-  again at the next start.
+- **Logos** are kept in `data/logos/`, as downloaded. Delete that folder to
+  download them again at the next start. The player loads them the first
+  time a listener opens the station list, once per browser, so a large logo
+  costs mobile data only then; to keep that small, point `logo` at a small
+  image (around 100 px is plenty).
 
 ## Troubleshooting
 
@@ -434,11 +437,13 @@ For player developers. All answers are JSON.
 **`GET /api/channels`** lists the stations: `id`, `name`, `stream_url`,
 `default_image`, `group`, `streams` (each with `name`, `url`, `codec`,
 `kbps`; `stream_url` is the first one's address) and `logo` (a path such as
-`/logos/owr.png`, or `null` until the logo is downloaded or when none is
-configured). It may be cached for
+`/logos/owr.png?v=18df62ef34e6b8a7`, or `null` until the logo is downloaded
+or when none is configured). It may be cached for
 five minutes.
 
-**`GET /logos/<file>`** serves a downloaded logo. SVG logos are sent with a
+**`GET /logos/<file>`** serves a downloaded logo. Browsers may keep it for a
+year: the `v` in the path from `/api/channels` changes whenever the logo is
+downloaded again, so use that path as given. SVG logos are sent with a
 policy that keeps them from running script.
 
 **`GET /api/channels/<id>/now?buffer_s=<seconds>&stream=<index>`** answers what is playing:

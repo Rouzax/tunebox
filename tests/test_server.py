@@ -274,10 +274,12 @@ def test_the_pawtunes_endpoint_marks_the_channel_active(server: TuneboxServer) -
 
 
 def test_logos_are_served_with_their_type(server: TuneboxServer) -> None:
-    status, headers, body = request(server, "/logos/owr.png")
+    status, headers, body = request(server, "/logos/owr.png?v=1")
     assert status == 200
     assert headers["content-type"] == "image/png"
     assert body.startswith(b"\x89PNG")
+    # The address carries the file's version, so a browser never asks twice.
+    assert headers["cache-control"] == "max-age=31536000, immutable"
     status, headers, _ = request(server, "/logos/x.svg")
     assert headers["content-type"] == "image/svg+xml"
     # A logo cannot run script even when opened directly.
@@ -292,7 +294,7 @@ def test_unknown_logos_are_not_found(server: TuneboxServer, path: str) -> None:
 
 def test_channel_list_gives_the_logo_path(server: TuneboxServer) -> None:
     _, _, body = request(server, "/api/channels")
-    assert json.loads(body)[0]["logo"] == "/logos/owr.png"
+    assert json.loads(body)[0]["logo"].startswith("/logos/owr.png?v=")
 
 
 def test_csp_allows_the_streams_the_config_accepts() -> None:

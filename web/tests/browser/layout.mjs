@@ -1,6 +1,7 @@
 // Layout check for the player: overlap, clipping and sideways scroll at every
 // window size the player is used at, on every page, in day and night, stopped
-// and playing, embedded or not, with long titles.
+// and playing, embedded or not, with long titles. Also checks that a page
+// open loads no channel logos before the channel page is opened.
 //
 // Needs Google Chrome or Chromium (or CHROME=<path>) and a running tunebox.
 // Node 22 or later (Node 20 needs --experimental-websocket):
@@ -310,6 +311,12 @@ function inspect(page, slack) {
         toast.textContent = oldText;
         toast.classList.toggle('hidden', wasHidden);
     }
+    if (page === 'channels') {
+        const unloaded = [...document.querySelectorAll('.channel img')].filter((img) => !img.getAttribute('src'));
+        if (unloaded.length) {
+            problems.push(`${unloaded.length} channel logo(s) not loaded on the channel page`);
+        }
+    }
     return {problems, layout: root.dataset.layout};
 }
 
@@ -339,6 +346,13 @@ async function run() {
                     await evaluate(`localStorage.clear(); localStorage.setItem('tunebox.daynight', '${mode}'); localStorage.setItem('tunebox.visualizer', 'off')`);
                     await send('Page.navigate', {url: `${BASE}/${embed ? '?embed=1' : ''}`});
                     await sleep(2500);
+                    // On mobile data every page open pays for what it loads: the
+                    // channel logos wait for the channel page. The cover may
+                    // show the current channel's logo.
+                    const logos = await evaluate(`performance.getEntriesByType('resource').filter((e) => e.name.indexOf('/logos/') >= 0).length`);
+                    if (logos > 1) {
+                        failures.push(`${size.name} ${embed ? 'embed ' : ''}${mode}: page open loads ${logos} station logos`);
+                    }
                     for (const state of ['stopped', 'playing']) {
                         // Layout only: the state and the long text are set directly.
                         await evaluate(`(() => {
