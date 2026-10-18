@@ -6,13 +6,15 @@ import pytest
 
 from tests.fakes import FakeHttp, channel_config
 from tunebox.http import HttpError
-from tunebox.logos import Logos, sniff
+from tunebox.logos import SMALL_PX, Logos, sniff
+from tunebox.png import Image, read, write
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
 WEBP = b"RIFF\x10\x00\x00\x00WEBPVP8 " + b"\x00" * 8
 SVG = b'<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 URL = "https://example.invalid/owr.png"
+BIG_PNG = write(Image(300, 150, bytes((200, 30, 30, 255)) * 300 * 150))
 
 
 @pytest.mark.parametrize(
@@ -103,3 +105,55 @@ def test_an_unusable_folder_is_reported_not_raised(
     logos = Logos(blocker / "logos", FakeHttp(lambda _url: PNG))
     logos.fetch_all([channel_config(logo=URL)])
     assert "logos_unavailable" in caplog.text
+
+
+def test_a_large_png_gets_a_small_copy_for_the_station_list(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG))
+    logos.fetch_all([channel_config(logo=URL)])
+    small = read((tmp_path / "small" / "owr.png").read_bytes())
+    assert (small.width, small.height) == (SMALL_PX, SMALL_PX // 2)
+    assert (logos.path_for("owr", small=True) or "").startswith("/logos/small/owr.png?v=")
+    assert logos.file("owr.png", small=True) == tmp_path / "small" / "owr.png"
+    assert (tmp_path / "owr.png").read_bytes() == BIG_PNG
+    assert "logo_shrunk" in caplog.text
+
+
+def test_logos_saved_before_get_their_small_copy_without_a_download(tmp_path: Path) -> None:
+    (tmp_path / "owr.png").write_bytes(BIG_PNG)
+    (tmp_path / "owr.url").write_text(URL, encoding="utf-8")
+    http = FakeHttp(lambda _url: BIG_PNG)
+    logos = Logos(tmp_path, http)
+    logos.fetch_all([channel_config(logo=URL)])
+    assert http.urls == []
+    assert logos.path_for("owr", small=True) is not None
+
+
+def test_a_logo_that_is_small_already_has_no_copy(tmp_path: Path) -> None:
+    tiny = write(Image(64, 64, bytes((0, 0, 0, 255)) * 64 * 64))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: tiny))
+    logos.fetch_all([channel_config(logo=URL)])
+    assert logos.path_for("owr", small=True) is None
+
+
+def test_a_replaced_logo_drops_or_renews_its_small_copy(tmp_path: Path) -> None:
+    Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG)).fetch_all([channel_config(logo=URL)])
+    other = "https://example.invalid/owr.svg"
+    logos = Logos(tmp_path, FakeHttp(lambda _url: SVG))
+    logos.fetch_all([channel_config(logo=other)])
+    assert not (tmp_path / "small" / "owr.png").exists()
+    assert logos.path_for("owr", small=True) is None
+
+
+def test_an_unreadable_png_is_kept_as_it_is(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING)
+    broken = PNG[:8] + b"\x00\x00\x00\x0dIHDR" + b"\x00\x00\x02\x00" * 2 + b"\x08\x02\x00\x00\x00"
+    logos = Logos(tmp_path, FakeHttp(lambda _url: broken))
+    logos.fetch_all([channel_config(logo=URL)])
+    assert (logos.path_for("owr") or "").startswith("/logos/owr.png?v=")
+    assert logos.path_for("owr", small=True) is None
+    assert "logo_not_shrunk" in caplog.text

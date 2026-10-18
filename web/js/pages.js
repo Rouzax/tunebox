@@ -106,7 +106,7 @@ export function bindPages(app) {
                 if (channel.logo) {
                     const logo = element('img');
                     logo.alt = '';
-                    logo.dataset.src = channel.logo;
+                    logo.dataset.src = channel.logo_small || channel.logo;
                     button.append(logo);
                 }
                 button.append(element('span', 'name', channel.name));

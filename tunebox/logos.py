@@ -1,5 +1,8 @@
 """Station logos: downloaded once from the configured address, then served by
-tunebox, so listeners' browsers never contact the logo host."""
+tunebox, so listeners' browsers never contact the logo host. A large PNG
+also gets a small copy in small/, for the station list: logo hosts often
+offer 512 px for an icon shown at about 40, and on mobile data the list
+would cost megabytes. The original stays for the cover."""
 
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ from pathlib import Path
 from tunebox.config import ChannelConfig
 from tunebox.http import HttpError, HttpGet
 from tunebox.logs import event
+from tunebox.png import PngError, shrink
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +26,8 @@ CONTENT_TYPES = {
     "webp": "image/webp",
     "svg": "image/svg+xml",
 }
+# Sharp at about 40 CSS px on a 3x screen.
+SMALL_PX = 128
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\.(png|jpg|webp|svg)$")
 
 
@@ -44,23 +50,27 @@ class Logos:
         self._dir = directory
         self._get = http_get
 
-    def path_for(self, channel_id: str) -> str | None:
+    def _folder(self, small: bool) -> Path:
+        return self._dir / "small" if small else self._dir
+
+    def path_for(self, channel_id: str, small: bool = False) -> str | None:
         """The logo's address, versioned by the file's modification time so
         it can be cached for good: a replaced logo gets a new address."""
-        for ext in EXTENSIONS:
+        prefix = "/logos/small" if small else "/logos"
+        for ext in ("png",) if small else EXTENSIONS:
             try:
-                saved = (self._dir / f"{channel_id}.{ext}").stat()
+                saved = (self._folder(small) / f"{channel_id}.{ext}").stat()
             except OSError:
                 continue
             if not stat.S_ISREG(saved.st_mode):
                 continue
-            return f"/logos/{channel_id}.{ext}?v={saved.st_mtime_ns:x}"
+            return f"{prefix}/{channel_id}.{ext}?v={saved.st_mtime_ns:x}"
         return None
 
-    def file(self, name: str) -> Path | None:
-        if not _NAME.match(name):
+    def file(self, name: str, small: bool = False) -> Path | None:
+        if not _NAME.match(name) or (small and not name.endswith(".png")):
             return None
-        path = self._dir / name
+        path = self._folder(small) / name
         return path if path.is_file() else None
 
     def fetch_all(self, channels: Iterable[ChannelConfig]) -> None:
@@ -73,6 +83,47 @@ class Logos:
         for channel in channels:
             if channel.logo and not self._current(channel.id, channel.logo):
                 self._fetch(channel.id, channel.logo)
+            self._make_small(channel.id)
+
+    def _make_small(self, channel_id: str) -> None:
+        """Keeps small/<id>.png in step with the logo: made when the logo is
+        a PNG larger than SMALL_PX and newer than the copy, removed otherwise."""
+        original = self._dir / f"{channel_id}.png"
+        copy = self._dir / "small" / f"{channel_id}.png"
+        try:
+            if not original.is_file():
+                copy.unlink(missing_ok=True)
+                return
+            if copy.is_file() and copy.stat().st_mtime_ns >= original.stat().st_mtime_ns:
+                return
+            body = original.read_bytes()
+        except OSError as error:
+            event(log, logging.WARNING, "logo_not_shrunk", channel=channel_id, error=str(error))
+            return
+        try:
+            small = shrink(body, SMALL_PX)
+        except PngError as error:
+            event(log, logging.WARNING, "logo_not_shrunk", channel=channel_id, error=str(error))
+            small = None
+        try:
+            if small is None:
+                copy.unlink(missing_ok=True)
+                return
+            copy.parent.mkdir(exist_ok=True)
+            partial = copy.parent / f".{channel_id}.tmp"
+            partial.write_bytes(small)
+            partial.replace(copy)
+        except OSError as error:
+            event(log, logging.WARNING, "logo_not_shrunk", channel=channel_id, error=str(error))
+            return
+        event(
+            log,
+            logging.INFO,
+            "logo_shrunk",
+            channel=channel_id,
+            bytes=len(body),
+            small_bytes=len(small),
+        )
 
     def _current(self, channel_id: str, url: str) -> bool:
         try:

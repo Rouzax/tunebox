@@ -57,6 +57,8 @@ def server(tmp_path: Path) -> Generator[TuneboxServer]:
     logo_dir.mkdir()
     (logo_dir / "owr.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     (logo_dir / "x.svg").write_bytes(b"<svg></svg>")
+    (logo_dir / "small").mkdir()
+    (logo_dir / "small" / "owr.png").write_bytes(b"\x89PNG\r\n\x1a\nsmall")
     logos = Logos(logo_dir, lambda _url: b"")
     httpd = TuneboxServer(
         ("127.0.0.1", 0),
@@ -294,7 +296,19 @@ def test_unknown_logos_are_not_found(server: TuneboxServer, path: str) -> None:
 
 def test_channel_list_gives_the_logo_path(server: TuneboxServer) -> None:
     _, _, body = request(server, "/api/channels")
-    assert json.loads(body)[0]["logo"].startswith("/logos/owr.png?v=")
+    listed = json.loads(body)[0]
+    assert listed["logo"].startswith("/logos/owr.png?v=")
+    assert listed["logo_small"].startswith("/logos/small/owr.png?v=")
+
+
+def test_small_logos_are_served(server: TuneboxServer) -> None:
+    status, headers, body = request(server, "/logos/small/owr.png?v=1")
+    assert status == 200
+    assert headers["content-type"] == "image/png"
+    assert body.endswith(b"small")
+    assert headers["cache-control"] == "max-age=31536000, immutable"
+    assert request(server, "/logos/small/x.svg")[0] == 404
+    assert request(server, "/logos/small/")[0] == 404
 
 
 def test_csp_allows_the_streams_the_config_accepts() -> None:

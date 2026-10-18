@@ -177,7 +177,11 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "channels"]:
             logos = self.app.logos
             listing = [
-                {**channel.info(), "logo": logos.path_for(cid) if logos else None}
+                {
+                    **channel.info(),
+                    "logo": logos.path_for(cid) if logos else None,
+                    "logo_small": logos.path_for(cid, small=True) if logos else None,
+                }
                 for cid, channel in channels.items()
             ]
             return self._send_json(200, listing, head, {"Cache-Control": "max-age=300"})
@@ -228,7 +232,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _logo(self, parts: list[str], head: bool) -> None:
         logos = self.app.logos
-        target = logos.file(urllib.parse.unquote(parts[1])) if logos and len(parts) == 2 else None
+        small = len(parts) == 3 and parts[1] == "small"
+        target = None
+        if logos and (len(parts) == 2 or small):
+            target = logos.file(urllib.parse.unquote(parts[-1]), small=small)
         if target is None:
             return self._send_json(404, {"error": "not_found"}, head)
         kind = target.suffix.removeprefix(".")

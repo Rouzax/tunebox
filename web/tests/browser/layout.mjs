@@ -333,6 +333,11 @@ function inspect(page, slack) {
         if (unloaded.length) {
             problems.push(`${unloaded.length} channel logo(s) not loaded on the channel page`);
         }
+        // tunebox keeps a small copy of large PNG logos for this list.
+        const oversized = [...document.querySelectorAll('.channel img')].filter((img) => img.naturalWidth > 256);
+        if (oversized.length) {
+            problems.push(`${oversized.length} channel logo(s) loaded at full size (${oversized[0].naturalWidth} px)`);
+        }
     }
     return {problems, layout: root.dataset.layout};
 }
