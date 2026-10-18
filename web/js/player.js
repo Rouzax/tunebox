@@ -58,6 +58,11 @@ export function createPlayer({events, makeAudio, timers, now}) {
                 setState('playing');
             }
         });
+        el.addEventListener('progress', () => {
+            if (el === audio && url) {
+                watchdog.data(now());
+            }
+        });
         el.addEventListener('error', () => {
             if (el === audio && url) {
                 failed(el.error ? el.error.code : 0);

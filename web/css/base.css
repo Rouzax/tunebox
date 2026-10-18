@@ -373,6 +373,7 @@ button {
     font-size:      .85rem;
     pointer-events: none;
     border-radius:  .3rem;
+    color:          #fff;
     background:     rgba(0, 0, 0, .7);
 }
 

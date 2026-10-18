@@ -2,6 +2,10 @@
 export const RETRY_S = [2, 4, 8, 16, 30, 60];
 // Playback time standing still this long while "playing" means the stream died.
 export const STALL_MS = 8000;
+// Before playback first moves, audio still arriving counts as alive: some
+// browsers on a slow link take longer than STALL_MS to start a stream with a
+// large connect burst. A start that never plays is given up after this.
+export const START_MS = 45000;
 // The backoff starts over after this much clean playback.
 export const HEALTHY_MS = 60000;
 // The server accepts at most this much buffer.
@@ -28,6 +32,11 @@ export function createWatchdog() {
                 return 'ok';
             }
             return now - lastChange >= STALL_MS ? 'stalled' : 'ok';
+        },
+        data(now) {
+            if (lastTime < 0 && now - since < START_MS) {
+                lastChange = now;
+            }
         },
         healthy(now) {
             return now - since >= HEALTHY_MS && now - lastChange < STALL_MS;

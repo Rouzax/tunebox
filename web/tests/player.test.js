@@ -160,6 +160,19 @@ test('a stalled stream reconnects with growing pauses', () => {
     assert.equal(made[0].plays, 3);
 });
 
+test('a slow start that is still receiving audio is not cut off', () => {
+    const {timers, made, player} = harness();
+    player.play('https://example.invalid/a.aac');
+    for (let i = 0; i < 15; i++) {
+        timers.advance(1000);
+        made[0].fire('progress');
+    }
+    assert.equal(player.state(), 'loading');
+    assert.equal(made[0].plays, 1);
+    made[0].fire('playing');
+    assert.equal(player.state(), 'playing');
+});
+
 test('coming back online reconnects at once and drops the pending retry', () => {
     const {timers, made, player} = harness();
     player.play('https://example.invalid/a.aac');

@@ -308,6 +308,23 @@ function inspect(page, slack) {
         if (overlap(box(toast), text)) {
             problems.push('a status message covers the track text');
         }
+        // The box is dark in day and night alike, so its text must be light.
+        const [r, g, b] = getComputedStyle(toast).color.match(/[\d.]+/g).map(Number);
+        if (0.2126 * r + 0.7152 * g + 0.0722 * b < 200) {
+            problems.push(`status message text is not light (${getComputedStyle(toast).color})`);
+        }
+        // The longest message the player shows: it wraps, inside its box.
+        toast.textContent = 'This browser cannot play AAC. Pick another quality on the channel page.';
+        const frame = toast.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(toast);
+        const words = range.getBoundingClientRect();
+        if (words.bottom > frame.bottom + slack || words.top < frame.top - slack) {
+            problems.push('a long status message runs out of its box');
+        }
+        if (overlap(box(toast), text)) {
+            problems.push('a long status message covers the track text');
+        }
         toast.textContent = oldText;
         toast.classList.toggle('hidden', wasHidden);
     }
