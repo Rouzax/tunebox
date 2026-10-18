@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from tunebox.config import (
+    AdminConfig,
     ChannelRow,
     ConfigError,
     ConfigState,
@@ -261,3 +262,44 @@ def test_group_names_are_unique_and_not_empty() -> None:
         validate_state(ConfigState(groups=("A", "A")))
     with pytest.raises(ConfigError, match=re.escape("groups[0]")):
         validate_state(ConfigState(groups=(" ",)))
+
+
+def test_admin_is_off_by_default(tmp_path: Path) -> None:
+    config = parse(minimal(), tmp_path)
+    assert config.admin == AdminConfig()
+    assert config.server.trusted_proxies == ()
+
+
+def test_admin_settings_and_trusted_proxies(tmp_path: Path) -> None:
+    data = {
+        **minimal(),
+        "server": {"trusted_proxies": ["172.18.0.0/16", "::1"]},
+        "admin": {"enabled": True, "setup_page": True, "public_origin": "https://radio.example"},
+    }
+    config = parse(data, tmp_path)
+    assert config.admin == AdminConfig(True, True, "https://radio.example")
+    assert [str(n) for n in config.server.trusted_proxies] == ["172.18.0.0/16", "::1/128"]
+
+
+@pytest.mark.parametrize(
+    ("admin", "message"),
+    [
+        ({"enabled": True}, "admin.public_origin: required"),
+        ({"enabled": True, "public_origin": "http://radio.example"}, "admin.public_origin"),
+        ({"enabled": True, "public_origin": "https://radio.example/path"}, "admin.public_origin"),
+        ({"enabled": "yes"}, "admin.enabled"),
+        ({"colour": 1}, "admin.colour: unknown key"),
+    ],
+)
+def test_bad_admin_settings_name_the_key(
+    admin: dict[str, Any], message: str, tmp_path: Path
+) -> None:
+    with pytest.raises(ConfigError, match=re.escape(message)):
+        parse({**minimal(), "admin": admin}, tmp_path)
+
+
+def test_a_bad_trusted_proxy_names_the_key(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=re.escape("server.trusted_proxies[0]")):
+        parse({**minimal(), "server": {"trusted_proxies": ["not-an-address"]}}, tmp_path)
+    with pytest.raises(ConfigError, match=re.escape("server.trusted_proxies")):
+        parse({**minimal(), "server": {"trusted_proxies": "10.0.0.0/8"}}, tmp_path)

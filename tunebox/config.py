@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import tomllib
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -90,11 +92,25 @@ class PlayerConfig:
     default_channel: str | None = None
 
 
+Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
 @dataclass(frozen=True)
 class ServerConfig:
     host: str
     port: int
     data_dir: Path
+    # Only these may say who the client is (X-Forwarded-For).
+    trusted_proxies: tuple[Network, ...] = ()
+
+
+@dataclass(frozen=True)
+class AdminConfig:
+    enabled: bool = False
+    setup_page: bool = False
+    # Scheme and host of the public address; every state-changing admin
+    # request must come from it.
+    public_origin: str | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +148,7 @@ class Config:
     channels: tuple[ChannelConfig, ...]
     player: PlayerConfig = PlayerConfig()
     state: ConfigState = ConfigState()
+    admin: AdminConfig = AdminConfig()
 
 
 def load(path: Path) -> Config:
@@ -145,9 +162,9 @@ def load(path: Path) -> Config:
 
 
 def parse(data: dict[str, Any], base_dir: Path) -> Config:
-    _no_unknown(data, {"server", "defaults", "channels", "player"}, "")
+    _no_unknown(data, {"server", "defaults", "channels", "player", "admin"}, "")
     server_table = _table(data, "server", "server")
-    _no_unknown(server_table, {"host", "port", "data_dir"}, "server")
+    _no_unknown(server_table, {"host", "port", "data_dir", "trusted_proxies"}, "server")
     port = _int(server_table, "port", "server.port", 8080)
     if not 1 <= port <= 65535:
         raise ConfigError("server.port: must be between 1 and 65535")
@@ -156,11 +173,39 @@ def parse(data: dict[str, Any], base_dir: Path) -> Config:
         host=_str(server_table, "host", "server.host", "0.0.0.0"),
         port=port,
         data_dir=Path(_str(server_table, "data_dir", "server.data_dir", str(base_dir))),
+        trusted_proxies=_networks(server_table),
     )
 
     state = state_from_toml(data)
     resolved = validate_state(state)
-    return Config(server, resolved.channels, resolved.player, state)
+    admin = _admin(_table(data, "admin", "admin"))
+    return Config(server, resolved.channels, resolved.player, state, admin)
+
+
+def _networks(table: dict[str, Any]) -> tuple[Network, ...]:
+    raw: object = table.get("trusted_proxies", [])
+    if not isinstance(raw, list):
+        raise ConfigError("server.trusted_proxies: expected a list of addresses or ranges")
+    networks: list[Network] = []
+    for index, item in enumerate(cast("list[object]", raw)):
+        try:
+            networks.append(ipaddress.ip_network(str(item), strict=False))
+        except ValueError as error:
+            raise ConfigError(f"server.trusted_proxies[{index}]: {error}") from error
+    return tuple(networks)
+
+
+def _admin(table: dict[str, Any]) -> AdminConfig:
+    _no_unknown(table, {"enabled", "setup_page", "public_origin"}, "admin")
+    enabled = _bool(table, "enabled", "admin.enabled", False)
+    origin = _optional_str(table, "public_origin", "admin.public_origin")
+    if enabled and origin is None:
+        raise ConfigError("admin.public_origin: required when the admin panel is enabled")
+    if origin is not None:
+        parts = urllib.parse.urlsplit(origin)
+        if parts.scheme != "https" or not parts.hostname or parts.path or parts.query:
+            raise ConfigError("admin.public_origin: an https origin such as https://radio.example")
+    return AdminConfig(enabled, _bool(table, "setup_page", "admin.setup_page", False), origin)
 
 
 def state_from_toml(data: dict[str, Any]) -> ConfigState:

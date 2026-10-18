@@ -3,7 +3,10 @@ stream measurements). Only public addresses are reached, checked again on
 every redirect and connected to as checked, and every fetch ends by a
 deadline, so a saved URL can neither reach the home network nor hold a
 thread. Catalogue and title feeds go to fixed provider hosts and use
-tunebox.http directly."""
+tunebox.http directly.
+
+client_address() is the inbound side: which address a request comes from,
+believing X-Forwarded-For only from trusted proxies."""
 
 from __future__ import annotations
 
@@ -16,6 +19,7 @@ import time
 import urllib.parse
 from collections.abc import Callable, Generator
 
+from tunebox.config import Network
 from tunebox.http import MAX_BYTES, STREAM_CHUNK, USER_AGENT, HttpError
 
 MAX_REDIRECTS = 5
@@ -57,6 +61,32 @@ def resolve(host: str, port: int) -> list[str]:
     if failed or not found:
         raise HttpError(f"{host}: name lookup failed")
     return found
+
+
+def _trusted(address: str, trusted: tuple[Network, ...]) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(ip in network for network in trusted)
+
+
+def client_address(peer: str, forwarded: str | None, trusted: tuple[Network, ...]) -> str:
+    """The client's address: from X-Forwarded-For only when the connection
+    comes from a trusted proxy, taking the right-most entry that is not
+    itself a trusted proxy (entries to its left are the client's own word).
+    An entry that is not an address stops the walk: skipping it would reach
+    an entry the client wrote."""
+    if not forwarded or not _trusted(peer, trusted):
+        return peer
+    for entry in reversed([part.strip() for part in forwarded.split(",")]):
+        try:
+            ipaddress.ip_address(entry)
+        except ValueError:
+            return peer
+        if not _trusted(entry, trusted):
+            return entry
+    return peer
 
 
 def _short(url: str) -> str:

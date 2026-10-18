@@ -6,7 +6,13 @@ from typing import Any
 import pytest
 
 from tunebox.config import ChannelRow, ConfigError, ConfigState
-from tunebox.settings import MIGRATIONS, Settings, SettingsUnavailable, StaleVersion
+from tunebox.settings import (
+    MIGRATIONS,
+    Settings,
+    SettingsUnavailable,
+    SettingsWriteError,
+    StaleVersion,
+)
 
 
 def doc(channel_id: str = "owr", **extra: Any) -> dict[str, Any]:
@@ -110,3 +116,29 @@ def test_an_unwritable_folder_is_unavailable(tmp_path: Path) -> None:
     blocker.write_text("x", encoding="utf-8")
     with pytest.raises(SettingsUnavailable):
         Settings(blocker / "t.db")
+
+
+def test_a_transaction_commits_or_rolls_back(settings: Settings) -> None:
+    with settings.transaction() as db:
+        db.execute("INSERT INTO secrets VALUES ('a', x'01')")
+    with pytest.raises(RuntimeError), settings.transaction() as db:
+        db.execute("INSERT INTO secrets VALUES ('b', x'02')")
+        raise RuntimeError("stop")
+    with settings.read() as db:
+        assert db.execute("SELECT key FROM secrets").fetchall() == [("a",)]
+
+
+def test_a_database_error_in_a_transaction_is_a_write_error(settings: Settings) -> None:
+    with pytest.raises(SettingsWriteError), settings.transaction() as db:
+        db.execute("INSERT INTO no_such_table VALUES (1)")
+
+
+def test_a_database_error_while_reading_is_unavailable(settings: Settings) -> None:
+    with pytest.raises(SettingsUnavailable), settings.read() as db:
+        db.execute("SELECT * FROM no_such_table")
+
+
+def test_the_account_tables_exist(settings: Settings) -> None:
+    with settings.read() as db:
+        tables = db.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    assert {"admin", "recovery_codes", "sessions", "secrets"} <= {row[0] for row in tables}

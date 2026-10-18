@@ -1,0 +1,101 @@
+"""Rate limits for logins and setup: per-key failure counts with a lock,
+and a global pace. Keys are address groups, so one IPv6 host cannot rotate
+through its /64 to get fresh counters."""
+
+from __future__ import annotations
+
+import ipaddress
+import threading
+import time
+from collections import OrderedDict, deque
+from collections.abc import Callable
+
+
+def group(address: str) -> str:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
+
+
+class _Entry:
+    __slots__ = ("attempts", "locked_until")
+
+    def __init__(self) -> None:
+        self.attempts: deque[float] = deque()
+        self.locked_until = 0.0
+
+
+class FailureLimit:
+    """Each attempt is counted when it is reserved, before it is checked,
+    so concurrent attempts cannot all slip past the count; a success gives
+    its reservation back."""
+
+    def __init__(
+        self,
+        limit: int,
+        window_s: float,
+        lock_s: float,
+        clock: Callable[[], float] = time.monotonic,
+        max_keys: int = 10_000,
+    ) -> None:
+        self._limit = limit
+        self._window = window_s
+        self._lock_s = lock_s
+        self._clock = clock
+        self._max = max_keys
+        self._lock = threading.Lock()
+        self._entries: OrderedDict[str, _Entry] = OrderedDict()
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def reserve(self, key: str) -> Callable[[], None] | None:
+        """A function that gives the attempt back on success, or None when
+        the key is locked."""
+        now = self._clock()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                entry = self._entries[key] = _Entry()
+                while len(self._entries) > self._max:
+                    self._entries.popitem(last=False)
+            self._entries.move_to_end(key)
+            while entry.attempts and entry.attempts[0] <= now - self._window:
+                entry.attempts.popleft()
+            if now < entry.locked_until:
+                return None
+            if len(entry.attempts) >= self._limit:
+                entry.locked_until = now + self._lock_s
+                return None
+            entry.attempts.append(now)
+
+        def release() -> None:
+            with self._lock:
+                if now in entry.attempts:
+                    entry.attempts.remove(now)
+
+        return release
+
+
+class Pace:
+    """At most one allowed call per interval, shared by every caller."""
+
+    def __init__(self, interval_s: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self._interval = interval_s
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def allow(self) -> bool:
+        now = self._clock()
+        with self._lock:
+            if now < self._next:
+                return False
+            self._next = now + self._interval
+            return True

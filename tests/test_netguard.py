@@ -1,3 +1,4 @@
+import ipaddress
 import threading
 import time
 from collections.abc import Generator
@@ -8,7 +9,7 @@ import pytest
 
 from tunebox import netguard
 from tunebox.http import HttpError
-from tunebox.netguard import Guard, public
+from tunebox.netguard import Guard, client_address, public
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -174,3 +175,28 @@ def test_a_failed_name_lookup_is_an_error() -> None:
 @pytest.mark.live
 def test_https_through_the_guard() -> None:
     assert b"<html" in Guard().get("https://example.com/").lower()
+
+
+PROXY = (ipaddress.ip_network("172.18.0.0/16"),)
+
+
+def test_forwarded_for_is_believed_only_from_a_trusted_proxy() -> None:
+    assert client_address("172.18.0.5", "198.51.100.7", PROXY) == "198.51.100.7"
+    assert client_address("203.0.113.9", "198.51.100.7", PROXY) == "203.0.113.9"
+    assert client_address("172.18.0.5", None, PROXY) == "172.18.0.5"
+    assert client_address("not an address", "198.51.100.7", PROXY) == "not an address"
+
+
+def test_the_rightmost_untrusted_address_wins() -> None:
+    # A client may send its own X-Forwarded-For; the proxy appends the real one.
+    assert client_address("172.18.0.5", "10.9.9.9, 198.51.100.7", PROXY) == "198.51.100.7"
+    assert client_address("172.18.0.5", "198.51.100.7, 172.18.0.2", PROXY) == "198.51.100.7"
+    assert client_address("172.18.0.5", "garbage, 198.51.100.7", PROXY) == "198.51.100.7"
+    assert client_address("172.18.0.5", "garbage", PROXY) == "172.18.0.5"
+
+
+def test_an_unparseable_entry_from_the_proxy_fails_closed() -> None:
+    # A client-written address must not be reached by skipping what the
+    # proxy appended.
+    assert client_address("172.18.0.5", "198.51.100.7, unknown", PROXY) == "172.18.0.5"
+    assert client_address("172.18.0.5", "198.51.100.7, 203.0.113.9:4444", PROXY) == "172.18.0.5"

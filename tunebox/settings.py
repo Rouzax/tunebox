@@ -1,16 +1,19 @@
 """The configuration the admin panel edits: stations, groups and settings,
-with a version that every change bumps and a history of every change.
+with a version that every change bumps and a history of every change. The
+same database holds the admin account, its sessions and recovery codes,
+and the server's signing key (used by accounts.py).
 
 Unlike the cover store this never falls back to memory: edits that vanish
 on the next restart are worse than a tunebox that refuses to start."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any, cast
 
@@ -44,6 +47,31 @@ MIGRATIONS: tuple[str, ...] = (
         after_json TEXT NOT NULL,
         session_id TEXT
     )
+    """,
+    """
+    CREATE TABLE admin (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        password_hash TEXT NOT NULL,
+        totp_secret BLOB NOT NULL,
+        totp_last_step INTEGER NOT NULL,
+        totp_fail_count INTEGER NOT NULL,
+        totp_fail_since REAL,
+        totp_fail_last REAL,
+        generation INTEGER NOT NULL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    CREATE TABLE recovery_codes (hash TEXT PRIMARY KEY, used_at REAL);
+    CREATE TABLE sessions (
+        token_hash TEXT PRIMARY KEY,
+        csrf_token TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        last_seen REAL NOT NULL,
+        absolute_expiry REAL NOT NULL,
+        address TEXT,
+        user_agent TEXT
+    );
+    CREATE TABLE secrets (key TEXT PRIMARY KEY, value BLOB NOT NULL)
     """,
 )
 
@@ -136,24 +164,32 @@ class Settings:
         and the version bump commit together or not at all."""
         validate_state(state)
         after = state_to_json(state)
+        with self.transaction() as db:
+            version = self._version()
+            if version != based_on:
+                raise StaleVersion(version)
+            before = self._read_state()
+            if any(c.enabled for c in before.channels) and not any(
+                c.enabled for c in state.channels
+            ):
+                raise ConfigError("channels: at least one enabled channel is required")
+            self._write(state)
+            db.execute(
+                "INSERT INTO history (at, kind, target, before_json, after_json)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (self._clock(), kind, target, state_to_json(before), after),
+            )
+            db.execute("UPDATE config_version SET version = ?", (version + 1,))
+        return version + 1
+
+    @contextlib.contextmanager
+    def transaction(self) -> Generator[sqlite3.Connection]:
+        """One write transaction: committed when the block ends, rolled back
+        on any error. A database error becomes SettingsWriteError."""
         with self._lock:
             try:
                 self._db.execute("BEGIN IMMEDIATE")
-                version = self._version()
-                if version != based_on:
-                    raise StaleVersion(version)
-                before = self._read_state()
-                if any(c.enabled for c in before.channels) and not any(
-                    c.enabled for c in state.channels
-                ):
-                    raise ConfigError("channels: at least one enabled channel is required")
-                self._write(state)
-                self._db.execute(
-                    "INSERT INTO history (at, kind, target, before_json, after_json)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (self._clock(), kind, target, state_to_json(before), after),
-                )
-                self._db.execute("UPDATE config_version SET version = ?", (version + 1,))
+                yield self._db
                 self._db.execute("COMMIT")
             except BaseException as error:
                 if self._db.in_transaction:
@@ -161,7 +197,14 @@ class Settings:
                 if isinstance(error, sqlite3.Error):
                     raise SettingsWriteError(str(error)) from error
                 raise
-        return version + 1
+
+    @contextlib.contextmanager
+    def read(self) -> Generator[sqlite3.Connection]:
+        with self._lock:
+            try:
+                yield self._db
+            except sqlite3.Error as error:
+                raise SettingsUnavailable(str(error)) from error
 
     def _version(self) -> int:
         row = self._db.execute("SELECT version FROM config_version").fetchone()
