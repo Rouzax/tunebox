@@ -4,7 +4,17 @@ from typing import Any
 
 import pytest
 
-from tunebox.config import ConfigError, PlayerConfig, StreamConfig, load, parse
+from tunebox.config import (
+    ChannelRow,
+    ConfigError,
+    ConfigState,
+    PlayerConfig,
+    StreamConfig,
+    load,
+    parse,
+    state_from_toml,
+    validate_state,
+)
 
 EXAMPLE = Path(__file__).parent.parent / "tunebox.example.toml"
 
@@ -55,8 +65,6 @@ def test_channel_overrides_a_default(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("data", "message"),
     [
-        ({}, "channels: required"),
-        ({"channels": []}, "channels: required"),
         (minimal(id="Bad Id"), "channels[0].id"),
         (minimal(stream_url="ftp://x"), "channels[0].stream_url"),
         (minimal(source={"type": "icecast"}), "channels[0].source.type"),
@@ -195,3 +203,61 @@ def test_example_station_list_loads() -> None:
     text = STATIONS.read_text(encoding="utf-8")
     # Copied from an LMS favorites list: none of its TuneIn tracking parameters.
     assert "serial=" not in text and "partnerId" not in text
+
+
+def test_a_file_without_channels_loads(tmp_path: Path) -> None:
+    empty: list[dict[str, Any]] = [{"server": {}}, {"channels": []}]
+    for data in empty:
+        config = parse(data, tmp_path)
+        assert config.channels == ()
+        assert config.state.channels == ()
+
+
+def test_state_from_toml_keeps_order_and_groups() -> None:
+    data = minimal()
+    first = dict(data["channels"][0], group="Tomorrowland")
+    second = dict(data["channels"][0], id="daybreak", group="Tomorrowland")
+    third = dict(data["channels"][0], id="solo")
+    data["channels"] = [first, second, third]
+    state = state_from_toml(data)
+    assert state.groups == ("Tomorrowland",)
+    assert [(c.id, c.group, c.enabled) for c in state.channels] == [
+        ("owr", "Tomorrowland", True),
+        ("daybreak", "Tomorrowland", True),
+        ("solo", None, True),
+    ]
+    assert "group" not in state.channels[0].doc
+    # The player lists ungrouped channels first; the listing order matches.
+    assert [c.id for c in validate_state(state).channels] == ["solo", "owr", "daybreak"]
+
+
+def test_disabled_channels_are_left_out_but_still_checked() -> None:
+    row = state_from_toml(minimal()).channels[0]
+    off = ConfigState(channels=(ChannelRow(row.id, None, False, row.doc),))
+    assert validate_state(off).channels == ()
+    broken = ConfigState(channels=(ChannelRow(row.id, None, False, {**row.doc, "name": 5}),))
+    with pytest.raises(ConfigError, match=re.escape("channels[0].name")):
+        validate_state(broken)
+
+
+def test_default_channel_must_be_enabled() -> None:
+    state = state_from_toml({**minimal(), "player": {"default_channel": "owr"}})
+    row = state.channels[0]
+    off = ConfigState(player=state.player, channels=(ChannelRow(row.id, None, False, row.doc),))
+    with pytest.raises(ConfigError, match=re.escape("player.default_channel")):
+        validate_state(off)
+
+
+def test_a_row_must_name_a_known_group_and_match_its_id() -> None:
+    row = state_from_toml(minimal()).channels[0]
+    with pytest.raises(ConfigError, match=re.escape("channels[0].group")):
+        validate_state(ConfigState(channels=(ChannelRow(row.id, "Nowhere", True, row.doc),)))
+    with pytest.raises(ConfigError, match=re.escape("channels[0].id")):
+        validate_state(ConfigState(channels=(ChannelRow("other", None, True, row.doc),)))
+
+
+def test_group_names_are_unique_and_not_empty() -> None:
+    with pytest.raises(ConfigError, match=re.escape("groups[1]")):
+        validate_state(ConfigState(groups=("A", "A")))
+    with pytest.raises(ConfigError, match=re.escape("groups[0]")):
+        validate_state(ConfigState(groups=(" ",)))

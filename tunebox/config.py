@@ -1,10 +1,10 @@
-"""Loads and validates tunebox.toml; a bad file stops startup with the key named."""
+"""Loads and validates tunebox.toml and the stored configuration; errors name the key."""
 
 from __future__ import annotations
 
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -98,10 +98,40 @@ class ServerConfig:
 
 
 @dataclass(frozen=True)
+class ChannelRow:
+    """One station as stored: its [[channels]] table without the group,
+    which is kept apart so groups can be ordered and renamed in one place."""
+
+    id: str
+    group: str | None
+    enabled: bool
+    doc: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ConfigState:
+    """Everything the admin panel edits, in the shape it is stored. The
+    order of channels is their position; groups are listed in their order."""
+
+    defaults: dict[str, float] = field(default_factory=dict[str, float])
+    player: dict[str, Any] = field(default_factory=dict[str, Any])
+    groups: tuple[str, ...] = ()
+    channels: tuple[ChannelRow, ...] = ()
+
+
+@dataclass(frozen=True)
+class Resolved:
+    # Enabled channels in listing order: ungrouped first, as the player shows them.
+    channels: tuple[ChannelConfig, ...]
+    player: PlayerConfig
+
+
+@dataclass(frozen=True)
 class Config:
     server: ServerConfig
     channels: tuple[ChannelConfig, ...]
     player: PlayerConfig = PlayerConfig()
+    state: ConfigState = ConfigState()
 
 
 def load(path: Path) -> Config:
@@ -128,24 +158,66 @@ def parse(data: dict[str, Any], base_dir: Path) -> Config:
         data_dir=Path(_str(server_table, "data_dir", "server.data_dir", str(base_dir))),
     )
 
+    state = state_from_toml(data)
+    resolved = validate_state(state)
+    return Config(server, resolved.channels, resolved.player, state)
+
+
+def state_from_toml(data: dict[str, Any]) -> ConfigState:
     defaults_table = _table(data, "defaults", "defaults")
     _no_unknown(defaults_table, set(DEFAULTS), "defaults")
-    defaults = {**DEFAULTS, **_numbers(defaults_table, "defaults")}
-
-    raw_channels: object = data.get("channels")
-    if not isinstance(raw_channels, list) or not raw_channels:
-        raise ConfigError("channels: required, at least one [[channels]] table")
-    channels: list[ChannelConfig] = []
+    raw_channels: object = data.get("channels", [])
+    if not isinstance(raw_channels, list):
+        raise ConfigError("channels: expected [[channels]] tables")
+    groups: list[str] = []
+    rows: list[ChannelRow] = []
     for index, raw in enumerate(cast("list[object]", raw_channels)):
         where = f"channels[{index}]"
         if not isinstance(raw, dict):
             raise ConfigError(f"{where}: expected a table")
-        channel = _channel(cast("dict[str, Any]", raw), where, defaults)
-        if any(c.id == channel.id for c in channels):
+        doc = dict(cast("dict[str, Any]", raw))
+        group = _optional_str(doc, "group", f"{where}.group")
+        doc.pop("group", None)
+        if group is not None and group not in groups:
+            groups.append(group)
+        raw_id: object = doc.get("id", "")
+        rows.append(ChannelRow(raw_id if isinstance(raw_id, str) else "", group, True, doc))
+    _numbers(defaults_table, "defaults")
+    # Stored as written: _numbers turns history_size into a float, which a
+    # second validation would refuse.
+    return ConfigState(
+        cast("dict[str, float]", dict(defaults_table)),
+        _table(data, "player", "player"),
+        tuple(groups),
+        tuple(rows),
+    )
+
+
+def validate_state(state: ConfigState) -> Resolved:
+    """Checks the whole configuration, disabled channels included, so a
+    change that breaks a rule spanning channels is refused as a whole."""
+    _no_unknown(state.defaults, set(DEFAULTS), "defaults")
+    defaults = {**DEFAULTS, **_numbers(dict(state.defaults), "defaults")}
+    seen: dict[str, tuple[ChannelRow, ChannelConfig]] = {}
+    for index, row in enumerate(state.channels):
+        where = f"channels[{index}]"
+        table = row.doc if row.group is None else {**row.doc, "group": row.group}
+        channel = _channel(table, where, defaults)
+        if channel.id in seen:
             raise ConfigError(f"{where}.id: duplicate id {channel.id!r}")
-        channels.append(channel)
-    player = _player(_table(data, "player", "player"), {c.id for c in channels})
-    return Config(server, tuple(channels), player)
+        if channel.id != row.id:
+            raise ConfigError(f"{where}.id: {channel.id!r} is stored as {row.id!r}")
+        if row.group is not None and row.group not in state.groups:
+            raise ConfigError(f"{where}.group: no group named {row.group!r}")
+        seen[channel.id] = (row, channel)
+    for index, name in enumerate(state.groups):
+        if not name.strip() or state.groups.index(name) != index:
+            raise ConfigError(f"groups[{index}]: names must be unique and not empty")
+    rank = {name: position for position, name in enumerate(state.groups)}
+    enabled = [channel for row, channel in seen.values() if row.enabled]
+    # sorted() is stable, so channels keep their positions within a group.
+    ordered = sorted(enabled, key=lambda c: -1 if c.group is None else rank[c.group])
+    return Resolved(tuple(ordered), _player(dict(state.player), {c.id for c in ordered}))
 
 
 def _channel(table: dict[str, Any], where: str, defaults: dict[str, float]) -> ChannelConfig:
