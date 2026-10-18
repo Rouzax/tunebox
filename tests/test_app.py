@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tunebox.app import StopSignal, main, open_settings, shut_down
+from tunebox.app import WEB_ADMIN_DIR, StopSignal, main, open_settings, shut_down
 from tunebox.config import state_from_toml
 from tunebox.runtime import EMPTY, Runtime
 from tunebox.server import TuneboxServer
@@ -147,3 +147,7 @@ def test_open_settings_adopts_the_file_once(
     assert settings.load()[1] == 1
     settings.close()
     assert [r.getMessage() for r in caplog.records].count("config_from_file") == 1
+
+
+def test_admin_needs_its_web_folder() -> None:
+    assert (WEB_ADMIN_DIR / "index.html").is_file()

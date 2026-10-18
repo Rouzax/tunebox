@@ -13,6 +13,8 @@ from pathlib import Path
 from types import FrameType
 
 from tunebox import http
+from tunebox.accounts import Accounts
+from tunebox.admin import Admin
 from tunebox.bursts import Bursts
 from tunebox.catalogs import Catalogs
 from tunebox.channel import Channel
@@ -31,6 +33,8 @@ log = logging.getLogger("tunebox")
 
 DEFAULT_CONFIG = "/data/tunebox.toml"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+# Outside web/, so the player's static files can never serve the admin pages.
+WEB_ADMIN_DIR = Path(__file__).resolve().parent.parent / "web_admin"
 
 
 def main() -> int:
@@ -61,11 +65,21 @@ def main() -> int:
         return Channel(channel, build_source(channel.source, http.get), covers, store, carry=carry)
 
     runtime = Runtime(settings, make_channel, logos)
+    admin = None
+    if config.admin.enabled:
+        admin_dir = Path(os.environ.get("TUNEBOX_WEB_ADMIN", str(WEB_ADMIN_DIR)))
+        admin = Admin(Accounts(settings), config.admin, admin_dir)
     web_dir = Path(os.environ.get("TUNEBOX_WEB", str(WEB_DIR)))
     address = (config.server.host, config.server.port)
     try:
         server = TuneboxServer(
-            address, lambda: runtime.snapshot, web_dir, logos=logos, bursts=bursts
+            address,
+            lambda: runtime.snapshot,
+            web_dir,
+            logos=logos,
+            bursts=bursts,
+            admin=admin,
+            trusted=config.server.trusted_proxies,
         )
     except OSError as error:
         print(f"tunebox: cannot listen on {address[0]}:{address[1]}: {error}", file=sys.stderr)

@@ -1,6 +1,8 @@
 import dataclasses
 import http.client
+import ipaddress
 import json
+import logging
 import socket
 import threading
 from collections.abc import Generator
@@ -9,13 +11,16 @@ from pathlib import Path
 import pytest
 
 from tests.fakes import FakeSource, NoJitter, channel_config
+from tunebox.accounts import Accounts
+from tunebox.admin import Admin
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
-from tunebox.config import PlayerConfig, StreamConfig
+from tunebox.config import AdminConfig, PlayerConfig, StreamConfig
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
-from tunebox.runtime import Snapshot
+from tunebox.runtime import EMPTY, Snapshot
 from tunebox.server import CSP, TuneboxServer, etag_matches
+from tunebox.settings import Settings
 from tunebox.store import Store
 from tunebox.tracks import RawEntry
 
@@ -41,6 +46,7 @@ def server(tmp_path: Path) -> Generator[TuneboxServer]:
     (web / "app.js").write_text("export {};", encoding="utf-8")
     (web / "vendor").mkdir()
     (web / "vendor" / "lib-1.0.js").write_text("export {};", encoding="utf-8")
+    (web / "vendor" / "lib-1.0.mjs").write_text("export {};", encoding="utf-8")
     (web / "font.woff2").write_bytes(b"wOF2")
     (web / "notes.md").write_text("# x", encoding="utf-8")
     source = FakeSource()
@@ -363,3 +369,153 @@ def test_player_settings_without_channels(server: TuneboxServer) -> None:
     status, _, body = request(server, "/api/channels")
     assert status == 200
     assert json.loads(body) == []
+
+
+ORIGIN = "https://radio.example"
+
+
+def serve(httpd: TuneboxServer) -> None:
+    thread = threading.Thread(
+        target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
+    thread.start()
+
+
+@pytest.fixture
+def admin_server(tmp_path: Path) -> Generator[TuneboxServer]:
+    settings = Settings(tmp_path / "t.db")
+    web_admin = tmp_path / "web_admin"
+    web_admin.mkdir()
+    (web_admin / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
+    admin = Admin(Accounts(settings), AdminConfig(True, False, ORIGIN), web_admin)
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    httpd = TuneboxServer(
+        ("127.0.0.1", 0),
+        lambda: EMPTY,
+        web,
+        admin=admin,
+        trusted=(ipaddress.ip_network("127.0.0.0/8"),),
+    )
+    serve(httpd)
+    yield httpd
+    httpd.shutdown()
+    httpd.server_close()
+    settings.close()
+
+
+def post(
+    httpd: TuneboxServer, path: str, body: bytes, headers: dict[str, str]
+) -> tuple[int, bytes]:
+    connection = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=5)
+    connection.request("POST", path, body=body, headers=headers)
+    response = connection.getresponse()
+    data = response.read()
+    connection.close()
+    return response.status, data
+
+
+def test_admin_is_404_when_disabled(server: TuneboxServer) -> None:
+    for path in ("/admin", "/admin/", "/admin/api/state"):
+        assert request(server, path)[0] == 404
+    assert post(server, "/admin/api/login", b"{}", {"Content-Type": "application/json"})[0] == 404
+
+
+def test_admin_requests_reach_the_admin_router(admin_server: TuneboxServer) -> None:
+    status, headers, body = request(admin_server, "/admin/api/state")
+    assert status == 200
+    assert json.loads(body)["account"] is False
+    assert headers["cache-control"] == "no-store"
+    status, headers, _ = request(admin_server, "/admin/")
+    assert status == 200
+    assert "frame-ancestors 'none'" in headers["content-security-policy"]
+    status, _, body = request(admin_server, "/admin/", method="HEAD")
+    assert status == 200
+    assert body == b""
+
+
+def test_the_login_log_names_the_client_behind_a_trusted_proxy(
+    admin_server: TuneboxServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    headers = {
+        "Content-Type": "application/json",
+        "Origin": ORIGIN,
+        "X-Forwarded-For": "198.51.100.7",
+    }
+    with caplog.at_level(logging.WARNING):
+        status, _ = post(
+            admin_server,
+            "/admin/api/login",
+            json.dumps({"password": "x" * 12, "code": "1"}).encode(),
+            headers,
+        )
+    assert status == 401
+    failed = next(r for r in caplog.records if r.getMessage() == "admin_login_failed")
+    assert failed.__dict__["fields"]["client"] == "198.51.100.7"
+
+
+def test_a_body_too_large_or_without_length_is_refused(admin_server: TuneboxServer) -> None:
+    headers = {"Content-Type": "application/json", "Origin": ORIGIN}
+    assert post(admin_server, "/admin/api/login", b"x" * 70_000, headers)[0] == 413
+    connection = http.client.HTTPConnection("127.0.0.1", admin_server.server_address[1], timeout=5)
+    connection.putrequest("POST", "/admin/api/login")
+    connection.putheader("Transfer-Encoding", "chunked")
+    connection.endheaders()
+    connection.send(b"0\r\n\r\n")
+    assert connection.getresponse().status == 411
+    connection.close()
+
+
+def test_post_outside_admin_is_not_allowed(server: TuneboxServer) -> None:
+    status, _ = post(server, "/api/channels", b"{}", {"Content-Type": "application/json"})
+    assert status == 405
+
+
+def test_every_logo_kind_is_sandboxed(server: TuneboxServer) -> None:
+    _, headers, _ = request(server, "/logos/owr.png")
+    assert headers["content-security-policy"] == "sandbox"
+
+
+def test_forwarded_header_without_trusted_proxies_warns_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = Settings(tmp_path / "t.db")
+    admin = Admin(Accounts(settings), AdminConfig(True, False, ORIGIN), tmp_path)
+    httpd = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, admin=admin)
+    serve(httpd)
+    with caplog.at_level(logging.WARNING):
+        for _ in range(2):
+            request(httpd, "/admin/api/state", headers={"X-Forwarded-For": "198.51.100.7"})
+    httpd.shutdown()
+    httpd.server_close()
+    settings.close()
+    assert caplog.text.count("trusted_proxies_unset") == 1
+
+
+def test_es_module_files_are_served_as_javascript(server: TuneboxServer) -> None:
+    status, headers, _ = request(server, "/vendor/lib-1.0.mjs")
+    assert status == 200
+    assert headers["content-type"] == "text/javascript; charset=utf-8"
+
+
+def test_every_forwarded_for_line_is_read(
+    admin_server: TuneboxServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    connection = http.client.HTTPConnection("127.0.0.1", admin_server.server_address[1], timeout=5)
+    body = json.dumps({"password": "x" * 12, "code": "1"}).encode()
+    connection.putrequest("POST", "/admin/api/login")
+    for name, value in (
+        ("Content-Type", "application/json"),
+        ("Origin", ORIGIN),
+        ("Content-Length", str(len(body))),
+        ("X-Forwarded-For", "203.0.113.250"),  # the client's own line
+        ("X-Forwarded-For", "198.51.100.7"),  # the proxy's line
+    ):
+        connection.putheader(name, value)
+    connection.endheaders(body)
+    with caplog.at_level(logging.WARNING):
+        assert connection.getresponse().status == 401
+    connection.close()
+    failed = next(r for r in caplog.records if r.getMessage() == "admin_login_failed")
+    assert failed.__dict__["fields"]["client"] == "198.51.100.7"

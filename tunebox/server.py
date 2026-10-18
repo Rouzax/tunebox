@@ -6,17 +6,19 @@ import json
 import logging
 import time
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
+from tunebox.admin import MAX_BODY, Admin, Request
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
-from tunebox.config import StreamConfig
+from tunebox.config import Network, StreamConfig
 from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
 from tunebox.logos import Logos
 from tunebox.logs import bound, event
+from tunebox.netguard import client_address
 from tunebox.runtime import Snapshot
 
 log = logging.getLogger(__name__)
@@ -29,6 +31,7 @@ FRESH_WAIT_S = 2.5
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".json": "application/json",
     ".webmanifest": "application/manifest+json",
@@ -114,8 +117,13 @@ class TuneboxServer(ThreadingHTTPServer):
         web_dir: Path,
         logos: Logos | None = None,
         bursts: Bursts | None = None,
+        admin: Admin | None = None,
+        trusted: tuple[Network, ...] = (),
     ) -> None:
         self.current = snapshot
+        self.admin = admin
+        self.trusted = trusted
+        self.warned_proxies = False
         self.bursts = bursts
         self.web_dir = web_dir.resolve()
         self.logos = logos
@@ -140,6 +148,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:
         self._handle(head=True)
 
+    def do_POST(self) -> None:
+        self._handle(head=False)
+
     def log_message(self, format: str, *args: Any) -> None:  # noqa: V107
         """Replaced by one structured line per request in _handle."""
 
@@ -147,13 +158,29 @@ class Handler(BaseHTTPRequestHandler):
         started = time.monotonic()
         self._status = 0
         path = urllib.parse.urlsplit(self.path).path
-        # GET and HEAD bodies are never read, so on a kept-alive connection the
-        # body would be parsed as the next request. Answer, then hang up.
-        if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0":
+        is_admin = path == "/admin" or path.startswith("/admin/")
+        body = b""
+        if self.command == "POST":
+            read = self._read_body()
+            if read is None:
+                return
+            body = read
+        elif (
+            self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0"
+        ):
+            # GET and HEAD bodies are never read, so on a kept-alive connection
+            # the body would be parsed as the next request. Answer, then hang up.
             self.close_connection = True
-        with bound("req"):
+        # The admin- context also tells the log formatter to withhold
+        # exception text, which can carry what was typed.
+        with bound("admin" if is_admin else "req"):
             try:
-                self._route(path, head)
+                if is_admin:
+                    self._admin(path, head, body)
+                elif self.command == "POST":
+                    self._send_json(405, {"error": "method_not_allowed"}, head)
+                else:
+                    self._route(path, head)
             except BrokenPipeError, ConnectionResetError:
                 pass  # the client went away mid-response
             except Exception:  # keep one broken request out of socketserver's stderr
@@ -170,6 +197,39 @@ class Handler(BaseHTTPRequestHandler):
                     status=self._status,
                     duration_ms=round((time.monotonic() - started) * 1000),
                 )
+
+    def _read_body(self) -> bytes | None:
+        """The request body, or None after answering 411 or 413. A body
+        that is not read would be parsed as the next request, so a refused
+        one also ends the connection."""
+        length = self.headers.get("Content-Length")
+        if self.headers.get("Transfer-Encoding") or length is None or not length.isdigit():
+            self.close_connection = True
+            self._send_json(411, {"error": "length_required"}, False)
+            return None
+        if int(length) > MAX_BODY:
+            self.close_connection = True
+            self._send_json(413, {"error": "too_large"}, False)
+            return None
+        return self.rfile.read(int(length))
+
+    def _admin(self, path: str, head: bool, body: bytes) -> None:
+        admin = self.app.admin
+        if admin is None:
+            return self._send_json(404, {"error": "not_found"}, head)
+        # Every line: a proxy may add its own line after the client's, and
+        # the first line alone would be the client's word.
+        forwarded = ", ".join(self.headers.get_all("X-Forwarded-For") or []) or None
+        if forwarded and not self.app.trusted and not self.app.warned_proxies:
+            self.app.warned_proxies = True
+            # Every client would share the proxy's address: limits and
+            # CrowdSec would then punish everyone at once.
+            event(log, logging.WARNING, "trusted_proxies_unset", peer=self.client_address[0])
+        client = client_address(self.client_address[0], forwarded, self.app.trusted)
+        method = "GET" if head else self.command
+        headers = dict(self.headers.items())
+        response = admin.handle(Request(method, path, headers, body, client))
+        self._send(response.status, response.body, response.content_type, head, response.headers)
 
     def _route(self, path: str, head: bool) -> None:
         parts = [p for p in path.split("/") if p]
@@ -246,9 +306,12 @@ class Handler(BaseHTTPRequestHandler):
         if target is None:
             return self._send_json(404, {"error": "not_found"}, head)
         kind = target.suffix.removeprefix(".")
-        headers = {"Cache-Control": "max-age=31536000, immutable"}
-        if kind == "svg":
-            headers["Content-Security-Policy"] = "sandbox"
+        headers = {
+            "Cache-Control": "max-age=31536000, immutable",
+            # An image opened directly cannot run anything on this origin,
+            # whatever its kind claims to be.
+            "Content-Security-Policy": "sandbox",
+        }
         self._send(200, target.read_bytes(), LOGO_TYPES[kind], head, headers)
 
     def _static(self, path: str, head: bool) -> None:
@@ -291,14 +354,20 @@ class Handler(BaseHTTPRequestHandler):
         body: bytes,
         content_type: str,
         head: bool,
-        headers: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
     ) -> None:
+        """headers may be pairs, so a header such as Set-Cookie can repeat."""
         self._status = status
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
-        for name, value in (headers or {}).items():
+        pairs: Iterable[tuple[str, str]]
+        if isinstance(headers, Mapping):
+            pairs = cast("Mapping[str, str]", headers).items()
+        else:
+            pairs = headers or ()
+        for name, value in pairs:
             self.send_header(name, value)
         if self.close_connection:
             self.send_header("Connection", "close")

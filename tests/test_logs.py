@@ -44,3 +44,23 @@ def test_per_logger_levels() -> None:
 def test_unknown_level_is_rejected() -> None:
     with pytest.raises(ValueError, match="loud"):
         configure("loud", io.StringIO())
+
+
+def test_admin_crash_logs_no_input() -> None:
+    buffer = io.StringIO()
+    configure("info", buffer)
+    log = logging.getLogger("tunebox.test")
+    with bound("admin"):
+        try:
+            int("secret-pin-1234")
+        except ValueError:
+            log.error("request_crashed", exc_info=True)
+    with bound("req"):
+        try:
+            int("visible-value")
+        except ValueError:
+            log.error("request_crashed", exc_info=True)
+    out = buffer.getvalue()
+    assert "secret-pin-1234" not in out
+    assert "ValueError (details withheld" in out
+    assert "visible-value" in out
