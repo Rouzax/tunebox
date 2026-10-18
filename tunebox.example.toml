@@ -4,6 +4,9 @@
 port = 8080
 # host = "0.0.0.0"
 # data_dir defaults to the directory this file is in.
+# Behind a reverse proxy: its address or network, so tunebox sees visitors'
+# addresses (needed for the admin panel's limits).
+# trusted_proxies = ["172.18.0.0/16"]
 
 [defaults]
 # Seconds after a track's start time at which it counts as heard. The player
@@ -20,6 +23,12 @@ history_size = 50
 # latitude = 52.0
 # longitude = 5.0
 # default_channel = "owr"
+
+# [admin]
+# The admin panel, off by default. See "Set up the admin panel" in the README.
+# enabled = true
+# public_origin = "https://radio.example"
+# setup_page = true
 
 [[channels]]
 id = "owr"

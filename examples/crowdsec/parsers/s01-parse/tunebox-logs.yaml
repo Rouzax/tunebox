@@ -1,0 +1,20 @@
+# tunebox writes one JSON object per line. CrowdSec's non-syslog stage puts
+# the line in evt.Parsed.message and the acquisition label in
+# evt.Parsed.program. Only lines that name a client address go on.
+onsuccess: next_stage
+filter: "evt.Parsed.program == 'tunebox' && JsonExtract(evt.Parsed.message, 'client') != ''"
+name: tunebox/tunebox-logs
+description: "Parse tunebox log lines that name a client address"
+statics:
+  - parsed: event
+    expression: JsonExtract(evt.Parsed.message, "event")
+  - meta: log_type
+    expression: "'tunebox_' + JsonExtract(evt.Parsed.message, 'event')"
+  - meta: source_ip
+    expression: JsonExtract(evt.Parsed.message, "client")
+  - meta: reason
+    expression: JsonExtract(evt.Parsed.message, "reason")
+  - meta: why
+    expression: JsonExtract(evt.Parsed.message, "why")
+  - meta: service
+    value: tunebox

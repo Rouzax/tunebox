@@ -1,0 +1,19 @@
+# Five failed admin logins or wrong setup tokens from one address within
+# about ten minutes. Refused cross-site requests are not counted: any web
+# page can make a visitor's browser send one. Rate-limit refusals count
+# only when this address is the one locked, not when someone else's flood
+# fills the shared pace.
+type: leaky
+name: tunebox/admin-bf
+description: "Repeated failed logins on the tunebox admin panel"
+filter: >-
+  evt.Meta.log_type in ['tunebox_admin_login_failed', 'tunebox_admin_setup_token_rejected']
+  || (evt.Meta.log_type == 'tunebox_admin_rate_limited' && evt.Meta.why == 'address')
+groupby: evt.Meta.source_ip
+capacity: 4
+leakspeed: 2m
+blackhole: 5m
+labels:
+  service: tunebox
+  type: bruteforce
+  remediation: true

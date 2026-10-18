@@ -1,0 +1,16 @@
+# Three wrong codes (TOTP or recovery) after a correct password within
+# about ten minutes: someone has the password. Ban longer (see README).
+type: leaky
+name: tunebox/admin-totp-bf
+description: "Wrong TOTP codes after a correct tunebox admin password"
+filter: >-
+  evt.Meta.log_type == 'tunebox_admin_login_failed'
+  && (evt.Meta.reason == 'totp' || evt.Meta.reason == 'recovery')
+groupby: evt.Meta.source_ip
+capacity: 2
+leakspeed: 5m
+blackhole: 5m
+labels:
+  service: tunebox
+  type: bruteforce
+  remediation: true

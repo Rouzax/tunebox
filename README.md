@@ -194,6 +194,64 @@ block some features on plain-http pages from elsewhere. In your proxy, forward a
 If your proxy runs in Docker on the same network as tunebox, it can use
 `http://tunebox:8080` instead.
 
+## Set up the admin panel
+
+The admin panel is where you will manage stations from the browser. For
+now it is the login only: setting up the account, logging in and out, and
+seeing which address tunebox sees for you. It is off until you turn it on.
+
+**What you need:** tunebox reachable over https at a public address, a
+reverse proxy in front of it, and an authenticator app on your phone
+(Google Authenticator, 1Password, Aegis or similar).
+
+1. In `data/tunebox.toml`, add:
+
+   ```toml
+   [server]
+   trusted_proxies = ["172.18.0.0/16"]   # your proxy's address or network
+
+   [admin]
+   enabled = true
+   public_origin = "https://radio.example"   # your public address
+   ```
+
+   `trusted_proxies` lets tunebox see the visitor's address behind the
+   proxy. Without it every visitor looks like the proxy, so one person's
+   wrong passwords would lock everyone out; tunebox then logs
+   `trusted_proxies_unset`.
+2. Restart: `docker compose up -d`.
+3. Create the account:
+
+   ```sh
+   docker exec -it tunebox python -m tunebox admin setup
+   ```
+
+   It asks for a password (at least 12 characters), prints an
+   `otpauth://` link and a secret to add to your authenticator app, asks
+   for the code the app shows, and prints ten recovery codes. Keep those
+   safe: each one replaces a code once if you lose your phone.
+4. Open `https://radio.example/admin/` and log in with the password and
+   the code from the app. The page shows the address tunebox sees for
+   you; if that is your proxy's address, check `trusted_proxies`.
+
+To replace the account (a lost phone and no recovery codes left), run the
+command with `--reset`; that signs out every session.
+
+**Setting it up in the browser instead:** add `setup_page = true` to
+`[admin]` and restart. tunebox logs `admin_setup_token` with a one-time
+token; open `https://radio.example/admin/?token=<token>` within 15 minutes
+to choose the password and scan a QR code. The page closes once the
+account exists. Remove `setup_page` afterwards.
+
+**How it is protected:** the panel only accepts changes from
+`public_origin`, over https. Five failed logins from one address lock that
+address for 15 minutes. Many wrong codes after a correct password slow
+logins down for everyone and show a warning once you are logged in: your
+password is then probably known. To have CrowdSec ban repeated attempts at
+your proxy, see `examples/crowdsec/README.md`. To switch the panel off, set
+`enabled = false` (or remove `[admin]`) and restart: every `/admin`
+address then answers 404.
+
 ## Use it with PawTunes
 
 You only need this while you still use PawTunes. tunebox can supply the
@@ -365,6 +423,10 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 |---|---|---|
 | The container stops right away; the log says `tunebox: <something>: <reason>` | A mistake in `data/tunebox.toml`, or the file is missing. | Fix what the message names, then `docker compose up -d`. |
 | The container stops right away; the log says `settings_unavailable` | The `data` folder or `data/tunebox.db` is not writable by user id 1000, or `tunebox.db` is damaged or comes from a newer tunebox. | Most often it is the owner: `sudo chown -R 1000:1000 data` and restart. Otherwise restore `tunebox.db` from a back-up, or move it aside (with its `-wal` and `-shm` files): tunebox then starts with a new database and takes the stations from `tunebox.toml`. |
+| `trusted_proxies_unset` in the log | tunebox is behind a proxy but does not know it, so every visitor has the proxy's address. | Set `trusted_proxies` in `[server]` to the proxy's address or network and restart. |
+| The admin login says "Login failed" with the right password | The code was already used, the phone's clock is off, or a recovery code was typed with a mistake. | Wait for the next code and check the phone's time. After five failures the address is locked for 15 minutes. |
+| The admin page says "Open the admin panel at its public https address" | It was opened by another address (a LAN address, or plain http). | Open it at `public_origin`. |
+| The admin page says "No admin account yet" | No account was set up. | Run the setup command in [Set up the admin panel](#set-up-the-admin-panel). |
 | The log says `tunebox: cannot listen on 0.0.0.0:<port>` | `port` in `[server]` was changed to one that is not free inside the container. | Remove `port` from `[server]` (8080 is the default) and change the published port in `compose.yaml` instead. |
 | `docker compose up` complains the port is already allocated | Another program on the machine uses that port. | Choose a free port as in [Install](#install) step 3. |
 | `store_unavailable` in the log | tunebox could open its database but the cover store could not, or a later write failed (a full disk, for example). | Check free disk space and that `data` is owned by user id 1000, then restart. Until then tunebox plays, but forgets covers and recent titles on restart. |
@@ -394,6 +456,15 @@ is reported at startup instead of being ignored.
 | `host` | `"0.0.0.0"` | Address to listen on inside the container. |
 | `port` | `8080` | Port to listen on. Keep 8080 in the container; the health check uses it. |
 | `data_dir` | the folder of the config file | Where `tunebox.db` is kept. |
+| `trusted_proxies` | none | Addresses or networks of your reverse proxy, such as `["172.18.0.0/16"]`. Only connections from these may name the visitor's address (`X-Forwarded-For`). |
+
+`[admin]` (optional; see [Set up the admin panel](#set-up-the-admin-panel))
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Turns the admin panel on. Off, every `/admin` address answers 404. |
+| `public_origin` | none, required when enabled | The public https address without a path, such as `https://radio.example`. The panel accepts changes only from there. |
+| `setup_page` | `false` | Opens the one-time setup page while no account exists. |
 
 `[defaults]` (each can also be set per station)
 

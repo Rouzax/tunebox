@@ -1,0 +1,7 @@
+# Reads tunebox's log from Docker. Put this in /etc/crowdsec/acquis.d/tunebox.yaml
+# and set container_name to your container's name.
+source: docker
+container_name:
+  - tunebox
+labels:
+  type: tunebox
