@@ -302,6 +302,11 @@ docker compose restart
 If the file has a mistake, the container stops and the log names the line
 it did not accept, for example `tunebox: channels[2].source.mount: required`.
 
+tunebox keeps its stations in its database (`data/tunebox.db`). At start-up
+it compares them with `data/tunebox.toml` and takes the file's stations when
+they differ, so editing the file and restarting works as described here. A
+file without `[[channels]]` keeps the stations tunebox already has.
+
 ## Fine-tune when titles change
 
 Every station sends a song's title some seconds before you hear it, and how
@@ -338,8 +343,9 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   docker compose pull && docker compose up -d
   ```
 
-- **Back up**: everything worth keeping is in the `data` folder. Only
-  `tunebox.toml` matters; the database is rebuilt on its own.
+- **Back up**: everything worth keeping is in the `data` folder:
+  `tunebox.toml`, and `tunebox.db`, which holds the stations as tunebox last
+  loaded them, the covers and the recent lists.
 - **Reset** the recent lists and covers: stop tunebox, delete
   `data/tunebox.db`, `data/tunebox.db-wal` and `data/tunebox.db-shm`, and
   start it again. History refills from the stations and covers are looked
@@ -358,9 +364,10 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | What you see | Likely cause | What to do |
 |---|---|---|
 | The container stops right away; the log says `tunebox: <something>: <reason>` | A mistake in `data/tunebox.toml`, or the file is missing. | Fix what the message names, then `docker compose up -d`. |
+| The container stops right away; the log says `settings_unavailable` | The `data` folder or `data/tunebox.db` is not writable by user id 1000, or `tunebox.db` is damaged or comes from a newer tunebox. | Most often it is the owner: `sudo chown -R 1000:1000 data` and restart. Otherwise restore `tunebox.db` from a back-up, or move it aside (with its `-wal` and `-shm` files): tunebox then starts with a new database and takes the stations from `tunebox.toml`. |
 | The log says `tunebox: cannot listen on 0.0.0.0:<port>` | `port` in `[server]` was changed to one that is not free inside the container. | Remove `port` from `[server]` (8080 is the default) and change the published port in `compose.yaml` instead. |
 | `docker compose up` complains the port is already allocated | Another program on the machine uses that port. | Choose a free port as in [Install](#install) step 3. |
-| `store_unavailable` in the log | The `data` folder is not writable by user id 1000. | `sudo chown 1000:1000 data` and restart. Until then tunebox works but forgets everything on restart. |
+| `store_unavailable` in the log | tunebox could open its database but the cover store could not, or a later write failed (a full disk, for example). | Check free disk space and that `data` is owned by user id 1000, then restart. Until then tunebox plays, but forgets covers and recent titles on restart. |
 | The status page shows no covers for some songs | The song is in neither Deezer nor iTunes (common for unreleased tracks), or the catalogues could not be reached. | Nothing to do for unreleased tracks. A failed lookup is retried after 10 minutes, a song that was not found after 3 days. Look for `search_failed` in the log. |
 | A station's name on the status page says "(feed unreachable)" | The station's now-playing feed does not answer. | Nothing to do: tunebox keeps showing the last known songs and keeps trying, at most every 2 minutes. |
 | The title changes too early or too late | The delay does not fit this station or player. Stations other than the Tomorrowland channels start at the default and often need their own value. | See [Fine-tune when titles change](#fine-tune-when-titles-change). |
@@ -444,8 +451,10 @@ For player developers. All answers are JSON.
 `kbps`; `stream_url` is the first one's address) and `logo` (a path such as
 `/logos/owr.png?v=18df62ef34e6b8a7`, or `null` until the logo is downloaded
 or when none is configured) and `logo_small` (the same for the small copy
-under `/logos/small/`, or `null` when there is none: use `logo` then). It
-may be cached for five minutes.
+under `/logos/small/`, or `null` when there is none: use `logo` then).
+Ungrouped stations come first, then each group in order. The answer carries
+the configuration version in an `X-Tunebox-Version` header and is sent with
+`Cache-Control: no-cache`.
 
 **`GET /logos/<file>`** and **`GET /logos/small/<file>`** serve a
 downloaded logo and its small copy. Browsers may keep them for a
@@ -453,7 +462,7 @@ year: the `v` in the path from `/api/channels` changes whenever the logo is
 downloaded again, so use that path as given. SVG logos are sent with a
 policy that keeps them from running script.
 
-**`GET /api/channels/<id>/now?buffer_s=<seconds>&stream=<index>`** answers what is playing:
+**`GET /api/channels/<id>/now?buffer_s=<seconds>&stream=<name>`** answers what is playing:
 
 ```json
 {"current": {"artist": "CAMELPHAT, JOSH GIGANTE, KUUDA",
@@ -464,7 +473,9 @@ policy that keeps them from running script.
              "cover_kind": "album"},
  "upcoming": {"track": {"...": "..."}, "in_s": 14},
  "history": [{"...": "..."}],
- "stale_since": null}
+ "stale_since": null,
+ "version": 1,
+ "stream": "High"}
 ```
 
 - `buffer_s` (0 to 120, optional) is how far the player has fallen behind
@@ -473,11 +484,13 @@ policy that keeps them from running script.
   reconnect. tunebox adds it to `delay_s`. An invalid value is a `400`
   with `{"error": "bad_buffer_s"}`. (`audio.buffered` is no measure of
   this: Chrome keeps only a couple of seconds there.)
-- `stream` (optional) is the index of the stream playing, in the channel's
-  `streams` list. tunebox then adds the burst of earlier audio that stream
-  sends on connect, which it measures itself; the first answer for a new
-  stream comes without it. Leave it out while nothing plays. An index the
-  channel does not have is a `400` with `{"error": "bad_stream"}`.
+- `stream` (optional) is the name of the stream playing, from the
+  channel's `streams` list; a number is still accepted as its position.
+  tunebox then adds the burst of earlier audio that stream sends on
+  connect, which it measures itself; the first answer for a new stream
+  comes without it. Leave it out while nothing plays. A stream the channel
+  does not have is a `400` with `{"error": "bad_stream"}`: fetch
+  `/api/channels` again then.
 - `current` is `null` during a jingle; show the station name.
 - `upcoming` is the next song, announced but not heard yet. `in_s` counts
   down to the moment it becomes current. It is relative, so a wrong device
@@ -492,9 +505,15 @@ policy that keeps them from running script.
   site (for colour extraction).
 - `stale_since` is when the station's feed stopped answering, in
   milliseconds since 1970, or `null`. The data shown is then the last known.
+- `version` is the configuration version. When it differs from the one
+  `/api/channels` gave, fetch that list again: stations or streams changed.
+- `stream` is the name of the stream tunebox used, or `null`.
+- A `404` with `{"error": "unknown_channel"}` means the station is gone;
+  fetch `/api/channels` again.
 - Answers carry an `ETag`. Send it back as `If-None-Match` and an unchanged
   answer is a `304` without a body. The countdown is not part of the
-  comparison, so on a `304` keep your own deadline.
+  comparison, so on a `304` keep your own deadline. A new configuration
+  version changes the ETag.
 
 **`GET /api/pawtunes/<id>`** answers in the format PawTunes' "custom" stats
 source reads: `artist`, `title` (with its credit), `artwork` (optional) and
