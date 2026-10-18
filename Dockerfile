@@ -8,6 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY tunebox/ tunebox/
 COPY web/ web/
+COPY web_admin/ web_admin/
 COPY tunebox.example.toml ./
 
 USER 1000:1000

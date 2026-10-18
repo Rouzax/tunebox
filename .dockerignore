@@ -1,6 +1,7 @@
 *
 !tunebox/
 !web/
+!web_admin/
 web/tests/
 web/package.json
 !tunebox.example.toml

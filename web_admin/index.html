@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tunebox admin</title>
+<link rel="stylesheet" href="/css/fonts.css">
+<link rel="stylesheet" href="/admin/css/admin.css">
+<script type="module" src="/admin/js/admin.js"></script>
+</head>
+<body>
+<main>
+  <h1>tunebox admin</h1>
+  <p class="message" role="status" hidden></p>
+
+  <form id="login" hidden>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <label>Code from your authenticator app, or a recovery code
+      <input name="code" autocomplete="one-time-code" required></label>
+    <button type="submit"><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#lock"></use></svg> Log in</button>
+  </form>
+
+  <section id="none" hidden>
+    <p>No admin account yet. Set one up on the server with
+      <code>docker exec -it tunebox python -m tunebox admin setup</code>.</p>
+  </section>
+
+  <form id="setup" hidden>
+    <p>Set up the admin account. Scan the code with your authenticator app,
+      then choose a password and type the code the app shows.</p>
+    <div class="qr-box"></div>
+    <p>Or type this secret: <code class="secret"></code></p>
+    <label>Password (at least 12 characters)
+      <input name="password" type="password" autocomplete="new-password" minlength="12" required></label>
+    <label>Code from the app <input name="code" autocomplete="one-time-code" required></label>
+    <button type="submit">Create the account</button>
+  </form>
+
+  <section id="codes" hidden>
+    <p>Done. Keep these recovery codes somewhere safe; each replaces a code
+      once. Then log in.</p>
+    <ul class="recovery"></ul>
+    <button type="button" class="to-login">Log in</button>
+  </section>
+
+  <section id="shell" hidden>
+    <p class="warning" hidden><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#warning"></use></svg>
+      Many wrong codes were typed after your correct password. Your password
+      is probably known: change it.</p>
+    <p><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#check_circle"></use></svg>
+      Logged in. tunebox sees you at <code class="client"></code>.</p>
+    <p class="hint">If that is your proxy's address instead of yours, set
+      <code>trusted_proxies</code> in <code>tunebox.toml</code>.</p>
+    <button type="button" class="logout"><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#logout"></use></svg> Log out</button>
+  </section>
+</main>
+</body>
+</html>

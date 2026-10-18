@@ -1,0 +1,5 @@
+# One Material Symbols Rounded icon per line; "fill" adds the filled form.
+lock
+logout
+warning
+check_circle
