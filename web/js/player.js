@@ -14,6 +14,13 @@ const TICK_MS = 1000;
 // Events: state, audio ({element, cors}), webaudio-unavailable, autoplay-refused
 // ({resumed}: refused on a reconnect), interrupted (paused from outside),
 // debug (a reconnect decision, as text).
+// The stream's volume for a stored page level (0-100). Where the page
+// shows no slider, nothing on it could raise a lowered level, so the
+// device's own volume is the only control and the stream plays at full.
+export function pageVolume(level, sliderShown) {
+    return sliderShown ? level / 100 : 1;
+}
+
 export function createPlayer({events, makeAudio, timers, now}) {
     let audio = null;
     let audioCors = true;

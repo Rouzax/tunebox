@@ -148,7 +148,8 @@ it). What the buttons do:
   pick its quality, for example "Data saver (AAC 96)" for 4G.
 - **Volume and mute.** Narrow windows (the car's third, phones) and phones
   that do not let a web page set the volume (iPhones) show only mute; use
-  the device's own volume control there.
+  the device's own volume control there. The radio then plays at full
+  volume, whatever the slider was set to in a wider window.
 - **Visualizer** (bars icon), **small window** (box with arrow; not on
   touch screens) and **fullscreen**.
 - **Day/night** (top left) cycles automatic, day and night. Automatic

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createEmitter} from '../js/events.js';
-import {createPlayer} from '../js/player.js';
+import {createPlayer, pageVolume} from '../js/player.js';
 
 function fakeTimers() {
     let now = 0;
@@ -303,4 +303,12 @@ test('volume and mute reach the element', () => {
     player.play('https://example.invalid/a.aac');
     assert.equal(made[0].volume, 0.3);
     assert.equal(made[0].muted, true);
+});
+
+test('the page level applies only while its slider is shown', () => {
+    assert.equal(pageVolume(30, true), 0.3);
+    // Without the slider nothing on the page could raise a lowered level;
+    // the device's own volume is the control there.
+    assert.equal(pageVolume(30, false), 1);
+    assert.equal(pageVolume(50, false), 1);
 });

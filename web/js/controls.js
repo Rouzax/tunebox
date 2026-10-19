@@ -1,4 +1,6 @@
 // Play/stop, volume and mute in the control bar.
+import {pageVolume} from './player.js';
+
 export function bindControls(app) {
     const {root, events, player, storage, toast} = app;
     const bar = root.querySelector('.player');
@@ -15,14 +17,19 @@ export function bindControls(app) {
         bar.classList.add('no-volume');
     }
 
-    const level = storage.number('volume', 50, 0, 100);
-    slider.value = String(level);
-    player.setVolume(level / 100);
+    // The same width at which base.css hides the slider.
+    const narrow = window.matchMedia ? window.matchMedia('(max-width: 560px)') : null;
+    const sliderShown = () => !(narrow && narrow.matches);
+    const apply = () => player.setVolume(pageVolume(Number(slider.value), sliderShown()));
+    slider.value = String(storage.number('volume', 50, 0, 100));
+    apply();
+    if (narrow && narrow.addEventListener) {
+        narrow.addEventListener('change', apply);
+    }
     slider.addEventListener('input', () => {
-        const value = Number(slider.value);
-        player.setVolume(value / 100);
-        storage.set('volume', value);
-        toast.show(`Volume: ${value}`, 1000);
+        apply();
+        storage.set('volume', Number(slider.value));
+        toast.show(`Volume: ${slider.value}`, 1000);
     });
 
     let muted = false;
@@ -30,7 +37,7 @@ export function bindControls(app) {
         muted = !muted;
         player.setMuted(muted);
         muteButton.classList.toggle('muted', muted);
-        toast.show(muted ? 'Player muted.' : `Volume: ${slider.value}`, 1000);
+        toast.show(muted ? 'Player muted.' : sliderShown() ? `Volume: ${slider.value}` : 'Sound on.', 1000);
     });
 
     events.on('state', (state) => {

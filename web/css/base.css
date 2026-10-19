@@ -400,7 +400,8 @@ button {
 
 /* Narrow windows (the car's third, phones): the bar keeps play, history,
    stations, mute, visualizer and fullscreen. The device's own volume
-   control replaces the slider there. */
+   control replaces the slider there, and controls.js plays at full volume
+   (keep its width in step with this one). */
 @media (max-width: 560px) {
     .tunebox .volume-slider {
         display: none;
