@@ -18,6 +18,7 @@ export function bindLayout(app) {
     } else {
         window.addEventListener('resize', update);
     }
+    bindFocusRings(root);
     if (app.embed) {
         return;
     }
@@ -38,6 +39,21 @@ export function bindLayout(app) {
             app.stop();
         }
     });
+}
+
+// Focus rings only after keyboard navigation. A tap leaves focus on the
+// tapped button, and any later key (Escape, say, around leaving fullscreen
+// on a car with no keyboard) makes the browser draw its keyboard ring
+// there. base.css hides rings unless .keyboard is set.
+const NAVIGATION_KEYS = ['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+
+function bindFocusRings(root) {
+    document.addEventListener('keydown', (event) => {
+        if (NAVIGATION_KEYS.indexOf(event.key) >= 0) {
+            root.classList.add('keyboard');
+        }
+    }, true);
+    document.addEventListener('pointerdown', () => root.classList.remove('keyboard'), true);
 }
 
 function bindFullscreen(root) {

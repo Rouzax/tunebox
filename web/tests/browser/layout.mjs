@@ -242,6 +242,52 @@ function inspect(page, slack) {
     return {problems, layout: root.dataset.layout};
 }
 
+// The car has a touch screen and no keyboard, yet buttons there showed the
+// keyboard focus ring after leaving fullscreen. A tap followed by a key
+// that is not navigation (Escape) must not leave that ring on the tapped
+// button; Tab still shows one.
+async function checkFocusRing(send, evaluate) {
+    const problems = [];
+    await send('Emulation.setDeviceMetricsOverride', {width: 489, height: 518, deviceScaleFactor: 1, mobile: false});
+    await send('Emulation.setTouchEmulationEnabled', {enabled: true, maxTouchPoints: 5});
+    await send('Page.navigate', {url: `${BASE}/`});
+    await sleep(2500);
+    const ring = () => evaluate(`(() => {
+        const focused = document.querySelector(':focus-visible');
+        return focused && getComputedStyle(focused).outlineStyle !== 'none' ? focused.className.baseVal || focused.className : null;
+    })()`);
+    const key = async (name, code) => {
+        await send('Input.dispatchKeyEvent', {type: 'keyDown', key: name, code: name, windowsVirtualKeyCode: code});
+        await send('Input.dispatchKeyEvent', {type: 'keyUp', key: name, code: name, windowsVirtualKeyCode: code});
+        await sleep(200);
+    };
+    const at = await evaluate(`(() => {
+        const box = document.querySelector('.volume-icon').getBoundingClientRect();
+        return {x: box.x + box.width / 2, y: box.y + box.height / 2};
+    })()`);
+    await send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [at]});
+    await send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+    await sleep(200);
+    await key('Escape', 27);
+    const stray = await ring();
+    if (stray) {
+        problems.push(`focus ring on ${stray} after a tap and Escape`);
+    }
+    await key('Tab', 9);
+    if (!(await ring())) {
+        problems.push('no focus ring after Tab');
+    }
+    await send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [at]});
+    await send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+    await sleep(200);
+    const after = await ring();
+    if (after) {
+        problems.push(`focus ring on ${after} after a tap that followed Tab`);
+    }
+    await send('Emulation.setTouchEmulationEnabled', {enabled: false});
+    return problems;
+}
+
 async function run() {
     const {send, errors, close, evaluate} = await connect({port: PORT});
     const failures = [];
@@ -250,6 +296,7 @@ async function run() {
         mkdirSync(SHOTS, {recursive: true});
     }
     try {
+        failures.push(...await checkFocusRing(send, evaluate));
         for (const size of SIZES) {
             await send('Emulation.setDeviceMetricsOverride', {
                 width: size.width, height: size.height, deviceScaleFactor: 1, mobile: Boolean(size.mobile),

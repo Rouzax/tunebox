@@ -236,6 +236,11 @@ button {
     accent-color: var(--accent-color);
 }
 
+/* Rings show after Tab or an arrow key only; layout.js sets .keyboard. */
+.tunebox:not(.keyboard) :focus-visible {
+    outline: none;
+}
+
 /* iOS ignores the volume property; controls.js sets .no-volume there. */
 .tunebox .player.no-volume .volume-icon,
 .tunebox .player.no-volume .volume-slider {
