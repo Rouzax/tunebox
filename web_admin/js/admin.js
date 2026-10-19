@@ -47,14 +47,22 @@ function explain(text, state) {
 
 const view = document.querySelector('#shell .view');
 let keepMessage = false;
+// The hash the view was drawn for, to go back to when leaving is refused.
+let shown = '';
 
 const ctx = {
     config: null,
+    // A page with edits of its own sets {dirty(), ask(proceed)}: ask shows
+    // its question and calls proceed when the edits may go.
+    unsaved: null,
     message,
     fail,
     // keep: the page moves on after a save and its "Saved ..." stays;
     // any other navigation clears the message.
     go(hash, keep) {
+        if (!mayLeave(() => ctx.go(hash, keep))) {
+            return;
+        }
         keepMessage = Boolean(keep);
         if (window.location.hash === hash) {
             if (!keepMessage) {
@@ -180,10 +188,26 @@ async function answered(status, data) {
     fail(data);
 }
 
+// True when the page may be left now; otherwise the page asks, and
+// proceed runs if the answer is to leave.
+function mayLeave(proceed) {
+    const page = ctx.unsaved;
+    if (!page || !page.dirty()) {
+        return true;
+    }
+    page.ask(() => {
+        ctx.unsaved = null;
+        proceed();
+    });
+    return false;
+}
+
 function route() {
+    ctx.unsaved = null;
     if (!ctx.config) {
         return;
     }
+    shown = window.location.hash;
     const hash = window.location.hash || '#stations';
     for (const link of document.querySelectorAll('#shell nav a')) {
         link.classList.toggle('current', hash.startsWith(link.getAttribute('href')));
@@ -198,7 +222,28 @@ function route() {
     }
 }
 
+window.addEventListener('beforeunload', (event) => {
+    if (ctx.unsaved && ctx.unsaved.dirty()) {
+        event.preventDefault();
+        event.returnValue = '';
+    }
+});
+
+// Links and ctx.go ask before the hash changes. Back and forward cannot
+// be cancelled, so a refused one puts the old hash back without drawing.
+document.querySelector('#shell nav').addEventListener('click', (event) => {
+    const link = event.target.closest('a');
+    if (link && !mayLeave(() => ctx.go(link.getAttribute('href')))) {
+        event.preventDefault();
+    }
+});
+
 window.addEventListener('hashchange', () => {
+    const target = window.location.hash;
+    if (!mayLeave(() => ctx.go(target))) {
+        window.history.replaceState(null, '', shown || '#stations');
+        return;
+    }
     if (!keepMessage) {
         message('');
     }
@@ -251,17 +296,36 @@ function guarded(handler) {
     return (event) => handler(event).catch(() => message('Could not reach tunebox.'));
 }
 
-document.querySelector('#login').addEventListener('submit', guarded(async (event) => {
+// The password and the code go to the server together; the code has a form
+// of its own because authenticator autofill (1Password on Android) fills a
+// code only there. A refusal does not say which was wrong, so it starts
+// again from the password.
+const login = document.querySelector('#login');
+const codeForm = document.querySelector('#code');
+
+login.addEventListener('submit', (event) => {
     event.preventDefault();
-    const form = event.target;
-    const answer = {password: form.password.value, code: form.code.value};
-    form.code.value = '';
+    message('');
+    show('code');
+    codeForm.code.focus();
+});
+
+codeForm.querySelector('.back').addEventListener('click', () => {
+    codeForm.code.value = '';
+    show('login');
+});
+
+codeForm.addEventListener('submit', guarded(async (event) => {
+    event.preventDefault();
+    const answer = {password: login.password.value, code: codeForm.code.value};
+    codeForm.code.value = '';
     const {ok, data} = await call('POST', 'login', answer);
     if (!ok) {
         fail(data);
+        show('login');
         return;
     }
-    form.password.value = '';
+    login.password.value = '';
     message('');
     await refresh();
 }));
@@ -291,7 +355,7 @@ document.querySelector('.to-login').addEventListener('click', () => {
     show('login');
 });
 
-document.querySelector('.logout').addEventListener('click', guarded(async () => {
+const logout = guarded(async () => {
     const {ok, data} = await call('POST', 'logout');
     if (!ok) {
         // Still logged in: do not pretend otherwise.
@@ -300,9 +364,16 @@ document.querySelector('.logout').addEventListener('click', guarded(async () => 
     }
     setCsrf(null);
     ctx.config = null;
+    ctx.unsaved = null;
     view.replaceChildren();
     message('');
     show('login');
-}));
+});
+
+document.querySelector('.logout').addEventListener('click', () => {
+    if (mayLeave(logout)) {
+        logout();
+    }
+});
 
 refresh().catch(() => message('Could not reach tunebox.'));

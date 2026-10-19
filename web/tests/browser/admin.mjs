@@ -219,10 +219,46 @@ async function run() {
             return wrong.length ? `no account field before the password in ${wrong.join(', ')}` : null;
         });
 
-        await step('log in', async () => {
+        // Authenticator autofill (1Password on Android) fills a code only in
+        // a form of its own; with the password beside it, it copies the code.
+        const toCode = async () => {
             await evaluate(`(() => {
                 const form = document.querySelector('#login');
                 form.password.value = ${JSON.stringify(PASSWORD)};
+                form.requestSubmit();
+            })()`);
+            if (!(await until(`!document.querySelector('#code').hidden && document.querySelector('#login').hidden`))) {
+                return 'the code form did not follow the password';
+            }
+            const inputs = await evaluate(`[...document.querySelectorAll('#code input')].map((i) => i.autocomplete)`);
+            return inputs.join() === 'one-time-code' ? null : `the code form holds ${inputs.join() || 'nothing'}`;
+        };
+        await step('the code has a form of its own', toCode);
+        await noSideways('code');
+
+        await step('a failed login asks again from the password', async () => {
+            await evaluate(`(() => {
+                const form = document.querySelector('#code');
+                form.code.value = '000000';
+                form.requestSubmit();
+            })()`);
+            if (!(await until(`!document.querySelector('#login').hidden`))) {
+                return 'the password form did not come back';
+            }
+            const kept = await evaluate(`document.querySelector('#login').password.value`);
+            const said = await message();
+            return said === 'Login failed.' && kept === PASSWORD ? null : `${said} / password kept: ${kept === PASSWORD}`;
+        });
+
+        await step('log in', async () => {
+            // Logins are paced at one a second across all addresses.
+            await sleep(1100);
+            const problem = await toCode();
+            if (problem) {
+                return problem;
+            }
+            await evaluate(`(() => {
+                const form = document.querySelector('#code');
                 form.code.value = ${JSON.stringify(totp(Math.floor(Date.now() / 30000)))};
                 form.requestSubmit();
             })()`);
@@ -375,6 +411,71 @@ async function run() {
             return said.startsWith('Saved') && ids === 'first,second' ? null : `${said} / player ${ids}`;
         });
 
+        const editing = () => evaluate(`Boolean(document.querySelector('form.edit')) && location.hash === '#edit/first'`);
+        const asked = () => evaluate(`Boolean(document.querySelector('form.edit .confirm'))`);
+        const answer = (label) => evaluate(`[...document.querySelectorAll('form.edit .confirm button')].find((b) => b.textContent.trim() === ${JSON.stringify(label)}).click()`);
+
+        await step('an unchanged editor leaves without asking', async () => {
+            await until(`document.querySelector('.station[data-id="first"] button[title="Edit First Station"]')`);
+            await click(`.station[data-id="first"] button[title="Edit First Station"]`);
+            await until(`document.querySelector('form.edit')`);
+            // Typed and typed back is no change.
+            await evaluate(`(() => {
+                const name = document.querySelector('form.edit').elements.name;
+                name.value = 'Something else';
+                name.dispatchEvent(new Event('input', {bubbles: true}));
+                name.value = 'First Station';
+                name.dispatchEvent(new Event('input', {bubbles: true}));
+            })()`);
+            await evaluate(`[...document.querySelectorAll('form.edit button')].find((b) => b.textContent.trim() === 'Cancel').click()`);
+            return (await until(`location.hash === '#stations' && document.querySelector('.station')`)) ? null : 'stayed on the form';
+        });
+
+        await step('leaving the editor with unsaved changes asks first', async () => {
+            await until(`document.querySelector('.station[data-id="first"] button[title="Edit First Station"]')`);
+            await click(`.station[data-id="first"] button[title="Edit First Station"]`);
+            await until(`document.querySelector('form.edit')`);
+            await evaluate(`document.querySelector('form.edit').elements.name.value = 'Not saved'`);
+            await click(`#shell nav a[href="#history"]`);
+            await sleep(300);
+            if (!(await editing()) || !(await asked())) {
+                return 'the menu link left without asking';
+            }
+            await answer('Keep editing');
+            if (await asked()) {
+                return 'the question stayed after Keep editing';
+            }
+            await evaluate('history.back()');
+            await sleep(300);
+            if (!(await editing()) || !(await asked())) {
+                return 'the back button left without asking';
+            }
+            await answer('Keep editing');
+            const kept = await evaluate(`document.querySelector('form.edit').elements.name.value`);
+            if (kept !== 'Not saved') {
+                return `the form lost what was typed (${kept})`;
+            }
+            const leaves = await evaluate(`(() => {
+                const event = new Event('beforeunload', {cancelable: true});
+                window.dispatchEvent(event);
+                return event.defaultPrevented;
+            })()`);
+            if (!leaves) {
+                return 'a reload would leave without asking';
+            }
+            await evaluate(`[...document.querySelectorAll('form.edit .actions button')].find((b) => b.textContent.trim() === 'Cancel').click()`);
+            await sleep(300);
+            if (!(await asked())) {
+                return 'Cancel left without asking';
+            }
+            await answer('Leave without saving');
+            if (!(await until(`location.hash === '#stations' && document.querySelector('.station')`))) {
+                return 'Leave without saving stayed on the form';
+            }
+            const names = (await channels(base)).map((c) => c.name).join();
+            return names.indexOf('Not saved') >= 0 ? 'the change was saved' : null;
+        });
+
         await step('rename the first station', async () => {
             await until(`document.querySelector('.station[data-id="first"] button[title="Edit First Station"]')`);
             await click(`.station[data-id="first"] button[title="Edit First Station"]`);
@@ -429,7 +530,14 @@ async function run() {
                 return `no refusal shown (message: ${await message()})`;
             }
             const stored = await evaluate(`fetch('/admin/api/config').then((r) => r.json()).then((d) => JSON.stringify(d.state.channels.map((c) => c.doc.rules || null)))`);
-            return stored.indexOf('(a+)+') >= 0 ? 'the pattern was stored' : null;
+            if (stored.indexOf('(a+)+') >= 0) {
+                return 'the pattern was stored';
+            }
+            // The refused pattern is still in the form, unsaved.
+            await evaluate(`[...document.querySelectorAll('form.edit .actions button')].find((b) => b.textContent.trim() === 'Cancel').click()`);
+            await until(`document.querySelector('form.edit .confirm')`);
+            await answer('Leave without saving');
+            return (await until(`location.hash === '#stations'`)) ? null : 'could not leave the form';
         });
 
         await step('restore the version before the rename', async () => {

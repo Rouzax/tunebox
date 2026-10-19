@@ -16,9 +16,16 @@
   <form id="login" hidden>
     <label>Account <input name="username" autocomplete="username" value="admin" readonly></label>
     <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit">Next</button>
+  </form>
+
+  <form id="code" hidden>
     <label>Code from your authenticator app, or a recovery code
       <input name="code" autocomplete="one-time-code" required></label>
-    <button type="submit"><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#lock"></use></svg> Log in</button>
+    <div class="actions">
+      <button type="submit"><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#lock"></use></svg> Log in</button>
+      <button type="button" class="back quiet">Back</button>
+    </div>
   </form>
 
   <section id="none" hidden>

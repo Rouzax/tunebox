@@ -265,9 +265,11 @@ Authenticator, 1Password, Aegis or similar), and one of these:
    `otpauth://` link and a secret to add to your authenticator app, asks
    for the code the app shows, and prints ten recovery codes. Keep those
    safe: each one replaces a code once if you lose your phone.
-4. Open `public_origin` followed by `/admin/` and log in with the password and
-   the code from the app. The page shows the address tunebox sees for
-   you; if that is your proxy's address, check `trusted_proxies`.
+4. Open `public_origin` followed by `/admin/`, type the password and press
+   Next, then type the code from the app. The code has a page of its own
+   so a password manager that holds the authenticator secret can fill it
+   in. The page shows the address tunebox sees for you; if that is your
+   proxy's address, check `trusted_proxies`.
 
 To replace the account (a lost phone and no recovery codes left), run the
 command with `--reset`; that signs out every session.
@@ -334,7 +336,9 @@ seconds), without a restart.
 
 The edit form has the same settings as a `[[channels]]` block (see
 [Change the stations](#change-the-stations)). Empty fields use the
-defaults, shown greyed out. Title rules are regular expressions and run on
+defaults, shown greyed out. Nothing in the form is stored until you press
+Save; leaving it with changes (Cancel, the menu, the back button or a
+reload) asks first. Title rules are regular expressions and run on
 every title, and one slow match stops all of tunebox while it runs. So
 tunebox refuses a pattern that could take long on some title:
 
@@ -541,7 +545,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | The container stops right away; the log says `tunebox: <something>: <reason>` | A mistake in `data/tunebox.toml`, or the file is missing. | Fix what the message names, then `docker compose up -d`. |
 | The container stops right away; the log says `settings_unavailable` | The `data` folder or `data/tunebox.db` is not writable by user id 1000, or `tunebox.db` is damaged or comes from a newer tunebox. | Most often it is the owner: `sudo chown -R 1000:1000 data` and restart. Otherwise restore `tunebox.db` from a back-up, or move it aside (with its `-wal` and `-shm` files): tunebox then starts with a new database and takes the stations from `tunebox.toml`. |
 | `trusted_proxies_unset` in the log | tunebox is behind a proxy but does not know it, so every visitor has the proxy's address. | Set `trusted_proxies` in `[server]` to the proxy's address or network and restart. |
-| The admin login says "Login failed" with the right password | The code was already used, the phone's clock is off, or a recovery code was typed with a mistake. | Wait for the next code and check the phone's time. After five failures the address is locked for 15 minutes. |
+| The admin login says "Login failed" with the right password | The code was already used, the phone's clock is off, or a recovery code was typed with a mistake. The login goes back to the password page because tunebox does not say which of the two was wrong. | Press Next with the password still filled in, wait for the next code and check the phone's time. After five failures the address is locked for 15 minutes. |
 | The admin page says "Open the admin panel at the address set as public_origin" | It was opened by another address, such as the IP address instead of the host name, or http instead of https. | Open it at `public_origin`, exactly as written there. |
 | `/admin/` answers 404 although the panel is on, and the log says `admin_not_nearby` | `public_origin` is plain http and the request did not come from the home network: from the internet, or through a proxy that is not in `trusted_proxies`. | Open the panel directly at `public_origin` from the home network or the VPN. Through a proxy, set up https instead. |
 | `config_file_ignored` in the log | The admin panel is on, so tunebox does not read the `parts` it names from `tunebox.toml` (`channels`, `defaults`, `player`); the database has its own, and they differ. | Change stations in the panel. For `defaults` or `player`, see [Set up the admin panel](#set-up-the-admin-panel). To stop the warning, make the file match or remove those parts from it. |

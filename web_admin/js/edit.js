@@ -157,29 +157,10 @@ export function render(root, ctx, id) {
             el('button', {type: 'submit'}, 'Save'),
             button('close', 'Cancel', () => ctx.go('#stations'), {class: 'quiet'})));
 
-    form.addEventListener('submit', async (event) => {
-        event.preventDefault();
+    // The station as Save would store it, from what the form holds now.
+    function collect() {
         const values = form.elements;
         const newId = existing ? row.id : values.id.value.trim();
-        const show = (textValue) => {
-            error.textContent = textValue;
-            error.hidden = !textValue;
-        };
-        if (!existing && !validId(newId)) {
-            show('The id needs lower-case letters, digits and - only, and must not start with -.');
-            return;
-        }
-        // The stored state at the time of saving, which a stale answer
-        // reloads in between.
-        const current = ctx.config.state;
-        if (existing && !current.channels.some((item) => item.id === row.id)) {
-            show(`${row.id} was deleted elsewhere in the meantime; nothing was saved.`);
-            return;
-        }
-        if (!existing && current.channels.some((item) => item.id === newId)) {
-            show(`There is already a station with the id ${newId}.`);
-            return;
-        }
         const out = {id: newId, name: values.name.value.trim(), source: source.value()};
         streamsTo(out, streams, Boolean(doc.stream_url));
         ['logo', 'default_image'].forEach((key) => {
@@ -205,17 +186,60 @@ export function render(root, ctx, id) {
                 out[key] = Number(values[key].value);
             }
         });
-        const next = {id: newId, group: values.group.value || null, enabled: existing ? row.enabled : true, doc: out};
+        return {id: newId, group: values.group.value || null, enabled: existing ? row.enabled : true, doc: out};
+    }
+
+    const question = el('div', {class: 'confirm', role: 'alert'});
+    let opened = null;
+    ctx.unsaved = {
+        dirty: () => JSON.stringify(collect()) !== opened,
+        ask(proceed) {
+            const stay = button('edit', 'Keep editing', () => question.remove());
+            question.replaceChildren(
+                el('span', null, 'This station has changes that are not saved.'),
+                button('close', 'Leave without saving', proceed, {class: 'danger'}),
+                stay);
+            form.querySelector('h2').after(question);
+            stay.focus();
+        },
+    };
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const next = collect();
+        const newId = next.id;
+        const out = next.doc;
+        const show = (textValue) => {
+            error.textContent = textValue;
+            error.hidden = !textValue;
+        };
+        if (!existing && !validId(newId)) {
+            show('The id needs lower-case letters, digits and - only, and must not start with -.');
+            return;
+        }
+        // The stored state at the time of saving, which a stale answer
+        // reloads in between.
+        const current = ctx.config.state;
+        if (existing && !current.channels.some((item) => item.id === row.id)) {
+            show(`${row.id} was deleted elsewhere in the meantime; nothing was saved.`);
+            return;
+        }
+        if (!existing && current.channels.some((item) => item.id === newId)) {
+            show(`There is already a station with the id ${newId}.`);
+            return;
+        }
         const nextState = existing ? replaceStation(current, row.id, next) : addStation(current, next);
         show('');
         const result = await ctx.save(nextState, newId, `Saved ${out.name}.`);
         if (result.ok) {
+            ctx.unsaved = null;
             ctx.go('#stations', true);
         } else if (result.message) {
             show(result.message);
         }
     });
     root.replaceChildren(form);
+    opened = JSON.stringify(collect());
     const first = form.querySelector('input');
     if (first) {
         first.focus();
