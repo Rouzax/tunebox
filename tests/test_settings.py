@@ -1,3 +1,5 @@
+import json
+import re
 import sqlite3
 from collections.abc import Generator
 from pathlib import Path
@@ -8,10 +10,13 @@ import pytest
 from tunebox.config import ChannelRow, ConfigError, ConfigState
 from tunebox.settings import (
     MIGRATIONS,
+    HistoryEntry,
     Settings,
     SettingsUnavailable,
     SettingsWriteError,
     StaleVersion,
+    state_from_dict,
+    state_to_json,
 )
 
 
@@ -142,3 +147,68 @@ def test_the_account_tables_exist(settings: Settings) -> None:
     with settings.read() as db:
         tables = db.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     assert {"admin", "recovery_codes", "sessions", "secrets"} <= {row[0] for row in tables}
+
+
+def test_state_round_trips_through_json() -> None:
+    wanted = ConfigState(
+        defaults={"delay_s": 8.0},
+        player={"default_channel": "a"},
+        groups=("G",),
+        channels=(ChannelRow("a", "G", True, doc("a")), ChannelRow("b", None, False, doc("b"))),
+    )
+    assert state_from_dict(json.loads(state_to_json(wanted))) == wanted
+
+
+MALFORMED: list[tuple[object, str]] = [
+    ([], "state: expected an object"),
+    ({"channels": {}}, "channels: expected a list"),
+    ({"channels": [5]}, "channels[0]: expected an object"),
+    ({"channels": [{"id": 1, "group": None, "enabled": True, "doc": {}}]}, "channels[0].id"),
+    (
+        {"channels": [{"id": "a", "group": None, "enabled": "yes", "doc": {}}]},
+        "channels[0].enabled",
+    ),
+    ({"channels": [{"id": "a", "group": 3, "enabled": True, "doc": {}}]}, "channels[0].group"),
+    ({"channels": [{"id": "a", "group": None, "enabled": True, "doc": []}]}, "channels[0].doc"),
+    (
+        {"channels": [{"id": "a", "group": None, "enabled": True, "doc": {"group": "Pop"}}]},
+        "channels[0].doc.group",
+    ),
+    ({"groups": [1]}, "groups[0]"),
+    ({"groups": {}}, "groups: expected a list"),
+    ({"defaults": []}, "defaults"),
+    ({"player": []}, "player"),
+]
+
+
+@pytest.mark.parametrize(("data", "message"), MALFORMED)
+def test_a_malformed_state_names_the_path(data: object, message: str) -> None:
+    with pytest.raises(ConfigError, match=re.escape(message)):
+        state_from_dict(data)
+
+
+def test_import_once_only_fills_an_empty_database(settings: Settings) -> None:
+    assert settings.import_once(ConfigState()) is None
+    assert settings.import_once(state("a")) == 1
+    assert settings.import_once(state("a", "b")) is None
+    assert settings.load() == (state("a"), 1)
+
+
+def test_history_pages_newest_first(settings: Settings) -> None:
+    version = 0
+    for index in range(5):
+        ids = [f"c{i}" for i in range(index + 1)]
+        version = settings.commit(state(*ids), version, "edit", f"t{index}")
+    entries, more = settings.history(limit=2)
+    assert [e.target for e in entries] == ["t4", "t3"]
+    assert more
+    entries, more = settings.history(before=entries[-1].id, limit=10)
+    assert [e.target for e in entries] == ["t2", "t1", "t0"]
+    assert not more
+    found = settings.history_entry(entries[0].id)
+    assert found is not None
+    entry, before, after = found
+    assert entry == HistoryEntry(entries[0].id, 1000.0, "edit", "t2")
+    assert [c.id for c in before.channels] == ["c0", "c1"]
+    assert [c.id for c in after.channels] == ["c0", "c1", "c2"]
+    assert settings.history_entry(9999) is None

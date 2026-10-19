@@ -282,11 +282,21 @@ def test_admin_settings_and_trusted_proxies(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    "origin", ["http://localhost:8083", "http://127.0.0.1:18086", "https://radio.example"]
+)
+def test_public_origin_may_be_loopback_http(origin: str, tmp_path: Path) -> None:
+    data = {**minimal(), "admin": {"enabled": True, "public_origin": origin}}
+    assert parse(data, tmp_path).admin.public_origin == origin
+
+
+@pytest.mark.parametrize(
     ("admin", "message"),
     [
         ({"enabled": True}, "admin.public_origin: required"),
         ({"enabled": True, "public_origin": "http://radio.example"}, "admin.public_origin"),
         ({"enabled": True, "public_origin": "https://radio.example/path"}, "admin.public_origin"),
+        ({"enabled": True, "public_origin": "http://192.0.2.1"}, "admin.public_origin"),
+        ({"enabled": True, "public_origin": "http://localhost/x"}, "admin.public_origin"),
         ({"enabled": "yes"}, "admin.enabled"),
         ({"colour": 1}, "admin.colour: unknown key"),
     ],
@@ -303,3 +313,9 @@ def test_a_bad_trusted_proxy_names_the_key(tmp_path: Path) -> None:
         parse({**minimal(), "server": {"trusted_proxies": ["not-an-address"]}}, tmp_path)
     with pytest.raises(ConfigError, match=re.escape("server.trusted_proxies")):
         parse({**minimal(), "server": {"trusted_proxies": "10.0.0.0/8"}}, tmp_path)
+
+
+def test_a_group_inside_the_document_is_refused_not_a_crash() -> None:
+    doc = {**minimal()["channels"][0], "group": "Pop"}
+    with pytest.raises(ConfigError, match=re.escape("channels[0].group")):
+        validate_state(ConfigState(channels=(ChannelRow("owr", None, True, doc),)))

@@ -37,10 +37,14 @@ class World:
         web.mkdir(exist_ok=True)
         (web / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
         (web / "notes.md").write_text("x", encoding="utf-8")
+        self.applied: list[int] = []
         self.admin = Admin(
             self.accounts,
             AdminConfig(True, setup_page, ORIGIN),
             web,
+            settings=self.settings,
+            apply=self.apply,
+            samples=lambda: ["FISHER - Stay"],
             clock=self.clock,
             monotonic=self.clock,
         )
@@ -64,7 +68,8 @@ class World:
         if self.cookies:
             headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
         raw = b"" if body is None else json.dumps(body).encode()
-        response = self.admin.handle(Request(method, path, headers, raw, client))
+        path, _, query = path.partition("?")
+        response = self.admin.handle(Request(method, path, headers, raw, client, query))
         for name, value in response.headers:
             if name == "Set-Cookie":
                 cookie_name, _, rest = value.partition("=")
@@ -73,6 +78,10 @@ class World:
                 else:
                     self.cookies[cookie_name] = rest.split(";")[0]
         return response
+
+    def apply(self) -> int:
+        self.applied.append(1)
+        return len(self.applied)
 
     def code(self, offset: int = 0) -> str:
         return crypto.totp(SECRET, int(self.clock.now // 30) + offset)
@@ -377,3 +386,214 @@ def test_surrogates_are_refused_not_crashed(
     body = {"token": token, "password": "\ud800" + "a" * 13, "code": code}
     assert world.call("POST", "/admin/api/setup/finish", body).status == 400
     world.settings.close()
+
+
+def station(cid: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "id": cid,
+        "group": None,
+        "enabled": True,
+        "doc": {
+            "id": cid,
+            "name": cid.upper(),
+            "stream_url": "https://example.invalid/stream.aac",
+            "source": {"type": "triton", "mount": "OWR_INTERNATIONAL"},
+            **extra,
+        },
+    }
+
+
+def state_of(*stations: dict[str, Any], **top: Any) -> dict[str, Any]:
+    return {"defaults": {}, "player": {}, "groups": [], "channels": list(stations), **top}
+
+
+def save(world: World, csrf: str, based_on: int, state: dict[str, Any]) -> Response:
+    return world.call(
+        "POST", "/admin/api/config", {"based_on": based_on, "state": state}, csrf=csrf
+    )
+
+
+def test_station_endpoints_need_a_session_and_the_token(world: World) -> None:
+    body = {"based_on": 0, "state": state_of(station("a"))}
+    for method, path in (
+        ("GET", "/admin/api/config"),
+        ("GET", "/admin/api/history"),
+        ("GET", "/admin/api/history/1"),
+        ("POST", "/admin/api/config"),
+        ("POST", "/admin/api/history/1/restore"),
+    ):
+        answer = world.call(method, path, body if method == "POST" else None)
+        assert answer.status == 401, path
+        assert json_of(answer) == {"error": "login_required"}
+    csrf = world.login()
+    assert world.call("POST", "/admin/api/config", body).status == 403
+    assert world.call("POST", "/admin/api/config", body, csrf="x").status == 403
+    assert world.call("POST", "/admin/api/config", body, csrf=csrf, origin=None).status == 403
+    assert world.settings.load()[1] == 0
+    assert save(world, csrf, 0, state_of(station("a"))).status == 200
+
+
+def test_config_round_trip_applies_and_records(world: World) -> None:
+    csrf = world.login()
+    loaded = json_of(world.call("GET", "/admin/api/config"))
+    assert loaded["version"] == 0
+    assert "mount" in loaded["schema"]["sources"]["triton"]
+    assert loaded["schema"]["codecs"] == ["aac", "mp3"]
+    assert "delay_s" in loaded["schema"]["defaults"]
+    answer = world.call(
+        "POST",
+        "/admin/api/config",
+        {"based_on": 0, "state": state_of(station("a"), station("b")), "target": "a"},
+        csrf=csrf,
+    )
+    assert json_of(answer) == {"version": 1}
+    assert world.applied == [1]
+    loaded = json_of(world.call("GET", "/admin/api/config"))
+    assert [c["id"] for c in loaded["state"]["channels"]] == ["a", "b"]
+    history = json_of(world.call("GET", "/admin/api/history"))
+    assert [(e["kind"], e["target"]) for e in history["entries"]] == [("edit", "a")]
+    assert history["more"] is False
+
+
+def test_history_pages_with_before(world: World) -> None:
+    csrf = world.login()
+    for version in range(3):
+        save(world, csrf, version, state_of(*[station(f"s{i}") for i in range(version + 1)]))
+    first = json_of(world.call("GET", "/admin/api/history"))["entries"]
+    older = json_of(world.call("GET", f"/admin/api/history?before={first[0]['id']}"))
+    assert [e["id"] for e in older["entries"]] == [e["id"] for e in first[1:]]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [None, [], {"state": {}}, {"based_on": "0", "state": {}}, {"based_on": True, "state": {}}],
+)
+def test_a_save_without_a_version_is_a_bad_request(world: World, body: object) -> None:
+    csrf = world.login()
+    answer = world.call("POST", "/admin/api/config", body, csrf=csrf)
+    assert answer.status == 400
+    assert json_of(answer) == {"error": "bad_request"}
+
+
+def test_a_stale_save_is_refused(world: World) -> None:
+    csrf = world.login()
+    save(world, csrf, 0, state_of(station("a")))
+    answer = save(world, csrf, 0, state_of(station("b")))
+    assert answer.status == 409
+    assert json_of(answer) == {"error": "stale", "version": 1}
+    stored = json_of(world.call("GET", "/admin/api/config"))["state"]
+    assert [c["id"] for c in stored["channels"]] == ["a"]
+    assert world.applied == [1]
+
+
+def test_an_invalid_state_names_the_field(world: World) -> None:
+    csrf = world.login()
+    bad = station("a")
+    bad["doc"]["stream_url"] = "ftp://x"
+    answer = save(world, csrf, 0, state_of(bad))
+    assert answer.status == 400
+    assert json_of(answer)["error"] == "invalid"
+    assert "channels[0].stream_url" in json_of(answer)["message"]
+    shape = save(world, csrf, 0, {"channels": [5]})
+    assert json_of(shape) == {"error": "invalid", "message": "channels[0]: expected an object"}
+    assert world.applied == []
+
+
+def test_a_dangling_default_is_refused(world: World) -> None:
+    csrf = world.login()
+    answer = save(world, csrf, 0, state_of(station("a"), player={"default_channel": "gone"}))
+    assert answer.status == 400
+    assert "default_channel" in json_of(answer)["message"]
+
+
+def test_a_refused_pattern_names_the_field(world: World) -> None:
+    csrf = world.login()
+    rules = {"played_by": "(a+)+$"}
+    answer = save(world, csrf, 0, state_of(station("a"), station("b", rules=rules)))
+    assert answer.status == 400
+    message = json_of(answer)["message"]
+    assert "channels[1].rules.played_by" in message
+    assert "nested repetition" in message
+
+
+def test_a_slow_new_pattern_is_refused_naming_its_field(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
+
+    def slow(patterns: list[str], _samples: list[str]) -> tuple[int | None, str]:
+        return patterns.index("^x$"), "too slow on long titles; simplify the pattern"
+
+    monkeypatch.setattr("tunebox.admin.check", slow)
+    stations = [station("a", rules={"station_id": "^y$"}), station("b", rules={"played_by": "^x$"})]
+    answer = save(world, csrf, 0, state_of(*stations))
+    assert answer.status == 400
+    assert json_of(answer)["message"].startswith("channels[1].rules.played_by: too slow")
+
+
+def test_a_check_that_cannot_run_refuses_the_save(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
+
+    def unavailable(_patterns: list[str], _samples: list[str]) -> tuple[int | None, str]:
+        return None, "could not run"
+
+    monkeypatch.setattr("tunebox.admin.check", unavailable)
+    answer = save(world, csrf, 0, state_of(station("a", rules={"played_by": "^x$"})))
+    assert json_of(answer) == {"error": "invalid", "message": "rules: could not run"}
+
+
+def test_stored_patterns_are_not_run_again(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    csrf = world.login()
+    rules = {"played_by": r"\s*\(Played by ([^)]*)\)\s*$"}
+    assert save(world, csrf, 0, state_of(station("a", rules=rules))).status == 200
+    runs: list[list[str]] = []
+
+    def counting(patterns: list[str], _samples: list[str]) -> None:
+        runs.append(patterns)
+
+    monkeypatch.setattr("tunebox.admin.check", counting)
+    assert save(world, csrf, 1, state_of(station("a", rules=rules), station("b"))).status == 200
+    assert runs == []
+
+
+def test_restore_applies_the_old_state(world: World) -> None:
+    csrf = world.login()
+    save(world, csrf, 0, state_of(station("a")))
+    save(world, csrf, 1, state_of(station("a"), station("b")))
+    entries = json_of(world.call("GET", "/admin/api/history"))["entries"]
+    detail = json_of(world.call("GET", f"/admin/api/history/{entries[0]['id']}"))
+    assert detail["entry"]["id"] == entries[0]["id"]
+    assert [c["id"] for c in detail["before"]["channels"]] == ["a"]
+    assert [c["id"] for c in detail["after"]["channels"]] == ["a", "b"]
+    restore = f"/admin/api/history/{entries[0]['id']}/restore"
+    assert world.call("POST", restore, {"based_on": 1}, csrf=csrf).status == 409
+    answer = world.call("POST", restore, {"based_on": 2}, csrf=csrf)
+    assert json_of(answer) == {"version": 3}
+    stored = json_of(world.call("GET", "/admin/api/config"))["state"]
+    assert [c["id"] for c in stored["channels"]] == ["a"]
+    assert world.applied == [1, 1, 1]
+    history = json_of(world.call("GET", "/admin/api/history"))["entries"]
+    assert [e["kind"] for e in history] == ["restore", "edit", "edit"]
+    assert history[0]["target"] == f"history {entries[0]['id']}"
+
+
+def test_unknown_history_entries(world: World) -> None:
+    csrf = world.login()
+    assert world.call("GET", "/admin/api/history/999").status == 404
+    assert world.call("GET", "/admin/api/history/abc").status == 404
+    assert world.call("GET", "/admin/api/history/1/x").status == 404
+    restore = world.call("POST", "/admin/api/history/999/restore", {"based_on": 0}, csrf=csrf)
+    assert restore.status == 404
+    bad = world.call("POST", "/admin/api/history/999/restore", {}, csrf=csrf)
+    assert bad.status == 400
+
+
+def test_a_group_inside_a_station_document_is_refused(world: World) -> None:
+    csrf = world.login()
+    bad = station("a")
+    bad["doc"]["group"] = "Pop"
+    answer = save(world, csrf, 0, state_of(bad))
+    assert answer.status == 400
+    assert "channels[0].doc.group" in json_of(answer)["message"]

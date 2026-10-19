@@ -14,6 +14,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable, Generator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -108,6 +109,66 @@ def state_to_json(state: ConfigState) -> str:
     )
 
 
+def state_from_dict(data: object) -> ConfigState:
+    """The panel's JSON form of a state, checked for shape; validate_state
+    checks the content when it is committed."""
+    if not isinstance(data, dict):
+        raise ConfigError("state: expected an object")
+    table = cast("dict[str, object]", data)
+    defaults = table.get("defaults", {})
+    player = table.get("player", {})
+    groups = table.get("groups", [])
+    channels = table.get("channels", [])
+    if not isinstance(defaults, dict):
+        raise ConfigError("defaults: expected an object")
+    if not isinstance(player, dict):
+        raise ConfigError("player: expected an object")
+    if not isinstance(groups, list):
+        raise ConfigError("groups: expected a list")
+    if not isinstance(channels, list):
+        raise ConfigError("channels: expected a list")
+    names: list[str] = []
+    for index, name in enumerate(cast("list[object]", groups)):
+        if not isinstance(name, str):
+            raise ConfigError(f"groups[{index}]: expected a string")
+        names.append(name)
+    rows: list[ChannelRow] = []
+    for index, raw in enumerate(cast("list[object]", channels)):
+        where = f"channels[{index}]"
+        if not isinstance(raw, dict):
+            raise ConfigError(f"{where}: expected an object")
+        entry = cast("dict[str, object]", raw)
+        cid, group, enabled, body = (entry.get(k) for k in ("id", "group", "enabled", "doc"))
+        if not isinstance(cid, str):
+            raise ConfigError(f"{where}.id: expected a string")
+        if group is not None and not isinstance(group, str):
+            raise ConfigError(f"{where}.group: expected a string or null")
+        if not isinstance(enabled, bool):
+            raise ConfigError(f"{where}.enabled: expected true or false")
+        if not isinstance(body, dict):
+            raise ConfigError(f"{where}.doc: expected an object")
+        if "group" in body:
+            # Stored on the row only (doc_json is a [[channels]] table without
+            # its group), so the panel and the player read one value.
+            raise ConfigError(f"{where}.doc.group: the group belongs on the station, not its doc")
+        rows.append(ChannelRow(cid, group, enabled, cast("dict[str, Any]", body)))
+    return ConfigState(
+        cast("dict[str, float]", defaults),
+        cast("dict[str, Any]", player),
+        tuple(names),
+        tuple(rows),
+    )
+
+
+@dataclass(frozen=True)
+class HistoryEntry:
+    id: int
+    at: float
+    # file, import, edit or restore
+    kind: str
+    target: str | None
+
+
 class Settings:
     """Safe to share between threads; one lock serialises its connection."""
 
@@ -155,6 +216,48 @@ class Settings:
         if state_to_json(current) == state_to_json(state):
             return None
         return self.commit(state, version, "file")
+
+    def import_once(self, state: ConfigState) -> int | None:
+        """Stores the stations from tunebox.toml when the database has none;
+        afterwards the panel is their source."""
+        current, version = self.load()
+        if current.channels or not state.channels:
+            return None
+        return self.commit(state, version, "import")
+
+    def history(
+        self, before: int | None = None, limit: int = 50
+    ) -> tuple[list[HistoryEntry], bool]:
+        """Newest first; before is the id of the last entry already shown.
+        Also says whether older entries exist."""
+        with self.read() as db:
+            rows = cast(
+                "list[tuple[int, float, str, str | None]]",
+                db.execute(
+                    "SELECT id, at, kind, target FROM history WHERE id < ?"
+                    " ORDER BY id DESC LIMIT ?",
+                    (before if before is not None else 2**62, limit + 1),
+                ).fetchall(),
+            )
+        return [HistoryEntry(*row) for row in rows[:limit]], len(rows) > limit
+
+    def history_entry(self, entry_id: int) -> tuple[HistoryEntry, ConfigState, ConfigState] | None:
+        """The entry with the state before and after it."""
+        with self.read() as db:
+            row = db.execute(
+                "SELECT id, at, kind, target, before_json, after_json FROM history WHERE id = ?",
+                (entry_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        found, at, kind, target, before, after = cast(
+            "tuple[int, float, str, str | None, str, str]", row
+        )
+        return (
+            HistoryEntry(found, at, kind, target),
+            state_from_dict(json.loads(before)),
+            state_from_dict(json.loads(after)),
+        )
 
     def commit(
         self, state: ConfigState, based_on: int, kind: str, target: str | None = None

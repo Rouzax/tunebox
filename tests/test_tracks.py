@@ -1,5 +1,5 @@
 from tests.fakes import RULES, fixture_rows, make_track
-from tunebox.tracks import RawEntry, Rules, clean, norm
+from tunebox.tracks import MAX_TITLE, RawEntry, Rules, clean, norm
 
 
 def test_norm_drops_accents_apostrophes_and_punctuation() -> None:
@@ -74,3 +74,8 @@ def test_non_latin_names_keep_distinct_keys() -> None:
     second = make_track("ЛЕНИНГРАД", "Лабутены")
     assert first.key != second.key
     assert first.key != "|"
+
+
+def test_titles_are_cut_before_rules_run() -> None:
+    track = clean(RawEntry("A", "x" * 1000, 1), Rules(), 1)
+    assert len(track.full_title) == MAX_TITLE

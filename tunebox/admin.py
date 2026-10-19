@@ -5,6 +5,7 @@ static files."""
 
 from __future__ import annotations
 
+import dataclasses
 import hmac
 import json
 import logging
@@ -18,15 +19,35 @@ from typing import Any, cast
 
 from tunebox import crypto
 from tunebox.accounts import ABSOLUTE_S, AccountError, Accounts, Session
-from tunebox.config import AdminConfig
+from tunebox.config import (
+    CODECS,
+    DEFAULTS,
+    SOURCE_CHOICES,
+    SOURCE_SETTINGS,
+    AdminConfig,
+    ConfigError,
+    ConfigState,
+)
 from tunebox.limits import FailureLimit, Pace, group
 from tunebox.logs import event
-from tunebox.settings import SettingsUnavailable, SettingsWriteError
+from tunebox.rulecheck import check, lint
+from tunebox.settings import (
+    Settings,
+    SettingsUnavailable,
+    SettingsWriteError,
+    StaleVersion,
+    state_from_dict,
+    state_to_json,
+)
 
 log = logging.getLogger(__name__)
 
 JSON = "application/json; charset=utf-8"
 MAX_BODY = 65_536
+# A save sends the whole station list: about 40 kB for 50 stations. The
+# limit is chosen by path before any session check, so anyone may send this
+# much to that one route; the proxy's body limit bounds it in front.
+MAX_STATE_BODY = 524_288
 SESSION_COOKIE = "__Secure-tunebox_admin"
 KNOWN_COOKIE = "__Secure-tunebox_known"
 KNOWN_S = 365 * 86_400
@@ -65,6 +86,7 @@ class Request:
     headers: Mapping[str, str]
     body: bytes
     client: str
+    query: str = ""
 
     def header(self, name: str) -> str | None:
         wanted = name.lower()
@@ -86,6 +108,11 @@ class Response:
     body: bytes = b""
     content_type: str = JSON
     headers: tuple[tuple[str, str], ...] = ()
+
+
+def body_limit(path: str) -> int:
+    """The largest body a POST to path may send."""
+    return MAX_STATE_BODY if path == "/admin/api/config" else MAX_BODY
 
 
 def _same(given: str, expected: str) -> bool:
@@ -115,10 +142,18 @@ class Admin:
         accounts: Accounts,
         config: AdminConfig,
         web_dir: Path,
+        settings: Settings,
+        apply: Callable[[], int] = lambda: 0,
+        samples: Callable[[], list[str]] = list,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
+        """apply reloads the running channels after a change; samples gives
+        recent titles that new title rules are tried on."""
         self._accounts = accounts
+        self._settings = settings
+        self._apply = apply
+        self._samples = samples
         self._origin = config.public_origin
         self._web = web_dir.resolve()
         self._clock = clock
@@ -166,17 +201,10 @@ class Admin:
         return self._static(request.path.removeprefix("/admin/"))
 
     def _api(self, request: Request) -> Response:
-        name = request.path.removeprefix("/admin/api/")
-        routes: dict[tuple[str, str], Callable[[Request], Response]] = {
-            ("GET", "state"): self._state,
-            ("POST", "login"): self._login,
-            ("POST", "logout"): self._logout,
-            ("POST", "setup/start"): self._setup_start,
-            ("POST", "setup/finish"): self._setup_finish,
-        }
-        route = routes.get((request.method, name))
+        route = self._route(request.method, request.path.removeprefix("/admin/api/"))
         if route is None:
             return _error(404, "not_found")
+        handler, needs_session = route
         if request.method == "POST":
             if not self._origin or request.header("Origin") != self._origin:
                 event(
@@ -186,7 +214,40 @@ class Admin:
             content_type = (request.header("Content-Type") or "").split(";")[0].strip()
             if content_type != "application/json":
                 return _error(415, "json_only")
-        return route(request)
+        if needs_session:
+            session = self._session(request)
+            if session is None:
+                return _error(401, "login_required")
+            given = request.header("X-Tunebox-CSRF") or ""
+            if request.method == "POST" and not _same(given, session.csrf):
+                event(
+                    log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="token"
+                )
+                return _error(403, "bad_csrf")
+        return handler(request)
+
+    def _route(self, method: str, name: str) -> tuple[Callable[[Request], Response], bool] | None:
+        """The handler and whether it needs a session."""
+        fixed: dict[tuple[str, str], tuple[Callable[[Request], Response], bool]] = {
+            ("GET", "state"): (self._state, False),
+            ("POST", "login"): (self._login, False),
+            ("POST", "logout"): (self._logout, False),
+            ("POST", "setup/start"): (self._setup_start, False),
+            ("POST", "setup/finish"): (self._setup_finish, False),
+            ("GET", "config"): (self._config, True),
+            ("POST", "config"): (self._save, True),
+            ("GET", "history"): (self._history, True),
+        }
+        if (method, name) in fixed:
+            return fixed[(method, name)]
+        parts = name.split("/")
+        if parts[0] != "history" or not parts[1:2] or not parts[1].isdigit():
+            return None
+        if len(parts) == 2 and method == "GET":
+            return (self._history_entry, True)
+        if parts[2:] == ["restore"] and method == "POST":
+            return (self._restore, True)
+        return None
 
     def _session(self, request: Request) -> Session | None:
         token = request.cookie(SESSION_COOKIE)
@@ -347,6 +408,97 @@ class Admin:
         event(log, logging.WARNING, "admin_account_created", client=request.client)
         return _json(200, {"recovery_codes": codes})
 
+    def _config(self, _request: Request) -> Response:
+        state, version = self._settings.load()
+        schema = {
+            "sources": SOURCE_SETTINGS,
+            "choices": SOURCE_CHOICES,
+            "codecs": list(CODECS),
+            "defaults": DEFAULTS,
+        }
+        return _json(
+            200, {"version": version, "state": json.loads(state_to_json(state)), "schema": schema}
+        )
+
+    def _save(self, request: Request) -> Response:
+        payload = _object(request)
+        based_on = _version(payload)
+        if payload is None or based_on is None:
+            return _error(400, "bad_request")
+        target = payload.get("target")
+        return self._commit(
+            payload.get("state"), based_on, "edit", target if isinstance(target, str) else None
+        )
+
+    def _commit(self, raw: object, based_on: int, kind: str, target: str | None) -> Response:
+        try:
+            state = state_from_dict(raw)
+            refused = self._refused_rule(state)
+            if refused:
+                return _json(400, {"error": "invalid", "message": refused})
+            version = self._settings.commit(state, based_on, kind, target)
+        except ConfigError as error:
+            return _json(400, {"error": "invalid", "message": str(error)})
+        except StaleVersion as error:
+            return _json(409, {"error": "stale", "version": error.current})
+        self._apply()
+        event(log, logging.INFO, "admin_change", kind=kind, target=target, version=version)
+        return _json(200, {"version": version})
+
+    def _refused_rule(self, state: ConfigState) -> str | None:
+        """Lints every rule, and runs the ones not stored yet in a child
+        process: stored patterns have already run on live titles."""
+        current, _ = self._settings.load()
+        known = {pattern for row in current.channels for _, pattern in _patterns(row.doc)}
+        new: dict[str, str] = {}
+        for index, row in enumerate(state.channels):
+            for key, pattern in _patterns(row.doc):
+                field = f"channels[{index}].rules.{key}"
+                reason = lint(pattern)
+                if reason:
+                    return f"{field}: {reason}"
+                if pattern not in known:
+                    new.setdefault(pattern, field)
+        if not new:
+            return None
+        patterns = list(new)
+        refused = check(patterns, self._samples())
+        if refused is None:
+            return None
+        at, reason = refused
+        return f"{new[patterns[at]] if at is not None else 'rules'}: {reason}"
+
+    def _history(self, request: Request) -> Response:
+        before = urllib.parse.parse_qs(request.query).get("before", [""])[0]
+        entries, more = self._settings.history(int(before) if before.isdigit() else None)
+        return _json(200, {"entries": [dataclasses.asdict(e) for e in entries], "more": more})
+
+    def _history_entry(self, request: Request) -> Response:
+        found = self._settings.history_entry(_history_id(request.path))
+        if found is None:
+            return _error(404, "not_found")
+        entry, before, after = found
+        return _json(
+            200,
+            {
+                "entry": dataclasses.asdict(entry),
+                "before": json.loads(state_to_json(before)),
+                "after": json.loads(state_to_json(after)),
+            },
+        )
+
+    def _restore(self, request: Request) -> Response:
+        based_on = _version(_object(request))
+        if based_on is None:
+            return _error(400, "bad_request")
+        entry_id = _history_id(request.path)
+        found = self._settings.history_entry(entry_id)
+        if found is None:
+            return _error(404, "not_found")
+        _, before, _ = found
+        raw = json.loads(state_to_json(before))
+        return self._commit(raw, based_on, "restore", f"history {entry_id}")
+
     def _static(self, relative: str) -> Response:
         relative = urllib.parse.unquote(relative) or "index.html"
         target = self._web
@@ -373,3 +525,31 @@ def _body(request: Request, keys: tuple[str, ...]) -> dict[str, str] | None:
     if not all(isinstance(fields.get(key), str) for key in keys):
         return None
     return {key: cast(str, fields[key]) for key in keys}
+
+
+def _object(request: Request) -> dict[str, object] | None:
+    try:
+        payload: object = json.loads(request.body or b"null")
+    except ValueError:
+        return None
+    return cast("dict[str, object]", payload) if isinstance(payload, dict) else None
+
+
+def _version(payload: dict[str, object] | None) -> int | None:
+    """based_on: an int, and not a bool (which is an int in Python)."""
+    value = payload.get("based_on") if payload else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _patterns(doc: dict[str, Any]) -> list[tuple[str, str]]:
+    """The title rules a station document sets, as (key, pattern)."""
+    rules = doc.get("rules")
+    if not isinstance(rules, dict):
+        return []
+    table = cast("dict[str, object]", rules)
+    found = ((key, table.get(key)) for key in ("station_id", "played_by"))
+    return [(key, value) for key, value in found if isinstance(value, str) and value]
+
+
+def _history_id(path: str) -> int:
+    return int(path.removeprefix("/admin/api/history/").split("/")[0])

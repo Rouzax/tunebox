@@ -258,6 +258,12 @@ class Channel:
             ],
         }
 
+    def recent_titles(self) -> list[str]:
+        """The full titles of the recent list, newest first: the sample new
+        title rules are checked against."""
+        with self._lock:
+            return [track.full_title for track in self._recent]
+
     def status(self) -> dict[str, Any]:
         active = self.active()
         with self._lock:

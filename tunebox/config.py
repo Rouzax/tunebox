@@ -203,8 +203,15 @@ def _admin(table: dict[str, Any]) -> AdminConfig:
         raise ConfigError("admin.public_origin: required when the admin panel is enabled")
     if origin is not None:
         parts = urllib.parse.urlsplit(origin)
-        if parts.scheme != "https" or not parts.hostname or parts.path or parts.query:
-            raise ConfigError("admin.public_origin: an https origin such as https://radio.example")
+        # Browsers treat loopback as secure, so Secure cookies work there:
+        # that is local development and the browser checks.
+        loopback = parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1")
+        good = (parts.scheme == "https" or loopback) and parts.hostname
+        if not good or parts.path or parts.query:
+            raise ConfigError(
+                "admin.public_origin: an https origin such as https://radio.example"
+                " (or http://localhost for development)"
+            )
     return AdminConfig(enabled, _bool(table, "setup_page", "admin.setup_page", False), origin)
 
 
@@ -252,8 +259,8 @@ def validate_state(state: ConfigState) -> Resolved:
             raise ConfigError(f"{where}.id: duplicate id {channel.id!r}")
         if channel.id != row.id:
             raise ConfigError(f"{where}.id: {channel.id!r} is stored as {row.id!r}")
-        if row.group is not None and row.group not in state.groups:
-            raise ConfigError(f"{where}.group: no group named {row.group!r}")
+        if channel.group is not None and channel.group not in state.groups:
+            raise ConfigError(f"{where}.group: no group named {channel.group!r}")
         seen[channel.id] = (row, channel)
     for index, name in enumerate(state.groups):
         if not name.strip() or state.groups.index(name) != index:

@@ -491,3 +491,11 @@ def test_version_and_stream_are_part_of_the_etag() -> None:
     assert channel.now_view(version=2)[1] != first
     assert channel.now_view(version=1, stream="High")[1] != first
     assert channel.now_view(version=1)[1] == first
+
+
+def test_recent_titles_lists_the_full_titles() -> None:
+    source = FakeSource()
+    source.responses = [[OLD, NEW]]
+    channel, _, _ = make(source, Clock(1_300_000))
+    channel.poll_once()
+    assert channel.recent_titles() == ["My People", "Stay"]

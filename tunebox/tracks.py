@@ -53,6 +53,10 @@ def norm(text: str) -> str:
     return _SPACES.sub(" ", _NON_ALNUM.sub(" ", text)).strip()
 
 
+# Rules run on every title; a feed could send megabytes in one.
+MAX_TITLE = 300
+
+
 def _tidy(text: str) -> str:
     return _SPACES.sub(" ", text).strip()
 
@@ -72,7 +76,7 @@ def clean(raw: RawEntry, rules: Rules, seen_at_ms: int) -> Track:
     # ("LILLY WOOD & THE PRICK", "X CLUB.", "AU/RA").
     artists = tuple(part for part in (_tidy(p) for p in artist.split(separator)) if part)
 
-    full_title = _tidy(raw.title)
+    full_title = _tidy(raw.title)[:MAX_TITLE]
     title, played_by = full_title, None
     if rules.played_by is not None and (match := rules.played_by.search(full_title)):
         played_by = _tidy(match.group(1)) or None

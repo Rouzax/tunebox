@@ -12,7 +12,7 @@ import pytest
 
 from tests.fakes import FakeSource, NoJitter, channel_config
 from tunebox.accounts import Accounts
-from tunebox.admin import Admin
+from tunebox.admin import MAX_BODY, MAX_STATE_BODY, Admin, Request, Response
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import AdminConfig, PlayerConfig, StreamConfig
@@ -387,7 +387,9 @@ def admin_server(tmp_path: Path) -> Generator[TuneboxServer]:
     web_admin = tmp_path / "web_admin"
     web_admin.mkdir()
     (web_admin / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
-    admin = Admin(Accounts(settings), AdminConfig(True, False, ORIGIN), web_admin)
+    admin = Admin(
+        Accounts(settings), AdminConfig(True, False, ORIGIN), web_admin, settings=settings
+    )
     web = tmp_path / "web"
     web.mkdir()
     (web / "index.html").write_text("<!doctype html>", encoding="utf-8")
@@ -457,7 +459,18 @@ def test_the_login_log_names_the_client_behind_a_trusted_proxy(
 
 def test_a_body_too_large_or_without_length_is_refused(admin_server: TuneboxServer) -> None:
     headers = {"Content-Type": "application/json", "Origin": ORIGIN}
-    assert post(admin_server, "/admin/api/login", b"x" * 70_000, headers)[0] == 413
+    assert post(admin_server, "/admin/api/login", b"x" * (MAX_BODY + 1), headers)[0] == 413
+    # Only a save carries the whole station list; it is still read, then
+    # refused for want of a session.
+    assert post(admin_server, "/admin/api/config", b"x" * 100_000, headers)[0] == 401
+    # Refused on the announced length, before any of the body is read;
+    # sending it all would race the server's hang-up.
+    connection = http.client.HTTPConnection("127.0.0.1", admin_server.server_address[1], timeout=5)
+    connection.putrequest("POST", "/admin/api/config")
+    connection.putheader("Content-Length", str(MAX_STATE_BODY + 1))
+    connection.endheaders()
+    assert connection.getresponse().status == 413
+    connection.close()
     connection = http.client.HTTPConnection("127.0.0.1", admin_server.server_address[1], timeout=5)
     connection.putrequest("POST", "/admin/api/login")
     connection.putheader("Transfer-Encoding", "chunked")
@@ -472,6 +485,17 @@ def test_post_outside_admin_is_not_allowed(server: TuneboxServer) -> None:
     assert status == 405
 
 
+def test_post_outside_admin_is_refused_before_its_body(server: TuneboxServer) -> None:
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=3)
+    connection.putrequest("POST", "/")
+    connection.putheader("Content-Length", "10000000")
+    connection.endheaders()
+    response = connection.getresponse()
+    assert response.status == 405
+    assert response.getheader("Connection") == "close"
+    connection.close()
+
+
 def test_every_logo_kind_is_sandboxed(server: TuneboxServer) -> None:
     _, headers, _ = request(server, "/logos/owr.png")
     assert headers["content-security-policy"] == "sandbox"
@@ -481,7 +505,7 @@ def test_forwarded_header_without_trusted_proxies_warns_once(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     settings = Settings(tmp_path / "t.db")
-    admin = Admin(Accounts(settings), AdminConfig(True, False, ORIGIN), tmp_path)
+    admin = Admin(Accounts(settings), AdminConfig(True, False, ORIGIN), tmp_path, settings=settings)
     httpd = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, admin=admin)
     serve(httpd)
     with caplog.at_level(logging.WARNING):
@@ -519,3 +543,27 @@ def test_every_forwarded_for_line_is_read(
     connection.close()
     failed = next(r for r in caplog.records if r.getMessage() == "admin_login_failed")
     assert failed.__dict__["fields"]["client"] == "198.51.100.7"
+
+
+class Recorder(Admin):
+    def __init__(self, settings: Settings, web: Path) -> None:
+        super().__init__(
+            Accounts(settings), AdminConfig(True, False, ORIGIN), web, settings=settings
+        )
+        self.seen: list[Request] = []
+
+    def handle(self, request: Request) -> Response:
+        self.seen.append(request)
+        return Response(204)
+
+
+def test_the_admin_gets_the_path_and_the_query_apart(tmp_path: Path) -> None:
+    settings = Settings(tmp_path / "t.db")
+    admin = Recorder(settings, tmp_path)
+    httpd = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, admin=admin)
+    serve(httpd)
+    request(httpd, "/admin/api/history?before=12")
+    httpd.shutdown()
+    httpd.server_close()
+    settings.close()
+    assert [(r.path, r.query) for r in admin.seen] == [("/admin/api/history", "before=12")]

@@ -50,7 +50,9 @@ def main() -> int:
         return 2
 
     try:
-        settings = open_settings(config.server.data_dir / "tunebox.db", config.state)
+        settings = open_settings(
+            config.server.data_dir / "tunebox.db", config.state, config.admin.enabled
+        )
     except (SettingsUnavailable, SettingsWriteError, StaleVersion, ConfigError) as error:
         event(log, logging.ERROR, "settings_unavailable", error=str(error))
         print(f"tunebox: {error}", file=sys.stderr)
@@ -68,7 +70,18 @@ def main() -> int:
     admin = None
     if config.admin.enabled:
         admin_dir = Path(os.environ.get("TUNEBOX_WEB_ADMIN", str(WEB_ADMIN_DIR)))
-        admin = Admin(Accounts(settings), config.admin, admin_dir)
+        admin = Admin(
+            Accounts(settings),
+            config.admin,
+            admin_dir,
+            settings=settings,
+            apply=runtime.apply,
+            samples=lambda: [
+                title
+                for channel in runtime.snapshot.channels.values()
+                for title in channel.recent_titles()
+            ],
+        )
     web_dir = Path(os.environ.get("TUNEBOX_WEB", str(WEB_DIR)))
     address = (config.server.host, config.server.port)
     try:
@@ -135,19 +148,39 @@ class StopSignal:
             time.sleep(poll_s)
 
 
-def open_settings(path: Path, state: ConfigState) -> Settings:
-    """Opens the stored configuration and takes the stations from
-    tunebox.toml when they differ: until the admin panel edits stations,
-    the file stays their source."""
+def open_settings(path: Path, state: ConfigState, panel: bool) -> Settings:
+    """Opens the stored configuration. With the admin panel on, the panel is
+    where stations change: tunebox.toml fills an empty database once and is
+    ignored afterwards. With it off, the file stays the stations' source."""
     settings = Settings(path)
     try:
-        version = settings.adopt_file(state)
+        if panel:
+            version = settings.import_once(state)
+            name = "config_imported"
+        else:
+            version = settings.adopt_file(state)
+            name = "config_from_file"
     except BaseException:
         settings.close()
         raise
     if version is not None:
-        event(log, logging.INFO, "config_from_file", version=version, channels=len(state.channels))
+        event(log, logging.INFO, name, version=version, channels=len(state.channels))
+    elif panel:
+        ignored = _ignored_parts(state, settings.load()[0])
+        if ignored:
+            event(log, logging.WARNING, "config_file_ignored", parts=ignored)
     return settings
+
+
+def _ignored_parts(file: ConfigState, stored: ConfigState) -> list[str]:
+    """The parts of tunebox.toml that say something other than the
+    database, which the panel's tunebox does not read."""
+    parts = {
+        "channels": (file.channels, (file.groups, file.channels), (stored.groups, stored.channels)),
+        "defaults": (file.defaults, file.defaults, stored.defaults),
+        "player": (file.player, file.player, stored.player),
+    }
+    return [name for name, (given, mine, theirs) in parts.items() if given and mine != theirs]
 
 
 def shut_down(

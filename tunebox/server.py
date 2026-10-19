@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
-from tunebox.admin import MAX_BODY, Admin, Request
+from tunebox.admin import Admin, Request, body_limit
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import Network, StreamConfig
@@ -157,11 +157,19 @@ class Handler(BaseHTTPRequestHandler):
     def _handle(self, head: bool) -> None:
         started = time.monotonic()
         self._status = 0
-        path = urllib.parse.urlsplit(self.path).path
+        target = urllib.parse.urlsplit(self.path)
+        path = target.path
         is_admin = path == "/admin" or path.startswith("/admin/")
         body = b""
+        if self.command == "POST" and not is_admin:
+            # Only /admin takes a POST: answer before reading a body nobody
+            # asked for, and hang up so it is not parsed as a request.
+            self.close_connection = True
+            with bound("req"):
+                self._send_json(405, {"error": "method_not_allowed"}, False)
+            return
         if self.command == "POST":
-            read = self._read_body()
+            read = self._read_body(body_limit(path))
             if read is None:
                 return
             body = read
@@ -176,9 +184,7 @@ class Handler(BaseHTTPRequestHandler):
         with bound("admin" if is_admin else "req"):
             try:
                 if is_admin:
-                    self._admin(path, head, body)
-                elif self.command == "POST":
-                    self._send_json(405, {"error": "method_not_allowed"}, head)
+                    self._admin(path, target.query, head, body)
                 else:
                     self._route(path, head)
             except BrokenPipeError, ConnectionResetError:
@@ -198,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                     duration_ms=round((time.monotonic() - started) * 1000),
                 )
 
-    def _read_body(self) -> bytes | None:
+    def _read_body(self, limit: int) -> bytes | None:
         """The request body, or None after answering 411 or 413. A body
         that is not read would be parsed as the next request, so a refused
         one also ends the connection."""
@@ -207,13 +213,13 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send_json(411, {"error": "length_required"}, False)
             return None
-        if int(length) > MAX_BODY:
+        if int(length) > limit:
             self.close_connection = True
             self._send_json(413, {"error": "too_large"}, False)
             return None
         return self.rfile.read(int(length))
 
-    def _admin(self, path: str, head: bool, body: bytes) -> None:
+    def _admin(self, path: str, query: str, head: bool, body: bytes) -> None:
         admin = self.app.admin
         if admin is None:
             return self._send_json(404, {"error": "not_found"}, head)
@@ -228,7 +234,7 @@ class Handler(BaseHTTPRequestHandler):
         client = client_address(self.client_address[0], forwarded, self.app.trusted)
         method = "GET" if head else self.command
         headers = dict(self.headers.items())
-        response = admin.handle(Request(method, path, headers, body, client))
+        response = admin.handle(Request(method, path, headers, body, client, query))
         self._send(response.status, response.body, response.content_type, head, response.headers)
 
     def _route(self, path: str, head: bool) -> None:

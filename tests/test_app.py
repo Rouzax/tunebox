@@ -106,6 +106,12 @@ def test_the_stop_handler_takes_no_lock() -> None:
     assert done == [True]
 
 
+CHANNEL_DOC = {
+    "id": "owr",
+    "name": "One World Radio",
+    "stream_url": "https://example.invalid/stream.aac",
+    "source": {"type": "triton", "mount": "OWR_INTERNATIONAL"},
+}
 CHANNEL_TOML = (
     '[[channels]]\nid = "owr"\nname = "One World Radio"\n'
     'stream_url = "https://example.invalid/stream.aac"\n'
@@ -129,24 +135,59 @@ def test_a_corrupt_database_stops_startup(
 def test_open_settings_adopts_the_file_once(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    state = state_from_toml(
-        {
-            "channels": [
-                {
-                    "id": "owr",
-                    "name": "One World Radio",
-                    "stream_url": "https://example.invalid/stream.aac",
-                    "source": {"type": "triton", "mount": "OWR_INTERNATIONAL"},
-                }
-            ]
-        }
-    )
+    state = state_from_toml({"channels": [CHANNEL_DOC]})
     with caplog.at_level(logging.INFO):
-        open_settings(tmp_path / "t.db", state).close()
-        settings = open_settings(tmp_path / "t.db", state)
+        open_settings(tmp_path / "t.db", state, panel=False).close()
+        settings = open_settings(tmp_path / "t.db", state, panel=False)
     assert settings.load()[1] == 1
     settings.close()
     assert [r.getMessage() for r in caplog.records].count("config_from_file") == 1
+
+
+def test_with_the_panel_on_the_file_is_imported_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    one = state_from_toml({"channels": [CHANNEL_DOC]})
+    two = state_from_toml({"channels": [CHANNEL_DOC, {**CHANNEL_DOC, "id": "two"}]})
+    with caplog.at_level(logging.INFO):
+        open_settings(tmp_path / "t.db", one, panel=True).close()
+        settings = open_settings(tmp_path / "t.db", two, panel=True)
+    assert [c.id for c in settings.load()[0].channels] == ["owr"]
+    settings.close()
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages.count("config_imported") == 1
+    ignored = [r for r in caplog.records if r.getMessage() == "config_file_ignored"]
+    assert [r.__dict__["fields"]["parts"] for r in ignored] == [["channels"]]
+
+
+def test_with_the_panel_on_a_file_like_the_database_is_quiet(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    one = state_from_toml(
+        {"channels": [CHANNEL_DOC], "player": {"latitude": 52.0, "longitude": 5.0}}
+    )
+    open_settings(tmp_path / "t.db", one, panel=False).close()
+    with caplog.at_level(logging.INFO):
+        open_settings(tmp_path / "t.db", one, panel=True).close()
+    assert caplog.records == []
+
+
+def test_with_the_panel_on_changed_defaults_and_player_are_named(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    one = state_from_toml({"channels": [CHANNEL_DOC]})
+    two = state_from_toml(
+        {
+            "channels": [CHANNEL_DOC],
+            "defaults": {"delay_s": 9},
+            "player": {"default_channel": "owr"},
+        }
+    )
+    open_settings(tmp_path / "t.db", one, panel=True).close()
+    with caplog.at_level(logging.INFO):
+        open_settings(tmp_path / "t.db", two, panel=True).close()
+    ignored = [r for r in caplog.records if r.getMessage() == "config_file_ignored"]
+    assert [r.__dict__["fields"]["parts"] for r in ignored] == [["defaults", "player"]]
 
 
 def test_admin_needs_its_web_folder() -> None:
