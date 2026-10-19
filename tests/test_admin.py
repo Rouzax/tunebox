@@ -9,7 +9,7 @@ import pytest
 
 from tunebox import crypto
 from tunebox.accounts import Accounts
-from tunebox.admin import ADMIN_HEADERS, KNOWN_COOKIE, SESSION_COOKIE, Admin, Request, Response
+from tunebox.admin import ADMIN_HEADERS, Admin, Request, Response
 from tunebox.config import AdminConfig
 from tunebox.settings import Settings, SettingsWriteError
 
@@ -27,7 +27,14 @@ class Clock:
 
 
 class World:
-    def __init__(self, tmp_path: Path, setup_page: bool = False, account: bool = True) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        setup_page: bool = False,
+        account: bool = True,
+        origin: str = ORIGIN,
+    ) -> None:
+        self.origin = origin
         self.clock = Clock()
         self.settings = Settings(tmp_path / "t.db")
         self.accounts = Accounts(self.settings, clock=self.clock)
@@ -40,7 +47,7 @@ class World:
         self.applied: list[int] = []
         self.admin = Admin(
             self.accounts,
-            AdminConfig(True, setup_page, ORIGIN),
+            AdminConfig(True, setup_page, origin),
             web,
             settings=self.settings,
             apply=self.apply,
@@ -55,12 +62,14 @@ class World:
         method: str,
         path: str,
         body: object = None,
-        origin: str | None = ORIGIN,
+        origin: str | None = "",
         csrf: str | None = None,
         content_type: str = "application/json",
         client: str = "198.51.100.7",
     ) -> Response:
         headers: dict[str, str] = {"Content-Type": content_type}
+        if origin == "":
+            origin = self.origin
         if origin:
             headers["Origin"] = origin
         if csrf:
@@ -111,14 +120,91 @@ def world(tmp_path: Path) -> Generator[World]:
     made.settings.close()
 
 
+PLAIN = "http://tunebox.home.arpa:8083"
+
+
+def test_plain_http_cookies_drop_the_secure_flag_and_prefix(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        world = World(tmp_path, origin=PLAIN)
+    started = next(r for r in caplog.records if r.getMessage() == "admin_plain_http")
+    assert started.__dict__["fields"]["origin"] == PLAIN
+    response = world.call("POST", "/admin/api/login", {"password": PASSWORD, "code": world.code()})
+    assert response.status == 200
+    cookies = [value for name, value in response.headers if name == "Set-Cookie"]
+    assert [c.split("=")[0] for c in cookies] == ["tunebox_admin", "tunebox_known"]
+    for cookie in cookies:
+        assert "Secure" not in cookie
+        assert "HttpOnly" in cookie
+        assert "SameSite=Strict" in cookie
+    # A __Secure- cookie is not a session here: browsers never send one over http.
+    assert json_of(world.call("GET", "/admin/api/state"))["session"] is not None
+    world.cookies = {"__Secure-tunebox_admin": world.cookies["tunebox_admin"]}
+    assert json_of(world.call("GET", "/admin/api/state"))["session"] is None
+    world.settings.close()
+
+
+def test_the_scheme_is_read_whatever_its_case(tmp_path: Path) -> None:
+    world = World(tmp_path, origin="HTTP://tunebox.home.arpa:8083")
+    assert world.admin.plain_http
+    assert world.admin.session_cookie == "tunebox_admin"
+    world.settings.close()
+
+
+def test_a_known_browser_grant_from_plain_http_gets_no_lane_on_https(tmp_path: Path) -> None:
+    world = World(tmp_path, origin=PLAIN)
+    world.login()
+    grant = world.cookies["tunebox_known"]
+    https = Admin(
+        world.accounts,
+        AdminConfig(True, False, ORIGIN),
+        tmp_path / "web_admin",
+        settings=world.settings,
+        clock=world.clock,
+        monotonic=world.clock,
+    )
+    stranger = Request(
+        "POST",
+        "/admin/api/login",
+        {"Origin": ORIGIN, "Content-Type": "application/json"},
+        json.dumps({"password": "x" * 12, "code": "1"}).encode(),
+        "203.0.113.5",
+    )
+    assert https.handle(stranger).status == 401
+    world.clock.now += 0.5
+    sniffed = Request(
+        "POST",
+        "/admin/api/login",
+        {
+            "Origin": ORIGIN,
+            "Content-Type": "application/json",
+            "Cookie": f"__Secure-tunebox_known={grant}",
+        },
+        json.dumps({"password": PASSWORD, "code": world.code(1)}).encode(),
+        "198.51.100.7",
+    )
+    assert https.handle(sniffed).status == 429
+    world.settings.close()
+
+
+def test_an_https_origin_logs_no_plain_http_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        world = World(tmp_path)
+    assert "admin_plain_http" not in caplog.text
+    world.settings.close()
+
+
 def test_login_sets_strict_cookies_and_state_shows_the_session(world: World) -> None:
     response = world.call("POST", "/admin/api/login", {"password": PASSWORD, "code": world.code()})
     assert response.status == 200
     cookies = [value for name, value in response.headers if name == "Set-Cookie"]
-    session = next(c for c in cookies if c.startswith(SESSION_COOKIE))
+    session = next(c for c in cookies if c.startswith(world.admin.session_cookie))
     for flag in ("HttpOnly", "Secure", "SameSite=Strict", "Path=/admin"):
         assert flag in session
-    assert any(c.startswith(KNOWN_COOKIE) for c in cookies)
+    assert any(c.startswith(world.admin.known_cookie) for c in cookies)
     state = json_of(world.call("GET", "/admin/api/state"))
     assert state["session"]["client"] == "198.51.100.7"
     assert state["session"]["csrf"] == json_of(response)["csrf"]
@@ -181,7 +267,7 @@ def test_five_failures_lock_the_address(world: World) -> None:
 
 def test_the_global_pace_has_a_lane_for_known_browsers(world: World) -> None:
     world.login()
-    world.cookies.pop(SESSION_COOKIE)
+    world.cookies.pop(world.admin.session_cookie)
     # Same second: a stranger is paced, the known browser has its own lane.
     stranger = world.admin.handle(
         Request(
@@ -200,7 +286,7 @@ def test_the_global_pace_has_a_lane_for_known_browsers(world: World) -> None:
 
 def test_a_forged_known_browser_cookie_gets_no_lane(world: World) -> None:
     world.login()
-    world.cookies = {KNOWN_COOKIE: "k1.1.9999999999.forged"}
+    world.cookies = {world.admin.known_cookie: "k1.1.9999999999.forged"}
     world.clock.now += 0.5
     response = world.call("POST", "/admin/api/login", {"password": PASSWORD, "code": world.code(1)})
     assert response.status == 429
@@ -296,7 +382,7 @@ def test_unknown_api_paths_and_bad_bodies(world: World) -> None:
 
 def test_a_known_browser_grant_ends_with_an_account_reset(world: World) -> None:
     world.login()
-    world.cookies.pop(SESSION_COOKIE)
+    world.cookies.pop(world.admin.session_cookie)
     world.accounts.create(PASSWORD, SECRET, [], step=int(world.clock.now // 30), replace=True)
     world.clock.now += 0.5  # within the same second as the last attempt
     response = world.call("POST", "/admin/api/login", {"password": PASSWORD, "code": world.code(1)})
@@ -325,20 +411,20 @@ def test_non_ascii_tokens_are_refused_not_crashed(world: World, tmp_path: Path) 
 
 def test_a_malformed_cookie_does_not_hide_the_session(world: World) -> None:
     world.login()
-    session = world.cookies[SESSION_COOKIE]
-    world.cookies = {"other": "a b c", SESSION_COOKIE: session}
+    session = world.cookies[world.admin.session_cookie]
+    world.cookies = {"other": "a b c", world.admin.session_cookie: session}
     assert json_of(world.call("GET", "/admin/api/state"))["session"] is not None
 
 
 def test_logout_without_a_live_session_is_done_quietly(
     world: World, caplog: pytest.LogCaptureFixture
 ) -> None:
-    world.cookies = {SESSION_COOKIE: "expired-or-unknown"}
+    world.cookies = {world.admin.session_cookie: "expired-or-unknown"}
     with caplog.at_level(logging.WARNING):
         response = world.call("POST", "/admin/api/logout", csrf="anything")
     assert response.status == 204
     assert "admin_csrf_rejected" not in caplog.text
-    assert SESSION_COOKIE not in world.cookies
+    assert world.admin.session_cookie not in world.cookies
 
 
 def test_logins_that_fail_to_save_do_not_lock_the_owner_out(

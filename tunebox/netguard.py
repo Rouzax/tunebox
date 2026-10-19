@@ -5,8 +5,9 @@ deadline, so a saved URL can neither reach the home network nor hold a
 thread. Catalogue and title feeds go to fixed provider hosts and use
 tunebox.http directly.
 
-client_address() is the inbound side: which address a request comes from,
-believing X-Forwarded-For only from trusted proxies."""
+client_address() and nearby() are the inbound side: which address a
+request comes from, believing X-Forwarded-For only from trusted proxies,
+and whether that address is on the owner's own network."""
 
 from __future__ import annotations
 
@@ -29,6 +30,32 @@ _REDIRECTS = (301, 302, 303, 307, 308)
 _TLS = ssl.create_default_context()
 
 Resolver = Callable[[str, int], list[str]]
+
+# Headers through which proxies name the client, besides X-Forwarded-For.
+OTHER_FORWARDING = (
+    "Forwarded",
+    "X-Real-IP",
+    "CF-Connecting-IP",
+    "True-Client-IP",
+    "X-Client-IP",
+)
+
+# What a home network, a VPN or a tailnet hands out. Not is_private: that
+# also holds documentation and benchmark ranges no home uses.
+NEARBY = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+    )
+)
 
 
 def public(address: str) -> bool:
@@ -87,6 +114,39 @@ def client_address(peer: str, forwarded: str | None, trusted: tuple[Network, ...
         if not _trusted(entry, trusted):
             return entry
     return peer
+
+
+def nearby(
+    peer: str, forwarded: str | None, other_forwarding: bool, trusted: tuple[Network, ...]
+) -> bool:
+    """Whether the client is on the owner's network. Fails closed where
+    client_address falls back to the peer: a request passed on by a proxy
+    that is not trusted never counts (on the same host such a proxy
+    connects from loopback while relaying the internet), nor does one from
+    a trusted proxy that names no readable client. other_forwarding is any
+    OTHER_FORWARDING header, which tunebox does not read."""
+    if not _trusted(peer, trusted):
+        return not forwarded and not other_forwarding and _on_network(peer)
+    if not forwarded:
+        return False
+    for entry in reversed([part.strip() for part in forwarded.split(",")]):
+        try:
+            ipaddress.ip_address(entry)
+        except ValueError:
+            return False
+        if not _trusted(entry, trusted):
+            return _on_network(entry)
+    return False
+
+
+def _on_network(address: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip in network for network in NEARBY)
 
 
 def _short(url: str) -> str:

@@ -1,6 +1,7 @@
 """Rate limits for logins and setup: per-key failure counts with a lock,
-and a global pace. Keys are address groups, so one IPv6 host cannot rotate
-through its /64 to get fresh counters."""
+and a global pace; Once thins out repeated warnings. Keys are address
+groups, so one IPv6 host cannot rotate through its /64 to get fresh
+counters."""
 
 from __future__ import annotations
 
@@ -98,4 +99,33 @@ class Pace:
             if now < self._next:
                 return False
             self._next = now + self._interval
+            return True
+
+
+class Once:
+    """True for the first call per address group in each interval, for a
+    warning anyone can trigger: the rest go to a quieter level."""
+
+    def __init__(
+        self,
+        interval_s: float,
+        clock: Callable[[], float] = time.monotonic,
+        max_keys: int = 10_000,
+    ) -> None:
+        self._interval = interval_s
+        self._clock = clock
+        self._max = max_keys
+        self._lock = threading.Lock()
+        self._until: OrderedDict[str, float] = OrderedDict()
+
+    def first(self, address: str) -> bool:
+        key = group(address)
+        now = self._clock()
+        with self._lock:
+            if self._until.get(key, 0.0) > now:
+                return False
+            self._until[key] = now + self._interval
+            self._until.move_to_end(key)
+            while len(self._until) > self._max:
+                self._until.popitem(last=False)
             return True

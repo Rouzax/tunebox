@@ -15,10 +15,11 @@ from tunebox.admin import Admin, Request, body_limit
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import Network, StreamConfig
+from tunebox.limits import Once
 from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
 from tunebox.logos import Logos
 from tunebox.logs import bound, event
-from tunebox.netguard import client_address
+from tunebox.netguard import OTHER_FORWARDING, client_address, nearby
 from tunebox.runtime import Snapshot
 
 log = logging.getLogger(__name__)
@@ -124,6 +125,7 @@ class TuneboxServer(ThreadingHTTPServer):
         self.admin = admin
         self.trusted = trusted
         self.warned_proxies = False
+        self.refusals = Once(600)
         self.bursts = bursts
         self.web_dir = web_dir.resolve()
         self.logos = logos
@@ -226,12 +228,21 @@ class Handler(BaseHTTPRequestHandler):
         # Every line: a proxy may add its own line after the client's, and
         # the first line alone would be the client's word.
         forwarded = ", ".join(self.headers.get_all("X-Forwarded-For") or []) or None
+        peer = self.client_address[0]
         if forwarded and not self.app.trusted and not self.app.warned_proxies:
             self.app.warned_proxies = True
             # Every client would share the proxy's address: limits and
             # CrowdSec would then punish everyone at once.
-            event(log, logging.WARNING, "trusted_proxies_unset", peer=self.client_address[0])
-        client = client_address(self.client_address[0], forwarded, self.app.trusted)
+            event(log, logging.WARNING, "trusted_proxies_unset", peer=peer)
+        client = client_address(peer, forwarded, self.app.trusted)
+        if admin.plain_http:
+            other = any(self.headers.get(name) for name in OTHER_FORWARDING)
+            if not nearby(peer, forwarded, other, self.app.trusted):
+                # Plain http carries the password readable: off the home
+                # network the panel looks switched off.
+                level = logging.WARNING if self.app.refusals.first(client) else logging.DEBUG
+                event(log, level, "admin_not_nearby", client=client, peer=peer)
+                return self._send_json(404, {"error": "not_found"}, head)
         method = "GET" if head else self.command
         headers = dict(self.headers.items())
         response = admin.handle(Request(method, path, headers, body, client, query))

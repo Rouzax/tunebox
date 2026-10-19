@@ -48,8 +48,8 @@ MAX_BODY = 65_536
 # limit is chosen by path before any session check, so anyone may send this
 # much to that one route; the proxy's body limit bounds it in front.
 MAX_STATE_BODY = 524_288
-SESSION_COOKIE = "__Secure-tunebox_admin"
-KNOWN_COOKIE = "__Secure-tunebox_known"
+SESSION_COOKIE = "tunebox_admin"
+KNOWN_COOKIE = "tunebox_known"
 KNOWN_S = 365 * 86_400
 SETUP_TOKEN_S = 900
 ADMIN_CSP = "; ".join(
@@ -131,11 +131,6 @@ def _error(status: int, name: str) -> Response:
     return _json(status, {"error": name})
 
 
-def _cookie(name: str, value: str, max_age: int) -> tuple[str, str]:
-    attributes = f"Path=/admin; Max-Age={max_age}; HttpOnly; Secure; SameSite=Strict"
-    return ("Set-Cookie", f"{name}={value}; {attributes}")
-
-
 class Admin:
     def __init__(
         self,
@@ -155,6 +150,18 @@ class Admin:
         self._apply = apply
         self._samples = samples
         self._origin = config.public_origin
+        # Over plain http a browser drops Secure cookies and refuses the
+        # __Secure- prefix; the server then serves the panel only to the
+        # home network (see nearby in netguard).
+        self.plain_http = config.plain_http
+        prefix = "" if self.plain_http else "__Secure-"
+        self.session_cookie = prefix + SESSION_COOKIE
+        self.known_cookie = prefix + KNOWN_COOKIE
+        # A grant read on the network over plain http must not give a lane
+        # once the panel moves to https.
+        self._grant_version = "h1" if self.plain_http else "k1"
+        if self.plain_http:
+            event(log, logging.WARNING, "admin_plain_http", origin=config.public_origin)
         self._web = web_dir.resolve()
         self._clock = clock
         self._monotonic = monotonic
@@ -249,8 +256,13 @@ class Admin:
             return (self._restore, True)
         return None
 
+    def _cookie(self, name: str, value: str, max_age: int) -> tuple[str, str]:
+        secure = "" if self.plain_http else " Secure;"
+        attributes = f"Path=/admin; Max-Age={max_age}; HttpOnly;{secure} SameSite=Strict"
+        return ("Set-Cookie", f"{name}={value}; {attributes}")
+
     def _session(self, request: Request) -> Session | None:
-        token = request.cookie(SESSION_COOKIE)
+        token = request.cookie(self.session_cookie)
         return self._accounts.session(token) if token else None
 
     def _state(self, request: Request) -> Response:
@@ -310,38 +322,39 @@ class Admin:
         event(log, logging.INFO, "admin_login", client=request.client)
         expiry = int(self._clock() + KNOWN_S)
         grant = crypto.sign(
-            self._accounts.server_key(), f"k1.{self._accounts.generation()}.{expiry}"
+            self._accounts.server_key(),
+            f"{self._grant_version}.{self._accounts.generation()}.{expiry}",
         )
         return _json(
             200,
             {"csrf": outcome.csrf},
-            _cookie(SESSION_COOKIE, outcome.token or "", ABSOLUTE_S),
-            _cookie(KNOWN_COOKIE, grant, KNOWN_S),
+            self._cookie(self.session_cookie, outcome.token or "", ABSOLUTE_S),
+            self._cookie(self.known_cookie, grant, KNOWN_S),
         )
 
     def _logout(self, request: Request) -> Response:
         session = self._session(request)
         if session is None:
             # Already logged out (or expired): nothing to protect.
-            return Response(204, headers=(_cookie(SESSION_COOKIE, "", 0),))
+            return Response(204, headers=(self._cookie(self.session_cookie, "", 0),))
         given = request.header("X-Tunebox-CSRF") or ""
         if not _same(given, session.csrf):
             event(log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="token")
             return _error(403, "bad_csrf")
-        self._accounts.logout(request.cookie(SESSION_COOKIE) or "")
-        return Response(204, headers=(_cookie(SESSION_COOKIE, "", 0),))
+        self._accounts.logout(request.cookie(self.session_cookie) or "")
+        return Response(204, headers=(self._cookie(self.session_cookie, "", 0),))
 
     def _known(self, request: Request) -> bool:
         """A browser that logged in before, by a signed cookie naming the
         current account generation; it gets its own lane in the pace."""
-        value = request.cookie(KNOWN_COOKIE)
+        value = request.cookie(self.known_cookie)
         payload = crypto.unsign(self._accounts.server_key(), value) if value else None
         if payload is None:
             return False
         try:
             version, generation, expiry = payload.split(".")
             current = int(generation) == self._accounts.generation()
-            return version == "k1" and current and int(expiry) > self._clock()
+            return version == self._grant_version and current and int(expiry) > self._clock()
         except ValueError:
             return False
 

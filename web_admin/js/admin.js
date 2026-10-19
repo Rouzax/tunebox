@@ -14,7 +14,7 @@ const ERRORS = {
     password_too_short: 'The password needs at least 12 characters.',
     code_wrong: 'That code does not match. Type the one the app shows now.',
     read_only: 'tunebox cannot write its database right now. Try again later.',
-    bad_origin: 'Open the admin panel at its public https address.',
+    bad_origin: 'Open the admin panel at the address set as public_origin.',
     bad_csrf: 'This page is out of date. Reload it and try again.',
     not_found: 'Not found.',
 };

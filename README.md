@@ -220,11 +220,24 @@ stations change from then on.
   you changed into the file first. The panel's versions stay in its
   History, so turning the panel back on lets you restore them.
 
-**What you need:** tunebox reachable over https at a public address, a
-reverse proxy in front of it, and an authenticator app on your phone
-(Google Authenticator, 1Password, Aegis or similar).
+**What you need:** an authenticator app on your phone (Google
+Authenticator, 1Password, Aegis or similar), and one of these:
 
-1. In `data/tunebox.toml`, add:
+- **Only on your home network or VPN:** nothing more. The panel runs over
+  plain http at the address you already open tunebox at, such as
+  `http://tunebox.home.arpa:8083`.
+- **From anywhere:** tunebox reachable over https at a public address,
+  with a reverse proxy in front of it.
+
+1. In `data/tunebox.toml`, add, for the home network only:
+
+   ```toml
+   [admin]
+   enabled = true
+   public_origin = "http://tunebox.home.arpa:8083"   # the address you open, with its port
+   ```
+
+   or, from anywhere:
 
    ```toml
    [server]
@@ -235,8 +248,10 @@ reverse proxy in front of it, and an authenticator app on your phone
    public_origin = "https://radio.example"   # your public address
    ```
 
-   `trusted_proxies` lets tunebox see the visitor's address behind the
-   proxy. Without it every visitor looks like the proxy, so one person's
+   `public_origin` must be exactly the address in the browser's address
+   bar: the panel refuses logins from any other, including the same
+   machine by its IP address. `trusted_proxies` lets tunebox see the
+   visitor's address behind the proxy. Without it every visitor looks like the proxy, so one person's
    wrong passwords would lock everyone out; tunebox then logs
    `trusted_proxies_unset`.
 2. Restart: `docker compose up -d`.
@@ -250,7 +265,7 @@ reverse proxy in front of it, and an authenticator app on your phone
    `otpauth://` link and a secret to add to your authenticator app, asks
    for the code the app shows, and prints ten recovery codes. Keep those
    safe: each one replaces a code once if you lose your phone.
-4. Open `https://radio.example/admin/` and log in with the password and
+4. Open `public_origin` followed by `/admin/` and log in with the password and
    the code from the app. The page shows the address tunebox sees for
    you; if that is your proxy's address, check `trusted_proxies`.
 
@@ -264,13 +279,40 @@ to choose the password and scan a QR code. The page closes once the
 account exists. Remove `setup_page` afterwards.
 
 **How it is protected:** the panel only accepts changes from
-`public_origin`, over https. Five failed logins from one address lock that
+`public_origin`. Five failed logins from one address lock that
 address for 15 minutes. Many wrong codes after a correct password slow
 logins down for everyone and show a warning once you are logged in: your
 password is then probably known. To have CrowdSec ban repeated attempts at
 your proxy, see `examples/crowdsec/README.md`. To switch the panel off, set
 `enabled = false` (or remove `[admin]`) and restart: every `/admin`
 address then answers 404.
+
+**On plain http** the password, the code and the login cookie cross your
+network unencrypted. A VPN such as WireGuard encrypts the trip from your
+phone, but anyone who can watch your home network can read them, and any
+other website on the same host name (another port included) receives the
+login cookie. So tunebox serves the panel only to addresses on a home
+network, a VPN or a tailnet (10.x, 172.16-31.x, 192.168.x, 100.64-127.x,
+loopback and their IPv6 equivalents), and logs `admin_plain_http` at
+start-up. A request a proxy passed on counts only if that proxy is in
+`trusted_proxies` and names a client on the home network in
+`X-Forwarded-For`. To everyone else the panel looks switched off, and
+tunebox logs `admin_not_nearby`.
+
+That check reads addresses, so two things are up to you:
+
+- **Keep tunebox's port closed to the internet.** A tunnel or relay that
+  passes connections on without saying who sent them (`ssh -R`, a TCP or
+  stream proxy, Docker's own port forwarding for IPv6 visitors) makes an
+  internet visitor look local. Do not publish the plain-http panel that
+  way; for access from outside, set up https instead.
+- **Phones that use a global IPv6 address are refused.** Such an address
+  cannot be told apart from the internet. Open the panel by an IPv4
+  address or a host name that resolves to one.
+
+**Moving from http to https later:** sessions from plain http stay valid
+until they end (at most 12 hours). To end them at once, run the setup
+command with `--reset`.
 
 ### Manage the stations
 
@@ -500,7 +542,8 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | The container stops right away; the log says `settings_unavailable` | The `data` folder or `data/tunebox.db` is not writable by user id 1000, or `tunebox.db` is damaged or comes from a newer tunebox. | Most often it is the owner: `sudo chown -R 1000:1000 data` and restart. Otherwise restore `tunebox.db` from a back-up, or move it aside (with its `-wal` and `-shm` files): tunebox then starts with a new database and takes the stations from `tunebox.toml`. |
 | `trusted_proxies_unset` in the log | tunebox is behind a proxy but does not know it, so every visitor has the proxy's address. | Set `trusted_proxies` in `[server]` to the proxy's address or network and restart. |
 | The admin login says "Login failed" with the right password | The code was already used, the phone's clock is off, or a recovery code was typed with a mistake. | Wait for the next code and check the phone's time. After five failures the address is locked for 15 minutes. |
-| The admin page says "Open the admin panel at its public https address" | It was opened by another address (a LAN address, or plain http). | Open it at `public_origin`. |
+| The admin page says "Open the admin panel at the address set as public_origin" | It was opened by another address, such as the IP address instead of the host name, or http instead of https. | Open it at `public_origin`, exactly as written there. |
+| `/admin/` answers 404 although the panel is on, and the log says `admin_not_nearby` | `public_origin` is plain http and the request did not come from the home network: from the internet, or through a proxy that is not in `trusted_proxies`. | Open the panel directly at `public_origin` from the home network or the VPN. Through a proxy, set up https instead. |
 | `config_file_ignored` in the log | The admin panel is on, so tunebox does not read the `parts` it names from `tunebox.toml` (`channels`, `defaults`, `player`); the database has its own, and they differ. | Change stations in the panel. For `defaults` or `player`, see [Set up the admin panel](#set-up-the-admin-panel). To stop the warning, make the file match or remove those parts from it. |
 | Saving in the admin panel says "Changed elsewhere" | Someone saved in another tab or browser first. | On the station list, check the stations it now shows and make your change again if it is still needed. In the edit form, check it and save again. |
 | Saving a title rule is refused | The pattern could stall tunebox (see [Manage the stations](#manage-the-stations)). | Simplify it as the message says: no repeat inside a repeated group, such as `(\w+\s?)*`, and no three repeats in a row that take the same characters, such as `.*-.*-.*` (use `[^-]*` for the parts between separators). |
@@ -534,14 +577,14 @@ is reported at startup instead of being ignored.
 | `host` | `"0.0.0.0"` | Address to listen on inside the container. |
 | `port` | `8080` | Port to listen on. Keep 8080 in the container; the health check uses it. |
 | `data_dir` | the folder of the config file | Where `tunebox.db` is kept. |
-| `trusted_proxies` | none | Addresses or networks of your reverse proxy, such as `["172.18.0.0/16"]`. Only connections from these may name the visitor's address (`X-Forwarded-For`). |
+| `trusted_proxies` | none | Addresses or networks of your reverse proxy, such as `["172.18.0.0/16"]`. Only connections from these may name the visitor's address (`X-Forwarded-For`). With a plain-http panel, a connection from these that names no visitor is refused, so keep the range to the proxy and leave out your own devices. |
 
 `[admin]` (optional; see [Set up the admin panel](#set-up-the-admin-panel))
 
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | Turns the admin panel on. Off, every `/admin` address answers 404. |
-| `public_origin` | none, required when enabled | The public https address without a path, such as `https://radio.example`. The panel accepts changes only from there. For use on the machine itself, `http://localhost` or `http://127.0.0.1` with any port also works (browsers treat those as secure). |
+| `public_origin` | none, required when enabled | The address you open the panel at, without a path: `https://radio.example`, or plain http on a home network, such as `http://tunebox.home.arpa:8083`. The panel accepts changes only from there. On plain http it answers only clients on the home network (see [Set up the admin panel](#set-up-the-admin-panel)). |
 | `setup_page` | `false` | Opens the one-time setup page while no account exists. |
 
 `[defaults]` (each can also be set per station)

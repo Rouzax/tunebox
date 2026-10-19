@@ -9,7 +9,7 @@ import pytest
 
 from tunebox import netguard
 from tunebox.http import HttpError
-from tunebox.netguard import Guard, client_address, public
+from tunebox.netguard import OTHER_FORWARDING, Guard, client_address, nearby, public
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -200,3 +200,48 @@ def test_an_unparseable_entry_from_the_proxy_fails_closed() -> None:
     # proxy appended.
     assert client_address("172.18.0.5", "198.51.100.7, unknown", PROXY) == "172.18.0.5"
     assert client_address("172.18.0.5", "198.51.100.7, 203.0.113.9:4444", PROXY) == "172.18.0.5"
+
+
+@pytest.mark.parametrize(
+    ("peer", "forwarded", "other", "expected"),
+    [
+        ("192.168.1.20", None, False, True),  # a phone on the LAN or the VPN
+        ("10.1.2.3", None, False, True),
+        ("172.17.0.1", None, False, True),  # the docker bridge
+        ("100.64.1.1", None, False, True),  # Tailscale and other carrier-grade NAT
+        ("127.0.0.1", None, False, True),  # a tunnel on the host itself
+        ("fd00::7", None, False, True),
+        ("::ffff:192.168.1.20", None, False, True),
+        ("198.51.100.7", None, False, False),
+        ("::ffff:198.51.100.7", None, False, False),
+        ("2001:db8::1", None, False, False),
+        ("not an address", None, False, False),
+        # A proxy that is not trusted, on the same host, relays the internet
+        # from loopback.
+        ("127.0.0.1", "198.51.100.7", False, False),
+        ("127.0.0.1", "192.168.1.20", False, False),
+        ("127.0.0.1", None, True, False),
+        # A trusted proxy is believed about the client.
+        ("172.18.0.5", "192.168.1.20", False, True),
+        ("172.18.0.5", "198.51.100.7", False, False),
+        ("172.18.0.5", "198.51.100.7, 172.18.0.2", False, False),
+        # ... but only through X-Forwarded-For, the header tunebox reads.
+        ("172.18.0.5", None, True, False),
+        # A trusted proxy that names no client, or names it in a form that
+        # cannot be read, leaves only the proxy's own address: not enough.
+        ("172.18.0.5", None, False, False),
+        ("172.18.0.5", "198.51.100.7, unknown", False, False),
+        ("172.18.0.5", "203.0.113.9:4444", False, False),
+        ("172.18.0.5", "[2001:db8::1]:443", False, False),
+        ("172.18.0.5", "172.18.0.2", False, False),
+    ],
+)
+def test_nearby_is_decided_on_the_real_client(
+    peer: str, forwarded: str | None, other: bool, expected: bool
+) -> None:
+    assert nearby(peer, forwarded, other, PROXY) is expected
+
+
+@pytest.mark.parametrize("name", ["Forwarded", "X-Real-IP", "CF-Connecting-IP", "True-Client-IP"])
+def test_every_common_forwarding_header_is_known(name: str) -> None:
+    assert name in OTHER_FORWARDING

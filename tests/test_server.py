@@ -418,6 +418,110 @@ def post(
     return response.status, data
 
 
+PLAIN = "http://tunebox.home.arpa:8083"
+
+
+@pytest.fixture
+def plain_server(tmp_path: Path) -> Generator[TuneboxServer]:
+    """The panel on plain http, behind no trusted proxy: the test client
+    connects from loopback, as a proxy on the same host would."""
+    settings = Settings(tmp_path / "t.db")
+    web_admin = tmp_path / "web_admin"
+    web_admin.mkdir()
+    (web_admin / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
+    admin = Admin(
+        Accounts(settings),
+        AdminConfig(True, False, PLAIN),
+        web_admin,
+        settings=settings,
+    )
+    httpd = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, admin=admin)
+    serve(httpd)
+    yield httpd
+    httpd.shutdown()
+    httpd.server_close()
+    settings.close()
+
+
+def test_plain_http_serves_a_direct_client_on_the_network(plain_server: TuneboxServer) -> None:
+    assert request(plain_server, "/admin/")[0] == 200
+    assert request(plain_server, "/admin/api/state")[0] == 200
+
+
+@pytest.mark.parametrize(
+    "relay",
+    [
+        {"X-Forwarded-For": "198.51.100.7"},
+        {"X-Forwarded-For": "192.168.1.20"},
+        {"Forwarded": "for=198.51.100.7"},
+        {"X-Real-IP": "198.51.100.7"},
+        {"CF-Connecting-IP": "198.51.100.7"},
+    ],
+)
+def test_plain_http_hides_the_panel_from_an_untrusted_proxy(
+    plain_server: TuneboxServer,
+    server: TuneboxServer,
+    relay: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    off = request(server, "/admin/api/state")
+    with caplog.at_level(logging.WARNING):
+        for path in ("/admin", "/admin/", "/admin/api/state"):
+            status, _, body = request(plain_server, path, headers=relay)
+            assert (status, body) == (404, off[2])
+        login = post(
+            plain_server,
+            "/admin/api/login",
+            b"{}",
+            {"Content-Type": "application/json", "Origin": PLAIN, **relay},
+        )
+    assert login[0] == 404
+    refused = next(r for r in caplog.records if r.getMessage() == "admin_not_nearby")
+    assert refused.__dict__["fields"]["peer"] == "127.0.0.1"
+
+
+def test_plain_http_believes_a_trusted_proxy_about_the_client(tmp_path: Path) -> None:
+    settings = Settings(tmp_path / "t.db")
+    admin = Admin(
+        Accounts(settings),
+        AdminConfig(True, False, PLAIN),
+        tmp_path,
+        settings=settings,
+    )
+    httpd = TuneboxServer(
+        ("127.0.0.1", 0),
+        lambda: EMPTY,
+        tmp_path,
+        admin=admin,
+        trusted=(ipaddress.ip_network("127.0.0.0/8"),),
+    )
+    serve(httpd)
+    near = request(httpd, "/admin/api/state", headers={"X-Forwarded-For": "192.168.1.20"})
+    far = request(httpd, "/admin/api/state", headers={"X-Forwarded-For": "198.51.100.7"})
+    unread = request(httpd, "/admin/api/state", headers={"X-Forwarded-For": "203.0.113.9:51234"})
+    unnamed = request(httpd, "/admin/api/state")
+    httpd.shutdown()
+    httpd.server_close()
+    settings.close()
+    assert (near[0], far[0], unread[0], unnamed[0]) == (200, 404, 404, 404)
+
+
+def test_a_refused_address_is_logged_once_at_warning(
+    plain_server: TuneboxServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.DEBUG):
+        for address in ("198.51.100.7", "198.51.100.7", "203.0.113.5"):
+            request(plain_server, "/admin/", headers={"Forwarded": f"for={address}"})
+    levels = [r.levelno for r in caplog.records if r.getMessage() == "admin_not_nearby"]
+    # Untrusted, so every request is the proxy's: one address, one warning.
+    assert levels == [logging.WARNING, logging.DEBUG, logging.DEBUG]
+
+
+def test_https_serves_clients_anywhere(admin_server: TuneboxServer) -> None:
+    relayed = {"X-Forwarded-For": "198.51.100.7"}
+    assert request(admin_server, "/admin/api/state", headers=relayed)[0] == 200
+
+
 def test_admin_is_404_when_disabled(server: TuneboxServer) -> None:
     for path in ("/admin", "/admin/", "/admin/api/state"):
         assert request(server, path)[0] == 404

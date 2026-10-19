@@ -108,9 +108,13 @@ class ServerConfig:
 class AdminConfig:
     enabled: bool = False
     setup_page: bool = False
-    # Scheme and host of the public address; every state-changing admin
-    # request must come from it.
+    # Scheme and host of the public address, as a browser sends it in
+    # Origin; every state-changing admin request must come from it.
     public_origin: str | None = None
+
+    @property
+    def plain_http(self) -> bool:
+        return urllib.parse.urlsplit(self.public_origin or "").scheme == "http"
 
 
 @dataclass(frozen=True)
@@ -202,17 +206,30 @@ def _admin(table: dict[str, Any]) -> AdminConfig:
     if enabled and origin is None:
         raise ConfigError("admin.public_origin: required when the admin panel is enabled")
     if origin is not None:
-        parts = urllib.parse.urlsplit(origin)
-        # Browsers treat loopback as secure, so Secure cookies work there:
-        # that is local development and the browser checks.
-        loopback = parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1")
-        good = (parts.scheme == "https" or loopback) and parts.hostname
-        if not good or parts.path or parts.query:
-            raise ConfigError(
-                "admin.public_origin: an https origin such as https://radio.example"
-                " (or http://localhost for development)"
-            )
+        origin = _origin(origin)
     return AdminConfig(enabled, _bool(table, "setup_page", "admin.setup_page", False), origin)
+
+
+def _origin(value: str) -> str:
+    """The origin as a browser sends it: lower case, no default port. Plain
+    http is for a home network: the server then serves the panel only to
+    clients on it."""
+    parts = urllib.parse.urlsplit(value)
+    try:
+        port = parts.port
+    except ValueError:
+        port = -1
+    host = parts.hostname
+    good = parts.scheme in ("https", "http") and port != -1 and not parts.username
+    if host is None or not good or parts.path or parts.query or parts.fragment:
+        raise ConfigError(
+            "admin.public_origin: an origin without a path, such as"
+            " https://radio.example or http://tunebox.home.arpa:8083"
+        )
+    if ":" in host:
+        host = f"[{host}]"
+    default = {"http": 80, "https": 443}[parts.scheme]
+    return f"{parts.scheme}://{host}" + (f":{port}" if port not in (None, default) else "")
 
 
 def state_from_toml(data: dict[str, Any]) -> ConfigState:

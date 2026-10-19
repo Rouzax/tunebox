@@ -1,4 +1,4 @@
-from tunebox.limits import FailureLimit, Pace, group
+from tunebox.limits import FailureLimit, Once, Pace, group
 
 
 class Clock:
@@ -63,3 +63,21 @@ def test_pace_allows_one_per_interval() -> None:
     assert not pace.allow()
     clock.now += 1.0
     assert pace.allow()
+
+
+def test_once_is_true_for_the_first_of_each_group_per_interval() -> None:
+    clock = Clock()
+    once = Once(600, clock=clock, max_keys=2)
+    assert once.first("198.51.100.7")
+    assert not once.first("198.51.100.7")
+    assert once.first("2001:db8::1")
+    assert not once.first("2001:db8::2")  # the same /64
+    clock.now += 601
+    assert once.first("198.51.100.7")
+
+
+def test_once_forgets_the_oldest_group_when_full() -> None:
+    once = Once(600, clock=Clock(), max_keys=2)
+    for address in ("10.0.0.1", "10.0.0.2", "10.0.0.3"):
+        assert once.first(address)
+    assert once.first("10.0.0.1")

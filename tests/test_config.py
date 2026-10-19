@@ -282,20 +282,48 @@ def test_admin_settings_and_trusted_proxies(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "origin", ["http://localhost:8083", "http://127.0.0.1:18086", "https://radio.example"]
+    "origin",
+    [
+        "http://localhost:8083",
+        "http://127.0.0.1:18086",
+        "https://radio.example",
+        "http://tunebox.home.arpa:8083",
+        "http://192.168.1.10:8083",
+    ],
 )
-def test_public_origin_may_be_loopback_http(origin: str, tmp_path: Path) -> None:
+def test_public_origin_may_be_https_or_plain_http(origin: str, tmp_path: Path) -> None:
     data = {**minimal(), "admin": {"enabled": True, "public_origin": origin}}
     assert parse(data, tmp_path).admin.public_origin == origin
+
+
+@pytest.mark.parametrize(
+    ("given", "stored"),
+    [
+        ("HTTP://Tunebox.Home.Arpa:80", "http://tunebox.home.arpa"),
+        ("https://Radio.Example:443", "https://radio.example"),
+        ("https://radio.example:8443", "https://radio.example:8443"),
+        ("http://[FD00::1]:8083", "http://[fd00::1]:8083"),
+    ],
+)
+def test_public_origin_is_stored_as_a_browser_sends_it(
+    given: str, stored: str, tmp_path: Path
+) -> None:
+    data = {**minimal(), "admin": {"enabled": True, "public_origin": given}}
+    admin = parse(data, tmp_path).admin
+    assert admin.public_origin == stored
+    assert admin.plain_http is stored.startswith("http:")
 
 
 @pytest.mark.parametrize(
     ("admin", "message"),
     [
         ({"enabled": True}, "admin.public_origin: required"),
-        ({"enabled": True, "public_origin": "http://radio.example"}, "admin.public_origin"),
+        ({"enabled": True, "public_origin": "ftp://radio.example"}, "admin.public_origin"),
+        ({"enabled": True, "public_origin": "http://"}, "admin.public_origin"),
+        ({"enabled": True, "public_origin": "http://x:99999"}, "admin.public_origin"),
+        ({"enabled": True, "public_origin": "http://u@x"}, "admin.public_origin"),
         ({"enabled": True, "public_origin": "https://radio.example/path"}, "admin.public_origin"),
-        ({"enabled": True, "public_origin": "http://192.0.2.1"}, "admin.public_origin"),
+        ({"enabled": True, "public_origin": "http://192.0.2.1?x"}, "admin.public_origin"),
         ({"enabled": True, "public_origin": "http://localhost/x"}, "admin.public_origin"),
         ({"enabled": "yes"}, "admin.enabled"),
         ({"colour": 1}, "admin.colour: unknown key"),
