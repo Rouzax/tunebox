@@ -23,22 +23,24 @@ def test_there_are_pages() -> None:
 
 def test_player_page_has_the_elements_the_scripts_bind_to() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
-    for needle in [
-        'class="tunebox ',
-        'class="car-daynight"',
-        'class="container-inner"',
-        'class="artwork"',
-        'class="current-channel"',
-        'class="car-title"',
-        'class="car-artist"',
-        'class="car-played"',
-        'class="history-list"',
-        'class="channel-groups"',
-        'class="viz-list"',
-        'class="volume-slider"',
-        'id="analyzer"',
-        'src="js/main.js"',
+    classes = {name for value in re.findall(r'class="([^"]*)"', html) for name in value.split()}
+    for name in [
+        "tunebox",
+        "car-daynight",
+        "container-inner",
+        "artwork",
+        "car-station-logo",
+        "current-channel",
+        "car-title",
+        "car-artist",
+        "car-played",
+        "history-list",
+        "channel-groups",
+        "viz-list",
+        "volume-slider",
     ]:
+        assert name in classes, name
+    for needle in ['id="analyzer"', 'src="js/main.js"']:
         assert needle in html, needle
 
 

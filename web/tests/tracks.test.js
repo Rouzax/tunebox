@@ -10,7 +10,7 @@ test('a track gets three lines', () => {
     assert.deepEqual(displayLines(TRACK, 'One World Radio'), {
         title: 'Miracle',
         artist: 'ADRIATIQUE, WHOMADEWHO',
-        playedBy: 'Played by WhoMadeWho Crystal Garden TML 24',
+        playedBy: 'WhoMadeWho Crystal Garden TML 24',
     });
 });
 

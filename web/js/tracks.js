@@ -10,7 +10,7 @@ export function displayLines(track, channelName) {
         title: track.title,
         // A trailing separator is left on some multi-artist entries.
         artist: (track.artist || '').replace(/[\s,]+$/, ''),
-        playedBy: track.played_by ? `Played by ${track.played_by}` : '',
+        playedBy: track.played_by || '',
     };
 }
 

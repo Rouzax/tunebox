@@ -4,6 +4,7 @@ import {nextCover} from './tracks.js';
 export function bindDisplay(app) {
     const {root, events} = app;
     const channelLine = root.querySelector('.current-channel');
+    const logo = root.querySelector('.car-station-logo');
     const title = root.querySelector('.car-title');
     const artist = root.querySelector('.car-artist');
     const played = root.querySelector('.car-played');
@@ -12,6 +13,9 @@ export function bindDisplay(app) {
 
     // A cover that fails to load gives way to the channel's own images, then
     // to the built-in cover.
+    logo.addEventListener('error', () => {
+        logo.hidden = true;
+    });
     image.addEventListener('error', () => {
         const next = nextCover(image.getAttribute('src'), channelShown);
         if (next) {
@@ -22,6 +26,16 @@ export function bindDisplay(app) {
     events.on('track', ({lines, cover, channel}) => {
         channelShown = channel;
         channelLine.textContent = channel.name;
+        // The small copy where tunebox made one: the header shows it at
+        // text size.
+        const logoUrl = channel.logo_small || channel.logo;
+        if (!logoUrl) {
+            logo.hidden = true;
+            logo.removeAttribute('src');
+        } else if (logo.getAttribute('src') !== logoUrl) {
+            logo.hidden = false;
+            logo.src = logoUrl;
+        }
         title.textContent = lines.title;
         artist.textContent = lines.artist;
         played.textContent = lines.playedBy;

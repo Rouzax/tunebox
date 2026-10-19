@@ -1,7 +1,8 @@
 // Layout check for the player: overlap, clipping and sideways scroll at every
 // window size the player is used at, on every page, in day and night, stopped
 // and playing, embedded or not, with long titles. Also checks that a page
-// open loads no channel logos before the channel page is opened.
+// open loads only the current channel's logo before the channel page is
+// opened.
 //
 // Needs Google Chrome or Chromium (or CHROME=<path>) and a running tunebox.
 // Node 22 or later (Node 20 needs --experimental-websocket):
@@ -35,7 +36,7 @@ const SIZES = [
 const PAGES = ['main', 'history', 'channels', 'viz'];
 const LONG_TITLE = 'An Extremely Long Track Title That Will Never Fit On One Line (Extended Festival Mix)';
 const LONG_ARTIST = 'ARTIST ONE, ARTIST TWO, ARTIST THREE, ARTIST FOUR, ARTIST FIVE';
-const LONG_PLAYED = 'Played by Somebody With A Long Name Mainstage Tomorrowland Winter 2026';
+const LONG_PLAYED = 'Somebody With A Long Name Mainstage Tomorrowland Winter 2026';
 // Sub-pixel rounding of transforms and borders.
 const SLACK = 1;
 
@@ -157,7 +158,7 @@ function inspect(page, slack) {
             problems.push(`now playing page needs scrolling (${activePage.scrollHeight} > ${activePage.clientHeight})`);
         }
         const art = box(document.querySelector('.artwork-img'));
-        const lines = [...document.querySelectorAll('.onair .ticker')].filter(visible);
+        const lines = [...document.querySelectorAll('.onair .car-line')].filter(visible);
         const text = lines.map(box).reduce((a, b) => ({
             left: Math.min(a.left, b.left), top: Math.min(a.top, b.top),
             right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom),
@@ -174,13 +175,64 @@ function inspect(page, slack) {
         if (text.bottom > barRect.top + slack) {
             problems.push(`track text runs under the control bar (${Math.round(text.bottom)} > ${Math.round(barRect.top)})`);
         }
+        // The scrim reaches past the text and fades out (car.css); its dark
+        // part must end above the bar, or the bar cuts it off with an edge.
+        const scrimEnd = text.bottom + parseFloat(getComputedStyle(root).fontSize) * 1.4;
+        if (scrimEnd > barRect.top + slack) {
+            problems.push(`the caption's scrim runs into the control bar (${Math.round(scrimEnd)} > ${Math.round(barRect.top)})`);
+        }
         if (text.top < 0 || text.left < -slack || text.right > vw + slack) {
             problems.push('track text is outside the window');
         }
-        for (const ticker of lines) {
-            const inner = ticker.firstElementChild;
-            if (inner.scrollWidth > ticker.clientWidth + slack && !ticker.classList.contains('scrolling')) {
-                problems.push(`"${inner.textContent.slice(0, 30)}" does not fit and does not scroll`);
+        // A glance reads still text: every line wraps, to two lines at most,
+        // the title three beside the cover.
+        for (const line of lines) {
+            const style = getComputedStyle(line);
+            const height = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4;
+            const most = line.classList.contains('car-title-line') ? 3 : 2;
+            const limit = parseInt(style.webkitLineClamp, 10);
+            if (!(limit >= 1 && limit <= most)) {
+                problems.push(`"${line.textContent.slice(0, 30)}" may take ${style.webkitLineClamp} lines`);
+            }
+            if (line.getBoundingClientRect().height > most * height + slack) {
+                problems.push(`"${line.textContent.slice(0, 30)}" takes more than ${most} lines`);
+            }
+            // The drawn text, not scrollWidth: a one-line clamp reports the
+            // unwrapped width there although it draws an ellipsis.
+            const edges = line.getBoundingClientRect();
+            const words = document.createRange();
+            words.selectNodeContents(line);
+            if ([...words.getClientRects()].some((r) => r.left < edges.left - slack || r.right > edges.right + slack)) {
+                problems.push(`"${line.textContent.slice(0, 30)}" runs sideways out of its line`);
+            }
+        }
+        const onair = document.querySelector('.onair');
+        if (document.getAnimations().some((a) => a.effect && a.effect.target && onair.contains(a.effect.target))) {
+            problems.push('track text moves');
+        }
+        const played = document.querySelector('.car-played-line');
+        if (visible(played) && parseFloat(getComputedStyle(played).fontSize) < 16) {
+            problems.push(`played-by line is ${getComputedStyle(played).fontSize}, under 16px`);
+        }
+        // The station sits at the top of the window, out of the song's caption.
+        const station = document.querySelector('.car-station');
+        if (!visible(station) || onair.contains(station)) {
+            problems.push('station name is not shown at the top');
+        } else {
+            // The words and logo, not the padded header, which spans the width.
+            const parts = [...station.children].filter(visible).map(box);
+            const where = parts.reduce((a, b) => ({
+                left: Math.min(a.left, b.left), top: Math.min(a.top, b.top),
+                right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom),
+            }));
+            if (overlap(where, art) || overlap(where, text)) {
+                problems.push('station name overlaps the cover or the track text');
+            }
+            if (visible(daynight) && overlap(where, box(daynight))) {
+                problems.push('station name runs under the day/night button');
+            }
+            if (!inside(where, viewport)) {
+                problems.push('station name is outside the window');
             }
         }
         for (let i = 0; i < lines.length; i++) {
@@ -309,12 +361,15 @@ async function run() {
                     await send('Page.navigate', {url: `${BASE}/${embed ? '?embed=1' : ''}`});
                     await sleep(2500);
                     // On mobile data every page open pays for what it loads: the
-                    // channel logos wait for the channel page. The cover may
-                    // show the current channel's logo.
+                    // channel logos wait for the channel page. The header shows
+                    // the current channel's logo, and the cover may too, at
+                    // either size (logos/ or logos/small/).
                     if (await evaluate(`Boolean(document.querySelector('.debug'))`)) {
                         failures.push(`${size.name}: the debug panel shows without ?debug=1`);
                     }
-                    const logos = await evaluate(`performance.getEntriesByType('resource').filter((e) => e.name.indexOf('/logos/') >= 0).length`);
+                    const logos = await evaluate(`new Set(performance.getEntriesByType('resource')
+                        .filter((e) => e.name.indexOf('/logos/') >= 0)
+                        .map((e) => e.name.split('/').pop().split(/[.?]/)[0])).size`);
                     if (logos > 1) {
                         failures.push(`${size.name} ${embed ? 'embed ' : ''}${mode}: page open loads ${logos} station logos`);
                     }
@@ -338,7 +393,7 @@ async function run() {
                                     root.querySelector(open).click();
                                 }
                             })()`);
-                            // Page slide (600 ms), ticker measuring and fonts.
+                            // Page slide (600 ms), caption measuring and fonts.
                             await sleep(900);
                             const view = `${size.name} ${embed ? 'embed ' : ''}${mode} ${state} ${page}`;
                             const result = await evaluate(`(${inspect.toString()})('${page}', ${SLACK})`);
