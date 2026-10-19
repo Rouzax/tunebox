@@ -44,14 +44,21 @@
   </section>
 
   <section id="shell" hidden>
+    <header class="bar">
+      <span class="brand"><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#radio"></use></svg> tunebox</span>
+      <nav>
+        <a href="#stations">Stations</a>
+        <a href="#history">History</a>
+      </nav>
+      <button type="button" class="logout quiet"><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#logout"></use></svg> Log out</button>
+    </header>
     <p class="warning" hidden><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#warning"></use></svg>
       Many wrong codes were typed after your correct password. Your password
       is probably known: change it.</p>
-    <p><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#check_circle"></use></svg>
-      Logged in. tunebox sees you at <code class="client"></code>.</p>
-    <p class="hint">If that is your proxy's address instead of yours, set
+    <p class="hint where">Logged in; tunebox sees you at <code class="client"></code>.
+      If that is your proxy's address instead of yours, set
       <code>trusted_proxies</code> in <code>tunebox.toml</code>.</p>
-    <button type="button" class="logout"><svg class="icon" aria-hidden="true"><use href="/vendor/material-symbols-rounded-737e332/icons.svg#logout"></use></svg> Log out</button>
+    <div class="view"></div>
   </section>
 </main>
 </body>

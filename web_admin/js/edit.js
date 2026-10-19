@@ -1,0 +1,223 @@
+// The station form, for a new station and for an existing one.
+import {button, el, field} from './dom.js';
+import {addStation, newStation, replaceStation, validId} from './state.js';
+
+const NUMBERS = {
+    delay_s: ['Delay (seconds)', 'How far the audio runs behind the feed.'],
+    pawtunes_delay_s: ['PawTunes delay (seconds)', null],
+    poll_interval_s: ['Poll interval (seconds)', null],
+    history_size: ['History size', 'Tracks kept in the recent list.'],
+};
+const RULES = {
+    station_id: ['Station-ID pattern', 'Titles matching this are jingles, not tracks.'],
+    played_by: ['Played-by pattern', 'Needs a group: the part to keep, e.g. \\s*\\(Played by ([^)]*)\\)\\s*$'],
+    artist_separator: ['Artist separator', 'Between artists in the feed; a comma when empty.'],
+};
+
+function text(name, value, extra) {
+    return el('input', Object.assign({name, value: value === undefined || value === null ? '' : String(value)}, extra || {}));
+}
+
+function select(name, options, value, extra) {
+    return el('select', Object.assign({name}, extra || {}),
+        options.map(([optionValue, label]) => el('option', {value: optionValue, selected: optionValue === value}, label)));
+}
+
+// Streams as edited: the stored doc has either stream_url (one stream,
+// http allowed) or a streams list.
+function streamsOf(doc) {
+    if (doc.stream_url) {
+        return [{name: 'Default', url: doc.stream_url}];
+    }
+    return (doc.streams || []).map((stream) => Object.assign({}, stream));
+}
+
+function streamsTo(doc, streams, hadUrl) {
+    const single = streams.length === 1 && streams[0].name === 'Default' && !streams[0].codec && !streams[0].kbps;
+    if (hadUrl && single) {
+        doc.stream_url = streams[0].url;
+        return;
+    }
+    doc.streams = streams.map((stream) => {
+        const out = {name: stream.name, url: stream.url};
+        if (stream.codec) {
+            out.codec = stream.codec;
+        }
+        if (stream.kbps) {
+            out.kbps = stream.kbps;
+        }
+        return out;
+    });
+}
+
+function streamEditor(schema, streams) {
+    const box = el('div', {class: 'streams'});
+    const codecs = [['', 'unknown'], ...schema.codecs.map((codec) => [codec, codec])];
+    function draw() {
+        box.replaceChildren(...streams.map((stream, index) => el('fieldset', {class: 'stream'},
+            el('legend', null, `Stream ${index + 1}`),
+            field('Name', text('', stream.name, {required: true, oninput: (e) => { stream.name = e.target.value; }})),
+            field('URL', text('', stream.url, {type: 'url', required: true, oninput: (e) => { stream.url = e.target.value.trim(); }})),
+            field('Codec', select('', codecs, stream.codec || '', {onchange: (e) => { stream.codec = e.target.value || undefined; }})),
+            field('kbps', text('', stream.kbps, {type: 'number', min: 1, step: 1,
+                oninput: (e) => { stream.kbps = e.target.value ? Number(e.target.value) : undefined; }})),
+            el('div', {class: 'actions'},
+                button('arrow_upward', null, () => { streams.splice(index - 1, 0, streams.splice(index, 1)[0]); draw(); },
+                    {title: `Move stream ${index + 1} up`, disabled: index === 0}),
+                button('arrow_downward', null, () => { streams.splice(index + 1, 0, streams.splice(index, 1)[0]); draw(); },
+                    {title: `Move stream ${index + 1} down`, disabled: index === streams.length - 1}),
+                button('delete', null, () => { streams.splice(index, 1); draw(); },
+                    {title: `Remove stream ${index + 1}`, disabled: streams.length === 1})))),
+        button('add', 'Add stream', () => {
+            streams.push({name: `Stream ${streams.length + 1}`, url: 'https://'});
+            draw();
+        }, {class: 'quiet'}));
+    }
+    draw();
+    return box;
+}
+
+function sourceEditor(schema, source) {
+    const box = el('div', {class: 'source'});
+    const types = Object.keys(schema.sources).map((type) => [type, type]);
+    const settings = Object.assign({}, source);
+    function draw() {
+        const type = settings.type;
+        const inputs = (schema.sources[type] || []).map((key) => {
+            const choices = (schema.choices[type] || {})[key];
+            const onchange = (e) => { settings[key] = e.target.value.trim(); };
+            if (!choices && settings[key] === undefined) {
+                settings[key] = '';
+            }
+            if (choices && choices.indexOf(settings[key]) < 0) {
+                settings[key] = choices[0];
+            }
+            const input = choices
+                ? select(`source.${key}`, choices.map((c) => [c, c]), settings[key], {onchange})
+                : text(`source.${key}`, settings[key], {required: true, oninput: onchange});
+            return field(key, input);
+        });
+        box.replaceChildren(
+            field('Now-playing source', select('source.type', types, type, {onchange: (e) => {
+                Object.keys(settings).forEach((key) => { delete settings[key]; });
+                settings.type = e.target.value;
+                draw();
+            }})),
+            ...inputs);
+    }
+    draw();
+    return {box, value: () => {
+        const out = {type: settings.type};
+        (schema.sources[settings.type] || []).forEach((key) => { out[key] = settings[key]; });
+        return out;
+    }};
+}
+
+export function render(root, ctx, id) {
+    const {state, schema} = ctx.config;
+    const existing = id ? state.channels.find((row) => row.id === id) : null;
+    if (id && !existing) {
+        root.replaceChildren(el('p', null, `There is no station ${id}.`),
+            button('close', 'Back to the stations', () => ctx.go('#stations')));
+        return;
+    }
+    const row = existing || newStation('', '', null);
+    const doc = row.doc;
+    const streams = streamsOf(doc);
+    const source = sourceEditor(schema, doc.source || {type: 'triton'});
+    const error = el('p', {class: 'message', role: 'alert', hidden: true});
+    const groups = [['', 'None'], ...state.groups.map((name) => [name, name])];
+    const rules = doc.rules || {};
+    const form = el('form', {class: 'edit', novalidate: true},
+        el('h2', null, existing ? `Edit ${doc.name || id}` : 'New station'),
+        field('Name', text('name', doc.name, {required: true})),
+        existing
+            ? el('p', {class: 'hint'}, `Id: ${row.id} (fixed; duplicate the station to change it)`)
+            : field('Id', text('id', '', {required: true, pattern: '[a-z0-9][a-z0-9\\-]*', autocapitalize: 'off'}),
+                'Lower-case letters, digits and -; used in links, fixed once saved.'),
+        field('Group', select('group', groups, row.group || '')),
+        field('Logo URL', text('logo', doc.logo, {type: 'url', placeholder: 'https://'}), 'Downloaded and served by tunebox.'),
+        field('Default image URL', text('default_image', doc.default_image, {type: 'url'}), 'Shown when no cover is found.'),
+        el('label', {class: 'check'}, el('input', {type: 'checkbox', name: 'always', checked: Boolean(doc.always)}),
+            'Always poll the feed, also when nobody listens'),
+        el('h3', null, 'Now playing'),
+        source.box,
+        el('h3', null, 'Streams'),
+        streamEditor(schema, streams),
+        el('h3', null, 'Title rules'),
+        Object.keys(RULES).map((key) => field(RULES[key][0], text(`rules.${key}`, rules[key], {autocapitalize: 'off', spellcheck: 'false'}), RULES[key][1])),
+        el('h3', null, 'Timing'),
+        Object.keys(schema.defaults).map((key) => {
+            const [label, hint] = NUMBERS[key] || [key, null];
+            return field(label, text(key, doc[key], {type: 'number', step: key === 'history_size' ? 1 : 'any', min: 0,
+                placeholder: `${(state.defaults || {})[key] !== undefined ? state.defaults[key] : schema.defaults[key]} (default)`}), hint);
+        }),
+        error,
+        el('div', {class: 'actions'},
+            el('button', {type: 'submit'}, 'Save'),
+            button('close', 'Cancel', () => ctx.go('#stations'), {class: 'quiet'})));
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const values = form.elements;
+        const newId = existing ? row.id : values.id.value.trim();
+        const show = (textValue) => {
+            error.textContent = textValue;
+            error.hidden = !textValue;
+        };
+        if (!existing && !validId(newId)) {
+            show('The id needs lower-case letters, digits and - only, and must not start with -.');
+            return;
+        }
+        // The stored state at the time of saving, which a stale answer
+        // reloads in between.
+        const current = ctx.config.state;
+        if (existing && !current.channels.some((item) => item.id === row.id)) {
+            show(`${row.id} was deleted elsewhere in the meantime; nothing was saved.`);
+            return;
+        }
+        if (!existing && current.channels.some((item) => item.id === newId)) {
+            show(`There is already a station with the id ${newId}.`);
+            return;
+        }
+        const out = {id: newId, name: values.name.value.trim(), source: source.value()};
+        streamsTo(out, streams, Boolean(doc.stream_url));
+        ['logo', 'default_image'].forEach((key) => {
+            if (values[key].value.trim()) {
+                out[key] = values[key].value.trim();
+            }
+        });
+        if (values.always.checked) {
+            out.always = true;
+        }
+        const outRules = {};
+        Object.keys(RULES).forEach((key) => {
+            const value = values[`rules.${key}`].value;
+            if (value) {
+                outRules[key] = value;
+            }
+        });
+        if (Object.keys(outRules).length) {
+            out.rules = outRules;
+        }
+        Object.keys(schema.defaults).forEach((key) => {
+            if (values[key].value !== '') {
+                out[key] = Number(values[key].value);
+            }
+        });
+        const next = {id: newId, group: values.group.value || null, enabled: existing ? row.enabled : true, doc: out};
+        const nextState = existing ? replaceStation(current, row.id, next) : addStation(current, next);
+        show('');
+        const result = await ctx.save(nextState, newId, `Saved ${out.name}.`);
+        if (result.ok) {
+            ctx.go('#stations', true);
+        } else if (result.message) {
+            show(result.message);
+        }
+    });
+    root.replaceChildren(form);
+    const first = form.querySelector('input');
+    if (first) {
+        first.focus();
+    }
+}

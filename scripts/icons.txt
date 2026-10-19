@@ -3,3 +3,13 @@ lock
 logout
 warning
 check_circle
+radio
+edit
+content_copy
+delete
+arrow_upward
+arrow_downward
+add
+history
+undo
+close
