@@ -789,12 +789,28 @@ and logging out, each checked against `/api/channels`. It needs no network:
 node web/tests/browser/admin.mjs /tmp/admin-shots
 ```
 
+The car's browser is Chromium 120, and the Chrome on a development machine
+is much newer: it accepts CSS and web APIs the car does not have. To run
+either check on Chromium 120, fetch Chrome for Testing 120 once (about
+150 MB, checked against a pinned SHA-256 and kept in `~/.cache/tunebox`)
+and pass it as `CHROME`:
+
+```sh
+CHROME=$(.venv/bin/python scripts/chrome_120.py) CHROME_NO_SANDBOX=1 \
+  node web/tests/browser/layout.mjs http://127.0.0.1:8080
+```
+
+`CHROME_NO_SANDBOX=1` runs it without Chrome's sandbox, which an unpacked
+Chrome cannot use where the system blocks it (Ubuntu 24.04 does). The
+checks only load tunebox's own pages.
+
 Tests do not use the network, except those marked `live`
 (`.venv/bin/pytest -m live`).
 
 The player is plain ES modules in `web/js/`. Keep to ES2019 syntax (no `?.`,
-`??`, class fields): the car's browser engine is old and unknown, and
-`web/tests/syntax.test.js` enforces it. Vendored files: see
+`??`, class fields): the car runs Chromium 120, and
+`web/tests/syntax.test.js` enforces it. CSS and web APIs newer than
+Chromium 120 need a feature check and a fallback. Vendored files: see
 `web/vendor/README.md`.
 
 Run the server from a checkout:

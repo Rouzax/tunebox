@@ -32,12 +32,14 @@ export function findChrome() {
 export async function connect({port}) {
     const profile = mkdtempSync(join(tmpdir(), 'tunebox-cdp-'));
     // /dev/shm is 64 MB in a container by default, too small for the
-    // renderer; Chrome refuses to run as root without --no-sandbox.
+    // renderer; Chrome refuses to run as root without --no-sandbox, and an
+    // unpacked Chrome for Testing has no sandbox where AppArmor blocks user
+    // namespaces (Ubuntu 24.04), hence CHROME_NO_SANDBOX for that one.
     const args = [
         '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
         '--disable-dev-shm-usage', `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`,
     ];
-    if (process.getuid && process.getuid() === 0) {
+    if ((process.getuid && process.getuid() === 0) || process.env.CHROME_NO_SANDBOX === '1') {
         args.push('--no-sandbox');
     }
     const chrome = spawn(findChrome(), [...args, 'about:blank'], {stdio: 'ignore'});

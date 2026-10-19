@@ -24,6 +24,8 @@ const PORT = 9300 + Math.floor(Math.random() * 500);
 // screen), a phone and a desktop.
 const SIZES = [
     {name: 'car-third', width: 480, height: 560},
+    // Measured on the car's /check.html with the browser in a third.
+    {name: 'car-third-measured', width: 489, height: 518},
     {name: 'car-two-thirds', width: 960, height: 560},
     {name: 'car-full', width: 1440, height: 560},
     {name: 'phone', width: 390, height: 844, mobile: true},
