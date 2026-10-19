@@ -1,3 +1,5 @@
+import pytest
+
 from tests.fakes import RULES, fixture_rows, make_track
 from tunebox.tracks import MAX_TITLE, RawEntry, Rules, clean, norm
 
@@ -79,3 +81,23 @@ def test_non_latin_names_keep_distinct_keys() -> None:
 def test_titles_are_cut_before_rules_run() -> None:
     track = clean(RawEntry("A", "x" * 1000, 1), Rules(), 1)
     assert len(track.full_title) == MAX_TITLE
+
+
+@pytest.mark.parametrize(
+    ("sent", "shown"),
+    [
+        # UTF-8 read as Windows-1252 somewhere upstream (Radio 538).
+        ("TI\u00c3\u2039STO & AVA MAX", "TI\u00cbSTO & AVA MAX"),
+        ("AD\u00c3\u2030LA", "AD\u00c9LA"),
+        # Bytes Windows-1252 leaves undefined arrive as control characters.
+        ("\u00c3\u0081NGEL", "\u00c1NGEL"),
+        # Correct text stays: it does not decode as UTF-8 a second time.
+        ("MEES SALOM\u00c9", "MEES SALOM\u00c9"),
+        ("S\u00c3O PAULO", "S\u00c3O PAULO"),
+        ("BEYONC\u00c9", "BEYONC\u00c9"),
+    ],
+)
+def test_text_encoded_twice_is_repaired(sent: str, shown: str) -> None:
+    track = make_track(sent, sent)
+    assert track.artist == shown
+    assert track.title == shown

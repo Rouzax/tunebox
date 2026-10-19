@@ -58,7 +58,29 @@ MAX_TITLE = 300
 
 
 def _tidy(text: str) -> str:
-    return _SPACES.sub(" ", text).strip()
+    return _SPACES.sub(" ", _repair(text)).strip()
+
+
+def _repair(text: str) -> str:
+    """Undoes UTF-8 that was read as Windows-1252 on the way to tunebox (Radio
+    538's names arrived as "TI\u00c3\u2039STO" for TI\u00cbSTO). Only text whose
+    bytes then decode as UTF-8 changes; correct accented text does not."""
+    if text.isascii():
+        return text
+    raw = bytearray()
+    for char in text:
+        try:
+            raw += char.encode("cp1252")
+        except UnicodeEncodeError:
+            # The five bytes Windows-1252 leaves undefined come through
+            # as the control characters of the same number.
+            if ord(char) > 0xFF:
+                return text
+            raw.append(ord(char))
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return text
 
 
 def _key_part(text: str) -> str:
