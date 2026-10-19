@@ -26,6 +26,8 @@ history_size = 50
 
 # [admin]
 # The admin panel, off by default. See "Set up the admin panel" in the README.
+# While it is on, the [[channels]], [defaults] and [player] here only fill an
+# empty database; change stations in the panel.
 # enabled = true
 # public_origin = "https://radio.example"
 # setup_page = true

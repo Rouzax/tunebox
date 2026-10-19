@@ -196,9 +196,29 @@ If your proxy runs in Docker on the same network as tunebox, it can use
 
 ## Set up the admin panel
 
-The admin panel is where you will manage stations from the browser. For
-now it is the login only: setting up the account, logging in and out, and
-seeing which address tunebox sees for you. It is off until you turn it on.
+The admin panel manages the stations from the browser: add, edit, order,
+group, switch off and delete them, and undo any change. It is off until
+you turn it on.
+
+Turning it on changes where the configuration comes from. tunebox keeps
+its stations, `[defaults]` and `[player]` in its database
+(`data/tunebox.db`). With the panel off it takes them from
+`data/tunebox.toml` at every start. With the panel on it reads the file
+only to fill an empty database (a new install), and the panel is where
+stations change from then on.
+
+- On an existing install the database already holds the file's stations,
+  so turning the panel on keeps them. Edits made to the file in the same
+  restart are not taken; make them before you turn the panel on.
+- While the panel is on, tunebox ignores the file's `[[channels]]`,
+  `[defaults]` and `[player]`. When they say something other than the
+  database, it logs `config_file_ignored` with the parts it ignored. The
+  panel cannot change `[defaults]` and `[player]` yet: to change them,
+  turn the panel off, edit the file and restart, then turn it on again.
+- Turning the panel off makes the file the source again: at the next start
+  tunebox replaces the panel's changes with the file's stations. Copy what
+  you changed into the file first. The panel's versions stay in its
+  History, so turning the panel back on lets you restore them.
 
 **What you need:** tunebox reachable over https at a public address, a
 reverse proxy in front of it, and an authenticator app on your phone
@@ -252,6 +272,52 @@ your proxy, see `examples/crowdsec/README.md`. To switch the panel off, set
 `enabled = false` (or remove `[admin]`) and restart: every `/admin`
 address then answers 404.
 
+### Manage the stations
+
+**Stations** lists the stations by group. Each change is saved as soon as
+you make it; the message at the top says "Saved" or why tunebox refused
+it, and players pick up the change at their next update (within about ten
+seconds), without a restart.
+
+- The switch takes a station off the player without deleting it. The last
+  station that is on cannot be switched off or deleted.
+- The arrows move a station within its group, or a group up and down.
+- Duplicate makes a copy with the id `<id>-copy`, switched off, to edit.
+  It is also how you give a station a new id: the id is fixed once saved,
+  because players and PawTunes use it in addresses.
+- Deleting or switching off the station the player starts on
+  (`default_channel`) clears that setting; the player then starts on the
+  first station, and the message says so.
+- A group can be deleted once it has no stations.
+
+The edit form has the same settings as a `[[channels]]` block (see
+[Change the stations](#change-the-stations)). Empty fields use the
+defaults, shown greyed out. Title rules are regular expressions and run on
+every title, and one slow match stops all of tunebox while it runs. So
+tunebox refuses a pattern that could take long on some title:
+
+- longer than 200 characters, or with a back-reference (`\1`);
+- a repeated part with another repeat or a choice inside it, such as
+  `(a+)+`, `(a|aa)+` or `(?:-?){40}`;
+- three or more repeats in a row that can take the same characters, such
+  as `.*-.*-.*` or `\s*\s*\s*`. Use a class without the separator
+  instead: `[^-]*-[^-]*-.*`;
+- a new pattern that is slow on long titles made of its own characters.
+
+The message names the field, for example
+`channels[3] (owr).rules.played_by: nested repetition ... is not allowed`.
+
+**History** lists every change, newest first, with what it changed. "Restore
+the version before this change" shows what restoring would change compared
+with now, and asks before it does it. A restore is itself a change in the
+history, so it can be undone the same way. If someone saved in another tab
+or browser in the meantime, a save says "Changed elsewhere": the station
+list then shows the current stations, so check them before you make the
+change again; an open edit form keeps what you typed, and saving it again
+applies it to the current stations. When a save gets no answer at all, the
+page says the change may or may not have been saved and shows what is
+stored.
+
 ## Use it with PawTunes
 
 You only need this while you still use PawTunes. tunebox can supply the
@@ -281,6 +347,13 @@ What changes in PawTunes:
   code; the PawTunes car theme shows the station name instead.
 
 ## Change the stations
+
+With the admin panel on, change the stations there (see
+[Manage the stations](#manage-the-stations)); the station settings
+below are the same fields as its edit form. Without the panel, edit
+`data/tunebox.toml` and restart, as described here.
+
+### Without the admin panel
 
 `examples/stations-nl.toml` in the repository lists 50 Dutch and
 Tomorrowland stations that were tested with tunebox (streams, now-playing
@@ -360,10 +433,12 @@ docker compose restart
 If the file has a mistake, the container stops and the log names the line
 it did not accept, for example `tunebox: channels[2].source.mount: required`.
 
-tunebox keeps its stations in its database (`data/tunebox.db`). At start-up
-it compares them with `data/tunebox.toml` and takes the file's stations when
-they differ, so editing the file and restarting works as described here. A
-file without `[[channels]]` keeps the stations tunebox already has.
+tunebox keeps its stations in its database (`data/tunebox.db`). With the
+admin panel off, it compares them with `data/tunebox.toml` at start-up and
+takes the file's stations when they differ, so editing the file and
+restarting works as described here. A file without `[[channels]]` keeps the
+stations tunebox already has. With the panel on, the file only fills an
+empty database (see [Set up the admin panel](#set-up-the-admin-panel)).
 
 ## Fine-tune when titles change
 
@@ -426,6 +501,9 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | `trusted_proxies_unset` in the log | tunebox is behind a proxy but does not know it, so every visitor has the proxy's address. | Set `trusted_proxies` in `[server]` to the proxy's address or network and restart. |
 | The admin login says "Login failed" with the right password | The code was already used, the phone's clock is off, or a recovery code was typed with a mistake. | Wait for the next code and check the phone's time. After five failures the address is locked for 15 minutes. |
 | The admin page says "Open the admin panel at its public https address" | It was opened by another address (a LAN address, or plain http). | Open it at `public_origin`. |
+| `config_file_ignored` in the log | The admin panel is on, so tunebox does not read the `parts` it names from `tunebox.toml` (`channels`, `defaults`, `player`); the database has its own, and they differ. | Change stations in the panel. For `defaults` or `player`, see [Set up the admin panel](#set-up-the-admin-panel). To stop the warning, make the file match or remove those parts from it. |
+| Saving in the admin panel says "Changed elsewhere" | Someone saved in another tab or browser first. | On the station list, check the stations it now shows and make your change again if it is still needed. In the edit form, check it and save again. |
+| Saving a title rule is refused | The pattern could stall tunebox (see [Manage the stations](#manage-the-stations)). | Simplify it as the message says: no repeat inside a repeated group, such as `(\w+\s?)*`, and no three repeats in a row that take the same characters, such as `.*-.*-.*` (use `[^-]*` for the parts between separators). |
 | The admin page says "No admin account yet" | No account was set up. | Run the setup command in [Set up the admin panel](#set-up-the-admin-panel). |
 | The log says `tunebox: cannot listen on 0.0.0.0:<port>` | `port` in `[server]` was changed to one that is not free inside the container. | Remove `port` from `[server]` (8080 is the default) and change the published port in `compose.yaml` instead. |
 | `docker compose up` complains the port is already allocated | Another program on the machine uses that port. | Choose a free port as in [Install](#install) step 3. |
@@ -463,7 +541,7 @@ is reported at startup instead of being ignored.
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | Turns the admin panel on. Off, every `/admin` address answers 404. |
-| `public_origin` | none, required when enabled | The public https address without a path, such as `https://radio.example`. The panel accepts changes only from there. |
+| `public_origin` | none, required when enabled | The public https address without a path, such as `https://radio.example`. The panel accepts changes only from there. For use on the machine itself, `http://localhost` or `http://127.0.0.1` with any port also works (browsers treat those as secure). |
 | `setup_page` | `false` | Opens the one-time setup page while no account exists. |
 
 `[defaults]` (each can also be set per station)
@@ -602,6 +680,10 @@ check its feed then, so an old `last_poll_ok` is expected.
 (the configured one, else the first station). It may be cached for five
 minutes.
 
+Everything under `/admin` belongs to the admin panel (when it is on) and
+is not meant for other clients: its API needs the panel's session cookie,
+and every change also its CSRF token from the same origin.
+
 Everything else is served from the web folder. Pages are sent with a
 Content-Security-Policy that allows scripts, styles and fonts only from
 tunebox itself, so pages in that folder must not use inline scripts or
@@ -646,6 +728,16 @@ node web/tests/browser/layout.mjs http://127.0.0.1:8080 /tmp/layout-shots
 
 (Node 20 needs `--experimental-websocket`; the second argument is optional
 and saves a screenshot of every view.)
+
+The admin check starts its own tunebox from `.venv` on a free port with a
+temporary folder and two stations, creates an account, and drives the
+panel in headless Chrome: logging in with a TOTP code, switching a station
+off, reordering, editing, a refused title rule, restoring from the history
+and logging out, each checked against `/api/channels`. It needs no network:
+
+```sh
+node web/tests/browser/admin.mjs /tmp/admin-shots
+```
 
 Tests do not use the network, except those marked `live`
 (`.venv/bin/pytest -m live`).
