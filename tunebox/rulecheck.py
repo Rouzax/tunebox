@@ -13,8 +13,10 @@ what the shape rules miss."""
 
 from __future__ import annotations
 
+import bisect
 import functools
 import importlib
+import itertools
 import json
 import re
 import subprocess
@@ -54,7 +56,6 @@ _REFERENCES = {_c.GROUPREF, _c.GROUPREF_EXISTS}
 _ZERO_WIDTH = {_c.AT, _c.ASSERT, _c.ASSERT_NOT}
 # Character sets are compared over these: Latin-1 and the punctuation,
 # spaces and scripts feeds actually send.
-_WORD_SEARCH = 4096
 _PROBE = tuple(
     chr(c) for c in (*range(256), 0x2013, 0x2014, 0x2019, 0x2028, 0x3000, 0x4E2D, 0x1F3B5)
 )
@@ -113,32 +114,84 @@ def lint(pattern: str) -> str | None:
 
 
 class _Sets:
-    """Character sets of a pattern's items, compared over the probe plus
-    every character the pattern names (its literals and the ends of its
-    ranges) and their neighbours: two sets that share any character share
-    one of those, so text in any script is compared like Latin."""
+    """Character sets of a pattern's items, compared exactly over a probe
+    built for the pattern.
+
+    Every class an item can use is a union of code-point ranges (its
+    literals and ranges) and of \\d, \\s and \\w, and those three split all
+    characters into four kinds: digit, space, other word, the rest. The
+    characters a pattern names, with their neighbours, cut the code points
+    into pieces on which every one of its classes is constant per kind, so
+    the first character of each kind in each piece decides every overlap.
+    With (?i), characters match through their case family, so every cased
+    character is probed too."""
 
     def __init__(self, tree: object) -> None:
         named = {ch for item in _items(tree) for ch in _named(item)}
-        self.probe = tuple(
-            dict.fromkeys([*_PROBE, *_digits_and_spaces(), chr(sys.maxunicode), *sorted(named)])
-        )
+        cuts = sorted({0, 256, sys.maxunicode + 1, *(ord(ch) + d for ch in named for d in (0, 1))})
+        found = [ch for low, high in itertools.pairwise(cuts) for ch in _kinds(low, high - 1)]
+        cased = _tables().cased if _ignores_case(tree) else ()
+        self.probe = tuple(dict.fromkeys([*_PROBE, *sorted(named), *found, *cased]))
         self.cache: dict[int, frozenset[str]] = {}
 
 
+class _Tables:
+    """Where each kind of character starts and ends, and the case families,
+    from one pass over all code points (about a second, once per process)."""
+
+    def __init__(self) -> None:
+        self.runs: list[tuple[list[int], list[int]]] = [([], []) for _ in range(4)]
+        families: dict[str, set[str]] = {}
+        previous = -1
+        for code in range(sys.maxunicode + 1):
+            ch = chr(code)
+            kind = 0 if ch.isdecimal() else 1 if _space(ch) else 2 if _word(ch) else 3
+            starts, ends = self.runs[kind]
+            if kind == previous:
+                ends[-1] = code
+            else:
+                starts.append(code)
+                ends.append(code)
+                previous = kind
+            if ch.lower() != ch or ch.upper() != ch:
+                for key in {ch, ch.lower(), ch.upper(), ch.casefold()}:
+                    families.setdefault(key, set()).add(ch)
+        self.families = {key: frozenset(members) for key, members in families.items()}
+        self.cased = tuple(sorted({ch for members in families.values() for ch in members}))
+
+
+@functools.cache
+def _tables() -> _Tables:
+    return _Tables()
+
+
+def _kinds(low: int, high: int) -> Iterator[str]:
+    """The first character of each kind between low and high."""
+    for starts, ends in _tables().runs:
+        at = bisect.bisect_left(ends, low)
+        if at < len(starts) and starts[at] <= high:
+            yield chr(max(starts[at], low))
+
+
+def _ignores_case(tree: Any) -> bool:
+    if tree.state.flags & re.IGNORECASE:
+        return True
+    return any(
+        (op is _c.SUBPATTERN and av[1] & re.IGNORECASE)
+        or any(_ignores_case(part) for part in _parts(av))
+        for op, av in _items(tree)
+    )
+
+
 def _named(item: tuple[Any, Any]) -> Iterator[str]:
-    """Each character an item names and its neighbours: a class is a union
-    of code-point ranges, and two classes that overlap at all share the
-    start of a range, which for a negated class is one past what it names."""
+    """Each character an item names, its neighbours and their case
+    variants."""
     op, av = item
     if op in (_c.LITERAL, _c.NOT_LITERAL):
         yield from _around(av)
-        yield from _first_word(av + 1, sys.maxunicode)
     elif op is _c.RANGE:
         yield from _around(av[0])
         yield from _around(av[1])
-        yield from _first_word(av[0], av[1])
-        yield from _first_word(av[1] + 1, sys.maxunicode)
     elif op is _c.IN:
         for member in av:
             yield from _named(member)
@@ -148,25 +201,6 @@ def _named(item: tuple[Any, Any]) -> Iterator[str]:
                 yield from _named(sub)
 
 
-def _first_word(low: int, high: int) -> Iterator[str]:
-    """The first \\w character from low on, if one comes soon: where a range
-    meets \\w beyond Latin. Word characters are dense, so the search is short
-    and bounded."""
-    start = max(low, 256)
-    for code in range(start, min(high, start + _WORD_SEARCH) + 1):
-        if _word(chr(code)):
-            yield chr(code)
-            return
-
-
-@functools.cache
-def _digits_and_spaces() -> tuple[str, ...]:
-    """Every \\d and \\s character beyond Latin-1: few enough to probe them all."""
-    return tuple(
-        ch for ch in map(chr, range(256, sys.maxunicode + 1)) if ch.isdecimal() or _space(ch)
-    )
-
-
 def _around(code: int) -> Iterator[str]:
     for near in (code - 1, code, code + 1):
         if 0 <= near <= sys.maxunicode:
@@ -174,8 +208,12 @@ def _around(code: int) -> Iterator[str]:
 
 
 def _cased(ch: str) -> Iterator[str]:
+    """ch, its case variants and every character that folds to one of
+    them (U+212A KELVIN SIGN with k)."""
+    families = _tables().families
     for variant in (ch, ch.lower(), ch.upper(), ch.casefold()):
         yield from variant
+        yield from families.get(variant, ())
 
 
 def _references(tree: object) -> bool:

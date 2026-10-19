@@ -76,6 +76,8 @@ def test_every_example_rule_passes_the_lint() -> None:
         (r"\w*[\u2000-\u2fff]*[\u2000-\u2fff]*q", CHAIN),
         (r"\s*[\u1000-\u1fff]*[\u1000-\u1fff]*q", CHAIN),
         (r"[^\W\d]*[\u2000-\u2fff]*[\u2000-\u2fff]*q", CHAIN),
+        (r"[^\W\d]*[\u0660-\u06e9]*[\u0660-\u06e9]*q", CHAIN),
+        (r"(?i)[a-z]*[\u2120-\u212f]*[\u2120-\u212f]*q", CHAIN),
         (r"(x)\1", "back-references"),
         ("(?P<n>x)(?P=n)", "back-references"),
         ("(x)?(?(1)y|z)", "back-references"),
