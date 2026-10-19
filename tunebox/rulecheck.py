@@ -13,6 +13,7 @@ what the shape rules miss."""
 
 from __future__ import annotations
 
+import functools
 import importlib
 import json
 import re
@@ -53,6 +54,7 @@ _REFERENCES = {_c.GROUPREF, _c.GROUPREF_EXISTS}
 _ZERO_WIDTH = {_c.AT, _c.ASSERT, _c.ASSERT_NOT}
 # Character sets are compared over these: Latin-1 and the punctuation,
 # spaces and scripts feeds actually send.
+_WORD_SEARCH = 4096
 _PROBE = tuple(
     chr(c) for c in (*range(256), 0x2013, 0x2014, 0x2019, 0x2028, 0x3000, 0x4E2D, 0x1F3B5)
 )
@@ -107,7 +109,73 @@ def lint(pattern: str) -> str | None:
         return f"not a valid pattern: {error}"
     if _references(tree):
         return "back-references are not allowed"
-    return _shape(tree, repeated=False, sets={})
+    return _shape(tree, repeated=False, sets=_Sets(tree))
+
+
+class _Sets:
+    """Character sets of a pattern's items, compared over the probe plus
+    every character the pattern names (its literals and the ends of its
+    ranges) and their neighbours: two sets that share any character share
+    one of those, so text in any script is compared like Latin."""
+
+    def __init__(self, tree: object) -> None:
+        named = {ch for item in _items(tree) for ch in _named(item)}
+        self.probe = tuple(
+            dict.fromkeys([*_PROBE, *_digits_and_spaces(), chr(sys.maxunicode), *sorted(named)])
+        )
+        self.cache: dict[int, frozenset[str]] = {}
+
+
+def _named(item: tuple[Any, Any]) -> Iterator[str]:
+    """Each character an item names and its neighbours: a class is a union
+    of code-point ranges, and two classes that overlap at all share the
+    start of a range, which for a negated class is one past what it names."""
+    op, av = item
+    if op in (_c.LITERAL, _c.NOT_LITERAL):
+        yield from _around(av)
+        yield from _first_word(av + 1, sys.maxunicode)
+    elif op is _c.RANGE:
+        yield from _around(av[0])
+        yield from _around(av[1])
+        yield from _first_word(av[0], av[1])
+        yield from _first_word(av[1] + 1, sys.maxunicode)
+    elif op is _c.IN:
+        for member in av:
+            yield from _named(member)
+    else:
+        for part in _parts(av):
+            for sub in _items(part):
+                yield from _named(sub)
+
+
+def _first_word(low: int, high: int) -> Iterator[str]:
+    """The first \\w character from low on, if one comes soon: where a range
+    meets \\w beyond Latin. Word characters are dense, so the search is short
+    and bounded."""
+    start = max(low, 256)
+    for code in range(start, min(high, start + _WORD_SEARCH) + 1):
+        if _word(chr(code)):
+            yield chr(code)
+            return
+
+
+@functools.cache
+def _digits_and_spaces() -> tuple[str, ...]:
+    """Every \\d and \\s character beyond Latin-1: few enough to probe them all."""
+    return tuple(
+        ch for ch in map(chr, range(256, sys.maxunicode + 1)) if ch.isdecimal() or _space(ch)
+    )
+
+
+def _around(code: int) -> Iterator[str]:
+    for near in (code - 1, code, code + 1):
+        if 0 <= near <= sys.maxunicode:
+            yield from _cased(chr(near))
+
+
+def _cased(ch: str) -> Iterator[str]:
+    for variant in (ch, ch.lower(), ch.upper(), ch.casefold()):
+        yield from variant
 
 
 def _references(tree: object) -> bool:
@@ -117,7 +185,7 @@ def _references(tree: object) -> bool:
     )
 
 
-def _shape(tree: object, repeated: bool, sets: dict[int, frozenset[str]]) -> str | None:
+def _shape(tree: object, repeated: bool, sets: _Sets) -> str | None:
     """repeated: inside an item that repeats more than once, where any
     further repeat or alternative multiplies the ways to match."""
     if _chain(tree, sets) >= 3:
@@ -133,7 +201,7 @@ def _shape(tree: object, repeated: bool, sets: dict[int, frozenset[str]]) -> str
     return None
 
 
-def _chain(tree: object, sets: dict[int, frozenset[str]]) -> int:
+def _chain(tree: object, sets: _Sets) -> int:
     """The longest run of variable-width items in one sequence where each
     can take over the characters of the one before, across what separates
     them: such a run of k items tries about n**k ways to split a title of n
@@ -173,26 +241,20 @@ def _variable(item: tuple[Any, Any]) -> bool:
     return low != high
 
 
-def _chars(item: tuple[Any, Any], sets: dict[int, frozenset[str]]) -> frozenset[str]:
+def _chars(item: tuple[Any, Any], sets: _Sets) -> frozenset[str]:
     """The probe characters an item can consume, closed under case so that
     (?i) cannot hide an overlap."""
     key = id(item)
-    if key not in sets:
+    if key not in sets.cache:
         op, av = item
         if op in _ZERO_WIDTH:
             found: set[str] = set()
         elif op in (_c.LITERAL, _c.NOT_LITERAL, _c.ANY, _c.CATEGORY, _c.IN):
-            found = {ch for ch in _PROBE if _matches(op, av, ch)}
+            found = {ch for ch in sets.probe if _matches(op, av, ch)}
         else:
             found = {ch for part in _parts(av) for sub in _items(part) for ch in _chars(sub, sets)}
-        cased = {
-            variant
-            for ch in found
-            for v in (ch, ch.lower(), ch.upper(), ch.casefold())
-            for variant in v
-        }
-        sets[key] = frozenset(cased)
-    return sets[key]
+        sets.cache[key] = frozenset(variant for ch in found for variant in _cased(ch))
+    return sets.cache[key]
 
 
 def _matches(op: Any, av: Any, ch: str) -> bool:
@@ -238,7 +300,7 @@ def samples_for(pattern: str) -> list[str]:
         tree = _parser.parse(pattern)
     except re.error:
         return []
-    sets: dict[int, frozenset[str]] = {}
+    sets = _Sets(tree)
     groups: list[frozenset[str]] = []
     literals: list[str] = []
     named: list[str] = []
@@ -264,7 +326,7 @@ def samples_for(pattern: str) -> list[str]:
 
 def _collect(
     tree: object,
-    sets: dict[int, frozenset[str]],
+    sets: _Sets,
     groups: list[frozenset[str]],
     literals: list[str],
     named: list[str],
@@ -284,7 +346,7 @@ def _collect(
             if chars:
                 groups.append(chars)
             if op is _c.IN:
-                named.extend(chr(a) for o, a in av if o is _c.LITERAL)
+                named.extend(_named((op, av)))
         for part in _parts(av):
             _collect(part, sets, groups, literals, named)
     if text:

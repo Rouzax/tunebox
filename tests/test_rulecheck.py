@@ -66,6 +66,16 @@ def test_every_example_rule_passes_the_lint() -> None:
         ("(?:x|.*)-.*-.*q", CHAIN),
         (r"^\d*\d*\d*\d*\d*$", CHAIN),
         ("^[A-Z]*[A-Z]*[A-Z]*[A-Z]*[A-Z]*$", CHAIN),
+        ("\u0436*\u0436*\u0436*\u0436*q", CHAIN),
+        ("[\u0430-\u044f]*[\u0430-\u044f]*[\u0430-\u044f]*q", CHAIN),
+        ("[\u0430-\u043c]*[\u0438-\u044f]*\u043c*q", CHAIN),
+        ("(?i)\u0416*\u0436*\u0416*q", CHAIN),
+        ("[^\\x00-\\U0001ffff]*[^\\x00-\\U0001ffff]*[^\\x00-\\U0001ffff]*q", CHAIN),
+        ("[^\\x00-\\u3000]*[\\u3001-\\u3005]*[^\\x00-\\u3000]*q", CHAIN),
+        (r"\d*[\u0600-\u06ff]*[\u0600-\u06ff]*q", CHAIN),
+        (r"\w*[\u2000-\u2fff]*[\u2000-\u2fff]*q", CHAIN),
+        (r"\s*[\u1000-\u1fff]*[\u1000-\u1fff]*q", CHAIN),
+        (r"[^\W\d]*[\u2000-\u2fff]*[\u2000-\u2fff]*q", CHAIN),
         (r"(x)\1", "back-references"),
         ("(?P<n>x)(?P=n)", "back-references"),
         ("(x)?(?(1)y|z)", "back-references"),
@@ -127,3 +137,8 @@ def test_samples_are_made_of_the_patterns_own_characters() -> None:
 def test_no_sample_is_longer_than_a_title() -> None:
     every = [*SYNTHETIC, *samples_for(PLAYED_BY), *samples_for(STATION_ID)]
     assert max(len(sample) for sample in every) == MAX_TITLE
+
+
+def test_samples_include_the_characters_a_range_names() -> None:
+    samples = samples_for("q[\u0430-\u044f]+q")
+    assert "\u0430" * MAX_TITLE in samples
