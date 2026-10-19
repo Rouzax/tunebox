@@ -37,3 +37,28 @@ test('night by mode, by the sun, or by the browser setting', () => {
     assert.equal(isNight('auto', noon, null, true), true);
     assert.equal(isNight('auto', late, null, false), false);
 });
+
+test('sun times for a height above the horizon come before sunset and after sunrise', () => {
+    const day = new Date('2026-12-21T12:00:00Z');
+    const plain = sunTimes(day, 52.1, 5.3);
+    const high = sunTimes(day, 52.1, 5.3, 4);
+    const before = (plain.set - high.set) / 60000;
+    const after = (high.rise - plain.rise) / 60000;
+    assert.ok(before > 38 && before < 48, `set ${before} min earlier`);
+    assert.ok(after > 38 && after < 48, `rise ${after} min later`);
+});
+
+test('automatic night starts while the sun is still a little above the horizon', () => {
+    // Sunset 15:29 UTC and sunrise 07:47 UTC in the middle of the country.
+    const centre = {latitude: 52.1, longitude: 5.3};
+    assert.equal(isNight('auto', new Date('2026-12-21T15:05:00Z'), centre, false), true);
+    assert.equal(isNight('auto', new Date('2026-12-21T14:30:00Z'), centre, false), false);
+    assert.equal(isNight('auto', new Date('2026-12-21T08:10:00Z'), centre, false), true);
+    assert.equal(isNight('auto', new Date('2026-12-21T08:50:00Z'), centre, false), false);
+});
+
+test('a sun that never reaches the height means night all day, one that never sets day all night', () => {
+    const north = {latitude: 78.2, longitude: 15.6};
+    assert.equal(isNight('auto', new Date('2026-12-21T11:00:00Z'), north, false), true);
+    assert.equal(isNight('auto', new Date('2026-06-21T23:00:00Z'), north, false), false);
+});

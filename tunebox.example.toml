@@ -18,8 +18,8 @@ poll_interval_s = 12
 history_size = 50
 
 # [player]
-# Day/night "automatic" follows sunrise and sunset here; without it the
-# browser's own dark mode setting decides.
+# Day/night "automatic" follows the sun here (dark while it is lower than
+# 4 degrees); without it the browser's own dark mode setting decides.
 # latitude = 52.0
 # longitude = 5.0
 # default_channel = "owr"

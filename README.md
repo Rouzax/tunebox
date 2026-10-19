@@ -153,8 +153,10 @@ it). What the buttons do:
 - **Visualizer** (bars icon), **small window** (box with arrow; not on
   touch screens) and **fullscreen**.
 - **Day/night** (top left) cycles automatic, day and night. Automatic
-  follows sunrise and sunset when `[player]` has a location, otherwise the
-  device's dark mode setting.
+  follows the sun when `[player]` has a location, otherwise the device's
+  dark mode setting. It turns dark when the evening sun is 4 degrees above
+  the horizon (in the Netherlands about 30 to 45 minutes before sunset) and
+  light when the morning sun is that high again.
 
 The station, quality, volume, visualizer and day/night choice are
 remembered in this browser only; nothing about listeners is stored on the
@@ -605,7 +607,7 @@ is reported at startup instead of being ignored.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `latitude`, `longitude` | none | Where day/night "automatic" takes sunrise and sunset from. Give both or neither. Without them "automatic" follows the browser's dark mode setting. |
+| `latitude`, `longitude` | none | Where day/night "automatic" takes the sun's height from (dark below 4 degrees). Give both or neither. Without them "automatic" follows the browser's dark mode setting. |
 | `default_channel` | the first channel | The channel a first-time listener starts on. |
 
 `[[channels]]`

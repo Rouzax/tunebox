@@ -1,8 +1,14 @@
 export const DAYNIGHT_MODES = ['auto', 'day', 'night'];
 
-// Sunrise and sunset by SunCalc's formulas (sun at -0.833 degrees, which
-// accounts for refraction and the solar disc).
-export function sunTimes(date, lat, lon) {
+// Automatic night begins when the evening sun drops to this height, about
+// 30 to 45 minutes before sunset in the Netherlands, and ends when the
+// morning sun is as high again: a car's cabin is already dim in low sun.
+const NIGHT_BELOW_DEGREES = 4;
+
+// When the sun passes a height in the morning and evening, by SunCalc's
+// formulas. The default, -0.833 degrees, is sunrise and sunset (it accounts
+// for refraction and the solar disc).
+export function sunTimes(date, lat, lon, degrees = -0.833) {
     const rad = Math.PI / 180;
     const dayMs = 86400000;
     const J1970 = 2440588;
@@ -18,10 +24,13 @@ export function sunTimes(date, lat, lon) {
     const dec = Math.asin(Math.sin(rad * 23.4397) * Math.sin(L));
     const transit = (j) => J2000 + j + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
     const noon = transit(ds);
-    const w = Math.acos((Math.sin(-0.833 * rad) - Math.sin(phi) * Math.sin(dec)) / (Math.cos(phi) * Math.cos(dec)));
+    // Clamped where the sun never reaches the height (rise and set at noon:
+    // below it all day); `above` says it never drops to it that day.
+    const cosW = (Math.sin(degrees * rad) - Math.sin(phi) * Math.sin(dec)) / (Math.cos(phi) * Math.cos(dec));
+    const w = Math.acos(Math.min(1, Math.max(-1, cosW)));
     const set = transit(0.0009 + (w + lw) / (2 * Math.PI) + n);
     const fromJulian = (j) => new Date((j + 0.5 - J1970) * dayMs);
-    return {rise: fromJulian(noon - (set - noon)), set: fromJulian(set)};
+    return {rise: fromJulian(noon - (set - noon)), set: fromJulian(set), above: cosW <= -1};
 }
 
 // Automatic follows the sun where the deployment configured a location, and
@@ -36,6 +45,6 @@ export function isNight(mode, now, location, prefersDark) {
     if (!location) {
         return prefersDark;
     }
-    const {rise, set} = sunTimes(now, location.latitude, location.longitude);
-    return now < rise || now > set;
+    const {rise, set, above} = sunTimes(now, location.latitude, location.longitude, NIGHT_BELOW_DEGREES);
+    return !above && (now < rise || now > set);
 }
