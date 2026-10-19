@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createEmitter} from '../js/events.js';
-import {createPlayer, pageVolume} from '../js/player.js';
+import {createPlayer, pageVolume, resumesAfterPause} from '../js/player.js';
 
 function fakeTimers() {
     let now = 0;
@@ -92,7 +92,7 @@ function fakeAudio(made) {
     };
 }
 
-function harness() {
+function harness(options) {
     const timers = fakeTimers();
     const events = createEmitter();
     const made = [];
@@ -101,7 +101,7 @@ function harness() {
         events.on(name, (value) => log.push(name === 'state' ? value : name));
     }
     events.on('debug', (note) => log.push(`debug: ${note}`));
-    const player = createPlayer({events, makeAudio: fakeAudio(made), timers, now: timers.now});
+    const player = createPlayer(Object.assign({events, makeAudio: fakeAudio(made), timers, now: timers.now}, options));
     const refusals = [];
     events.on('autoplay-refused', (value) => refusals.push(value));
     return {timers, made, log, player, refusals};
@@ -258,18 +258,120 @@ test('a refused restart during a reconnect is reported as one', async () => {
     assert.deepEqual(refusals, [{resumed: true}]);
 });
 
-test('a pause from outside the player stops it instead of being undone', () => {
+test('elsewhere a pause from outside stops the player instead of being undone', () => {
     const {timers, made, player, log} = harness();
     player.play('https://example.invalid/a.aac');
     made[0].fire('playing');
     made[0].currentTime = 3;
-    // The system takes the audio (a phone call): the element pauses.
+    // A phone call, or headphones unplugged: resuming would play aloud.
     made[0].paused = true;
     made[0].fire('pause');
     assert.equal(player.state(), 'stopped');
     assert.ok(log.includes('interrupted'));
     timers.advance(20000);
     assert.equal(made[0].plays, 1);
+});
+
+test('only the car kind of browser resumes after a pause from outside', () => {
+    const car = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    const android = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+    const iphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+    const mac = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    assert.equal(resumesAfterPause(car), true);
+    assert.equal(resumesAfterPause(android), false);
+    assert.equal(resumesAfterPause(iphone), false);
+    assert.equal(resumesAfterPause(mac), false);
+});
+
+// The system takes the audio from outside: the element pauses.
+function pauseFromOutside(audio) {
+    audio.paused = true;
+    audio.fire('pause');
+}
+
+// Audio that flows: the watchdog sees time move.
+function flow(timers, audio, ms) {
+    for (let i = 0; i < ms / 1000; i++) {
+        audio.currentTime += 1;
+        timers.advance(1000);
+    }
+}
+
+test('a brief pause from outside resumes at live by itself', () => {
+    const {timers, made, player, log} = harness({resumeAfterPause: true});
+    player.play('https://example.invalid/a.aac');
+    made[0].fire('playing');
+    flow(timers, made[0], 3000);
+    // A phone connecting to the car takes the audio for a moment.
+    pauseFromOutside(made[0]);
+    assert.equal(player.state(), 'reconnecting');
+    assert.equal(made[0].src, '');
+    timers.advance(2000);
+    assert.equal(made[0].plays, 2);
+    assert.equal(made[0].src, 'https://example.invalid/a.aac');
+    made[0].fire('playing');
+    assert.equal(player.state(), 'playing');
+    assert.ok(!log.includes('interrupted'));
+});
+
+test('a pause soon after resuming means the audio is held: it stops', () => {
+    const {timers, made, player, log} = harness({resumeAfterPause: true});
+    player.play('https://example.invalid/a.aac');
+    made[0].fire('playing');
+    flow(timers, made[0], 3000);
+    // A phone call: the system pauses again right after the resume.
+    pauseFromOutside(made[0]);
+    timers.advance(2000);
+    made[0].fire('playing');
+    flow(timers, made[0], 1000);
+    pauseFromOutside(made[0]);
+    assert.equal(player.state(), 'stopped');
+    assert.ok(log.includes('interrupted'));
+    timers.advance(60000);
+    assert.equal(made[0].plays, 2);
+});
+
+test('resumes that never play give up after the last try', () => {
+    const {timers, made, player, log} = harness({resumeAfterPause: true});
+    player.play('https://example.invalid/a.aac');
+    made[0].fire('playing');
+    flow(timers, made[0], 3000);
+    pauseFromOutside(made[0]);
+    for (const wait of [2000, 6000, 15000]) {
+        timers.advance(wait);
+        pauseFromOutside(made[0]);
+    }
+    assert.equal(made[0].plays, 4);
+    assert.equal(player.state(), 'stopped');
+    assert.ok(log.includes('interrupted'));
+    timers.advance(60000);
+    assert.equal(made[0].plays, 4);
+});
+
+test('a pause long after a resume gets its own tries', () => {
+    const {timers, made, player, log} = harness({resumeAfterPause: true});
+    player.play('https://example.invalid/a.aac');
+    made[0].fire('playing');
+    flow(timers, made[0], 3000);
+    pauseFromOutside(made[0]);
+    timers.advance(2000);
+    made[0].fire('playing');
+    flow(timers, made[0], 60000);
+    pauseFromOutside(made[0]);
+    assert.equal(player.state(), 'reconnecting');
+    assert.ok(!log.includes('interrupted'));
+});
+
+test('stop during the wait cancels the resume', () => {
+    const {timers, made, player} = harness({resumeAfterPause: true});
+    player.play('https://example.invalid/a.aac');
+    made[0].fire('playing');
+    flow(timers, made[0], 3000);
+    pauseFromOutside(made[0]);
+    player.stop();
+    timers.advance(60000);
+    assert.equal(made[0].plays, 1);
+    assert.equal(player.state(), 'stopped');
 });
 
 test('the pause at the end of a stream is not an interruption', () => {

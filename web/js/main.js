@@ -10,7 +10,7 @@ import {bindLayout} from './layout.js';
 import {bindMedia} from './media.js';
 import {bindPages} from './pages.js';
 import {bindPalette} from './palette.js';
-import {createPlayer} from './player.js';
+import {createPlayer, resumesAfterPause} from './player.js';
 import {createSwitcher} from './schedule.js';
 import {createStorage} from './storage.js';
 import {createToast} from './toast.js';
@@ -33,7 +33,13 @@ async function start(root) {
     const storage = createStorage(browserStorage());
     const api = createApi((input, init) => window.fetch(input, init));
     const toast = createToast(root, window);
-    const player = createPlayer({events, makeAudio: () => new Audio(), timers: window, now: () => Date.now()});
+    const player = createPlayer({
+        events,
+        makeAudio: () => new Audio(),
+        timers: window,
+        now: () => Date.now(),
+        resumeAfterPause: resumesAfterPause(navigator.userAgent),
+    });
     let listing;
     let settings;
     try {

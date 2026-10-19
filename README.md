@@ -173,7 +173,11 @@ Good to know:
 - "Reconnecting..." means the stream dropped. The player keeps trying with
   pauses of 2 seconds up to a minute; you do not need to do anything.
 - When the phone or car takes the sound away (a call, unplugged headphones),
-  the player stops and says so; press play to listen again.
+  the player stops and says "Paused by the system. Press play to continue."
+  In the car's kind of browser (Chromium on Linux), where a phone connecting
+  takes the sound for a moment, the player first starts again by itself, at
+  live, within about 20 seconds; it stops only if the sound is taken again
+  right after (a call).
 - The visualizer starts after your first tap or key press on the page.
 - Opening a station nobody listened to for a while takes a moment: tunebox
   checks its feed first, so what you see is what is on now.

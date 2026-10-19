@@ -12,8 +12,8 @@ const TICK_MS = 1000;
 // starts at live and nothing keeps downloading. While a stream is wanted the
 // player never gives up by itself: dead streams are retried with backoff.
 // Events: state, audio ({element, cors}), webaudio-unavailable, autoplay-refused
-// ({resumed}: refused on a reconnect), interrupted (paused from outside),
-// debug (a reconnect decision, as text).
+// ({resumed}: refused on a reconnect), interrupted (paused from outside and
+// held there), debug (a reconnect decision, as text).
 // The stream's volume for a stored page level (0-100). Where the page
 // shows no slider, nothing on it could raise a lowered level, so the
 // device's own volume is the only control and the stream plays at full.
@@ -21,7 +21,21 @@ export function pageVolume(level, sliderShown) {
     return sliderShown ? level / 100 : 1;
 }
 
-export function createPlayer({events, makeAudio, timers, now}) {
+// With resumeAfterPause, a pause from outside (the system taking the audio)
+// is undone after these waits, at live. One that comes back within HELD_MS
+// of a resume means the audio is held (a call, the car switching to the
+// phone): that is a stop. Without it every such pause is a stop.
+const RESUME_DELAYS_MS = [2000, 6000, 15000];
+const HELD_MS = 5000;
+
+// The car's browser is desktop Chromium on Linux, where the system takes the
+// audio for a moment when a phone connects. On a phone the same pause means
+// headphones were unplugged, and resuming would play through the speaker.
+export function resumesAfterPause(userAgent) {
+    return /\bX11; Linux x86_64\b/.test(userAgent) && !/Android/.test(userAgent);
+}
+
+export function createPlayer({events, makeAudio, timers, now, resumeAfterPause = false}) {
     let audio = null;
     let audioCors = true;
     let url = null;
@@ -32,6 +46,9 @@ export function createPlayer({events, makeAudio, timers, now}) {
     let tick = null;
     let volume = 0.5;
     let muted = false;
+    // Tries used since the last pause from outside, and when one played.
+    let resumes = 0;
+    let resumedAt = null;
     // Streams that only play without CORS, and so without Web Audio.
     const noCors = new Set();
     const played = new Set();
@@ -64,6 +81,9 @@ export function createPlayer({events, makeAudio, timers, now}) {
         el.addEventListener('playing', () => {
             if (el === audio && url) {
                 played.add(url);
+                if (resumes > 0) {
+                    resumedAt = now();
+                }
                 setState('playing');
             }
         });
@@ -77,13 +97,11 @@ export function createPlayer({events, makeAudio, timers, now}) {
                 failed(el.error ? el.error.code : 0);
             }
         });
-        // A pause the player did not ask for (a phone call, headphones
-        // unplugged) is a stop: resuming on a stall would undo it. The
-        // player never pauses; it drops the source, which clears url first.
+        // A pause the player did not ask for: the player never pauses; it
+        // drops the source, which clears url first.
         el.addEventListener('pause', () => {
             if (el === audio && url && el.paused && !el.ended) {
-                halt();
-                events.emit('interrupted');
+                pausedFromOutside();
             }
         });
         el.addEventListener('ended', () => {
@@ -143,11 +161,41 @@ export function createPlayer({events, makeAudio, timers, now}) {
         }, delay);
     }
 
+    function pausedFromOutside() {
+        const held = resumedAt !== null && now() - resumedAt < HELD_MS;
+        if (!resumeAfterPause || held || resumes >= RESUME_DELAYS_MS.length) {
+            halt();
+            events.emit('interrupted');
+            return;
+        }
+        const delay = RESUME_DELAYS_MS[resumes];
+        resumes += 1;
+        resumedAt = null;
+        if (retry !== null) {
+            timers.clearTimeout(retry);
+        }
+        // Nothing downloads meanwhile, and the resume starts at live.
+        audio.removeAttribute('src');
+        audio.load();
+        setState('reconnecting');
+        events.emit('debug', `paused from outside, resuming in ${delay / 1000} s`);
+        retry = timers.setTimeout(() => {
+            retry = null;
+            if (url) {
+                connect();
+            }
+        }, delay);
+    }
+
     function onTick() {
         if (!url || retry !== null) {
             return;
         }
         const at = now();
+        if (resumedAt !== null && at - resumedAt >= HELD_MS) {
+            resumes = 0;
+            resumedAt = null;
+        }
         if (watchdog.observe(audio.currentTime, at) === 'stalled') {
             scheduleRetry('stalled');
         } else if (watchdog.healthy(at)) {
@@ -157,6 +205,8 @@ export function createPlayer({events, makeAudio, timers, now}) {
 
     function halt() {
         url = null;
+        resumes = 0;
+        resumedAt = null;
         if (retry !== null) {
             timers.clearTimeout(retry);
             retry = null;
@@ -176,6 +226,8 @@ export function createPlayer({events, makeAudio, timers, now}) {
         play(streamUrl) {
             url = streamUrl;
             attempt = 0;
+            resumes = 0;
+            resumedAt = null;
             if (retry !== null) {
                 timers.clearTimeout(retry);
                 retry = null;
