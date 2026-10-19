@@ -207,6 +207,17 @@ async function run() {
         await send('Page.navigate', {url: `${base}/admin/`});
         await step('login form', async () => (await until(`!document.querySelector('#login').hidden`)) ? null : 'not shown');
         await noSideways('login');
+        // Password managers take the field before the password as the
+        // account name; without one they take the code field.
+        await step('forms name the account for password managers', async () => {
+            const wrong = await evaluate(`['#login', '#setup'].filter((id) => {
+                const inputs = [...document.querySelectorAll(id + ' input')];
+                const name = inputs.findIndex((i) => i.autocomplete === 'username' && i.type !== 'hidden');
+                const password = inputs.findIndex((i) => i.type === 'password');
+                return name < 0 || name > password;
+            })`);
+            return wrong.length ? `no account field before the password in ${wrong.join(', ')}` : null;
+        });
 
         await step('log in', async () => {
             await evaluate(`(() => {
