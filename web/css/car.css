@@ -379,6 +379,12 @@
     gap:                   .6rem;
 }
 
+/* The grid spaces the rows; base.css's gap between list items would push
+   every button but the first down. */
+.tunebox .page.viz-page .viz-list li {
+    margin: 0;
+}
+
 .tunebox .page.viz-page .viz-list button {
     font-size:     1rem;
     display:       block;

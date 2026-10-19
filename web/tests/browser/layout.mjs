@@ -229,6 +229,14 @@ function inspect(page, slack) {
             problems.push(`${oversized.length} channel logo(s) loaded at full size (${oversized[0].naturalWidth} px)`);
         }
     }
+    if (page === 'viz') {
+        // Buttons side by side in the grid start at the same height.
+        const tops = [...document.querySelectorAll('.viz-list button')].map((b) => b.getBoundingClientRect());
+        const crooked = tops.filter((r) => tops.some((o) => o !== r && Math.abs(o.bottom - r.bottom) < r.height / 2 && Math.abs(o.top - r.top) > 1));
+        if (crooked.length) {
+            problems.push(`visualizer buttons in one row are not level (${crooked.length})`);
+        }
+    }
     return {problems, layout: root.dataset.layout};
 }
 
