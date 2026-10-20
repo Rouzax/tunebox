@@ -393,6 +393,10 @@ def _source(table: dict[str, Any], where: str) -> SourceConfig:
     return SourceConfig(source_type, settings)
 
 
+# The rule keys that hold a regular expression; rulecheck guards exactly these.
+PATTERN_RULES = ("station_id", "played_by")
+
+
 def _rules(table: dict[str, Any], where: str) -> Rules:
     _no_unknown(table, {"station_id", "played_by", "artist_separator"}, where)
     station_id = _pattern(table, "station_id", f"{where}.station_id")

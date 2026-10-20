@@ -24,6 +24,7 @@ import sys
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any, cast
 
+from tunebox.config import PATTERN_RULES, ConfigState
 from tunebox.tracks import MAX_TITLE
 
 MAX_PATTERN = 200
@@ -327,6 +328,49 @@ def _parts(av: object) -> Iterator[object]:
     elif isinstance(av, (tuple, list)):
         for value in cast("Iterable[object]", av):
             yield from _parts(value)
+
+
+def patterns(state: ConfigState) -> list[tuple[str, str]]:
+    """Every rule pattern in the state, with the field that holds it."""
+    found: list[tuple[str, str]] = []
+    for index, row in enumerate(state.channels):
+        rules = row.doc.get("rules")
+        if not isinstance(rules, dict):
+            continue
+        table = cast("dict[str, object]", rules)
+        for key in PATTERN_RULES:
+            value = table.get(key)
+            if isinstance(value, str) and value:
+                found.append((f"channels[{index}].rules.{key}", value))
+    return found
+
+
+def refused(candidate: ConfigState, stored: ConfigState, samples: list[str]) -> str | None:
+    """Why the candidate's new patterns may not be stored, or None. Patterns
+    already stored are left alone: they have run on live titles, and a lint
+    that grew stricter must not block every save until they are edited."""
+    known = {pattern for _, pattern in patterns(stored)}
+    new: dict[str, str] = {}
+    for field, pattern in patterns(candidate):
+        if pattern in known:
+            continue
+        reason = lint(pattern)
+        if reason:
+            return f"{field}: {reason}"
+        new.setdefault(pattern, field)
+    if not new:
+        return None
+    listed = list(new)
+    result = check(listed, samples)
+    if result is None:
+        return None
+    at, reason = result
+    return f"{new[listed[at]] if at is not None else 'rules'}: {reason}"
+
+
+def stored_refusals(state: ConfigState) -> list[tuple[str, str]]:
+    """The stored patterns the current lint refuses, as (field, reason)."""
+    return [(field, reason) for field, pattern in patterns(state) if (reason := lint(pattern))]
 
 
 def samples_for(pattern: str) -> list[str]:

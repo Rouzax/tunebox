@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from tunebox.config import load
-from tunebox.rulecheck import SYNTHETIC, check, lint, samples_for
+from tunebox.config import ChannelRow, ConfigState, load
+from tunebox.rulecheck import SYNTHETIC, check, lint, refused, samples_for, stored_refusals
 from tunebox.tracks import MAX_TITLE
 
 STATION_ID = r"^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b"
@@ -144,3 +144,39 @@ def test_no_sample_is_longer_than_a_title() -> None:
 def test_samples_include_the_characters_a_range_names() -> None:
     samples = samples_for("q[\u0430-\u044f]+q")
     assert "\u0430" * MAX_TITLE in samples
+
+
+def state_with(*patterns: str) -> ConfigState:
+    rows = tuple(
+        ChannelRow(
+            f"s{n}",
+            None,
+            True,
+            {
+                "id": f"s{n}",
+                "name": "S",
+                "stream_url": "https://example.invalid/stream.aac",
+                "source": {"type": "triton", "mount": "X"},
+                "rules": {"played_by": p},
+            },
+        )
+        for n, p in enumerate(patterns)
+    )
+    return ConfigState({}, {}, (), rows)
+
+
+def test_refused_skips_stored_patterns_and_names_the_field() -> None:
+    stored = state_with("(a+)+$")  # refused by the lint, but already stored
+    candidate = state_with("(a+)+$", "(b+)+$")
+    reason = refused(candidate, stored, [])
+    assert reason is not None and reason.startswith("channels[1].rules.played_by: ")
+
+
+def test_refused_lets_a_state_of_stored_patterns_through() -> None:
+    stored = state_with("(a+)+$")
+    assert refused(stored, stored, []) is None
+
+
+def test_stored_refusals_lists_what_the_lint_now_refuses() -> None:
+    found = stored_refusals(state_with("(x)", "(a+)+$"))
+    assert [field for field, _ in found] == ["channels[1].rules.played_by"]

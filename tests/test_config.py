@@ -1,9 +1,11 @@
+import inspect
 import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tunebox import config
 from tunebox.config import (
     AdminConfig,
     ChannelRow,
@@ -366,3 +368,9 @@ def test_a_log_file_is_optional_and_lives_under_the_data_folder(tmp_path: Path) 
         parse({**minimal(), "server": {"log_file": 3}}, tmp_path)
     with pytest.raises(ConfigError, match=r"server\.log_file"):
         parse({**minimal(), "server": {"log_file": ""}}, tmp_path)
+
+
+def test_every_compiled_rule_is_a_pattern_rule() -> None:
+    source = inspect.getsource(config._rules)  # pyright: ignore[reportPrivateUsage]
+    compiled = set(re.findall(r'_pattern\(table, "(\w+)"', source))
+    assert compiled == set(config.PATTERN_RULES)

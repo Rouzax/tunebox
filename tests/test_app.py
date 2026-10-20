@@ -193,6 +193,28 @@ def test_with_the_panel_on_changed_defaults_and_player_are_named(
     assert [r.__dict__["fields"]["parts"] for r in ignored] == [["defaults", "player"]]
 
 
+def test_start_up_names_stored_rules_the_lint_refuses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The file's stations are stored as they are; only the panel lints.
+    rules = '[channels.rules]\nplayed_by = "(a+)+$"\n'
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        config = tmp_path / "tunebox.toml"
+        config.write_text(
+            f'[server]\nhost = "127.0.0.1"\nport = {taken.getsockname()[1]}\n'
+            f'log_file = "tunebox.log"\n\n{CHANNEL_TOML}{rules}',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LOG_LEVEL", "info")
+        monkeypatch.setenv("TUNEBOX_CONFIG", str(config))
+        assert main() == 2
+    lines = [json.loads(x) for x in (tmp_path / "tunebox.log").read_text("utf-8").splitlines()]
+    refusals = [line for line in lines if line["event"] == "rule_refused"]
+    assert [line["field"] for line in refusals] == ["channels[0].rules.played_by"]
+
+
 def test_admin_needs_its_web_folder() -> None:
     assert (WEB_ADMIN_DIR / "index.html").is_file()
 

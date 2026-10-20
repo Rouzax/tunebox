@@ -35,12 +35,12 @@ from tunebox.config import (
     SOURCE_SETTINGS,
     AdminConfig,
     ConfigError,
-    ConfigState,
+    validate_state,
 )
 from tunebox.logs import event
 from tunebox.paths import inside
 from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, read_cookie
-from tunebox.rulecheck import check, lint
+from tunebox.rulecheck import refused
 from tunebox.sessions import KNOWN_S, Gate
 from tunebox.settings import (
     Settings,
@@ -522,9 +522,13 @@ class Admin:
     def _commit(self, raw: object, based_on: int, kind: str, target: str | None) -> Response:
         try:
             state = state_from_dict(raw)
-            refused = self._refused_rule(state)
-            if refused:
-                return _json(400, {"error": "invalid", "message": refused})
+            validate_state(state)
+            stored, version = self._settings.load()
+            if version != based_on:
+                return _json(409, {"error": "stale", "version": version})
+            reason = refused(state, stored, self._samples())
+            if reason:
+                return _json(400, {"error": "invalid", "message": reason})
             version, changed = self._settings.commit_changed(state, based_on, kind, target)
         except ConfigError as error:
             return _json(400, {"error": "invalid", "message": str(error)})
@@ -535,29 +539,6 @@ class Admin:
         self._apply()
         event(log, logging.INFO, "admin_change", kind=kind, target=target, version=version)
         return _json(200, {"version": version, "changed": True})
-
-    def _refused_rule(self, state: ConfigState) -> str | None:
-        """Lints every rule, and runs the ones not stored yet in a child
-        process: stored patterns have already run on live titles."""
-        current, _ = self._settings.load()
-        known = {pattern for row in current.channels for _, pattern in _patterns(row.doc)}
-        new: dict[str, str] = {}
-        for index, row in enumerate(state.channels):
-            for key, pattern in _patterns(row.doc):
-                field = f"channels[{index}].rules.{key}"
-                reason = lint(pattern)
-                if reason:
-                    return f"{field}: {reason}"
-                if pattern not in known:
-                    new.setdefault(pattern, field)
-        if not new:
-            return None
-        patterns = list(new)
-        refused = check(patterns, self._samples())
-        if refused is None:
-            return None
-        at, reason = refused
-        return f"{new[patterns[at]] if at is not None else 'rules'}: {reason}"
 
     def _history(self, request: Request) -> Response:
         raw = urllib.parse.parse_qs(request.query).get("before", [""])[0]
@@ -789,16 +770,6 @@ def _version(payload: dict[str, object] | None) -> int | None:
     """based_on: an int, and not a bool (which is an int in Python)."""
     value = payload.get("based_on") if payload else None
     return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-
-def _patterns(doc: dict[str, Any]) -> list[tuple[str, str]]:
-    """The title rules a station document sets, as (key, pattern)."""
-    rules = doc.get("rules")
-    if not isinstance(rules, dict):
-        return []
-    table = cast("dict[str, object]", rules)
-    found = ((key, table.get(key)) for key in ("station_id", "played_by"))
-    return [(key, value) for key, value in found if isinstance(value, str) and value]
 
 
 def _history_id(path: str) -> int:

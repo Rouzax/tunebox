@@ -24,6 +24,7 @@ from tunebox.logos import Logos
 from tunebox.logs import add_file, configure, event
 from tunebox.netguard import Guard
 from tunebox.pin import Pin
+from tunebox.rulecheck import stored_refusals
 from tunebox.runtime import Runtime
 from tunebox.server import TuneboxServer
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError, StaleVersion
@@ -71,6 +72,8 @@ def main() -> int:
         event(log, logging.ERROR, "settings_unavailable", error=str(error))
         print(f"tunebox: {error}", file=sys.stderr)
         return 2
+    for field, reason in stored_refusals(settings.load()[0]):
+        event(log, logging.WARNING, "rule_refused", field=field, reason=reason)
     store = Store(config.server.data_dir / "tunebox.db")
     covers = CoverService(store, Catalogs(http.get).find)
     guard = Guard()

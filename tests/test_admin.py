@@ -654,10 +654,13 @@ def test_a_slow_new_pattern_is_refused_naming_its_field(
     csrf = world.login()
 
     def slow(patterns: list[str], _samples: list[str]) -> tuple[int | None, str]:
-        return patterns.index("^x$"), "too slow on long titles; simplify the pattern"
+        return patterns.index("^(x)$"), "too slow on long titles; simplify the pattern"
 
-    monkeypatch.setattr("tunebox.admin.check", slow)
-    stations = [station("a", rules={"station_id": "^y$"}), station("b", rules={"played_by": "^x$"})]
+    monkeypatch.setattr("tunebox.rulecheck.check", slow)
+    stations = [
+        station("a", rules={"station_id": "^y$"}),
+        station("b", rules={"played_by": "^(x)$"}),
+    ]
     answer = save(world, csrf, 0, state_of(*stations))
     assert answer.status == 400
     assert json_of(answer)["message"].startswith("channels[1].rules.played_by: too slow")
@@ -671,8 +674,8 @@ def test_a_check_that_cannot_run_refuses_the_save(
     def unavailable(_patterns: list[str], _samples: list[str]) -> tuple[int | None, str]:
         return None, "could not run"
 
-    monkeypatch.setattr("tunebox.admin.check", unavailable)
-    answer = save(world, csrf, 0, state_of(station("a", rules={"played_by": "^x$"})))
+    monkeypatch.setattr("tunebox.rulecheck.check", unavailable)
+    answer = save(world, csrf, 0, state_of(station("a", rules={"played_by": "^(x)$"})))
     assert json_of(answer) == {"error": "invalid", "message": "rules: could not run"}
 
 
@@ -685,9 +688,32 @@ def test_stored_patterns_are_not_run_again(world: World, monkeypatch: pytest.Mon
     def counting(patterns: list[str], _samples: list[str]) -> None:
         runs.append(patterns)
 
-    monkeypatch.setattr("tunebox.admin.check", counting)
+    monkeypatch.setattr("tunebox.rulecheck.check", counting)
     assert save(world, csrf, 1, state_of(station("a", rules=rules), station("b"))).status == 200
     assert runs == []
+
+
+def test_a_stale_save_never_runs_the_rule_check(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
+    save(world, csrf, 0, state_of(station("owr")))
+    ran: list[int] = []
+
+    def counting(_patterns: list[str], _samples: list[str]) -> None:
+        ran.append(1)
+
+    monkeypatch.setattr("tunebox.rulecheck.check", counting)
+    with_rule = station("owr", rules={"played_by": "^(.+) - live$"})
+    assert save(world, csrf, 0, state_of(with_rule)).status == 409
+    assert ran == []
+
+
+def test_an_invalid_pattern_is_named_by_validation(world: World) -> None:
+    csrf = world.login()
+    answer = save(world, csrf, 0, state_of(station("owr", rules={"played_by": "("})))
+    assert answer.status == 400
+    assert json_of(answer)["message"].startswith("channels[0].rules.played_by")
 
 
 def test_restore_applies_the_old_state(world: World) -> None:
