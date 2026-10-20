@@ -1310,7 +1310,16 @@ def test_a_dropped_connection_prints_no_traceback(
     caplog.set_level(logging.DEBUG)
     sock = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5)
     sock.sendall(b"GET /api/channels HTTP/1.1\r\nHost: x\r\n\r\n")
-    assert sock.recv(65536).startswith(b"HTTP/1.1 200")
+    answer = sock.recv(65536)
+    assert answer.startswith(b"HTTP/1.1 200")
+    # Headers and body arrive as separate writes; a reset before the body
+    # is out ends the request quietly mid-response instead.
+    head, _, body = answer.partition(b"\r\n\r\n")
+    length = next(
+        int(line[15:]) for line in head.split(b"\r\n") if line.startswith(b"Content-Length: ")
+    )
+    while len(body) < length:
+        body += sock.recv(65536)
     # Close with a reset while the server waits for the next request on
     # the kept-alive connection, as a browser does when it drops a socket.
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
