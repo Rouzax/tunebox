@@ -604,19 +604,29 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 
 ## Update, back up and reset
 
-- **Update** to the latest release:
+- **Update** to the latest release. Copy `data/tunebox.db` first: a newer
+  tunebox may upgrade the database, and an older one then refuses to start
+  on it (`settings_unavailable` in the log), so going back means putting
+  the copy back.
 
   ```sh
+  cp data/tunebox.db data/tunebox.db.before-update
   docker compose pull && docker compose up -d
   ```
 
 - **Back up**: everything worth keeping is in the `data` folder:
-  `tunebox.toml`, and `tunebox.db`, which holds the stations as tunebox last
-  loaded them, the covers and the recent lists.
+  `tunebox.toml`, and `tunebox.db`, which holds the stations, settings and
+  change history (with the admin panel on, the only copy of them), the
+  admin account and its sessions, the listening PIN, the covers and the
+  recent lists. Copy it while tunebox is stopped, or copy
+  `tunebox.db-wal` along with it.
 - **Reset** the recent lists and covers: stop tunebox, delete
   `data/tunebox.db`, `data/tunebox.db-wal` and `data/tunebox.db-shm`, and
   start it again. History refills from the stations and covers are looked
-  up again. Your configuration is not touched.
+  up again. This also deletes everything else the database holds: with the
+  admin panel on, the stations start again from `tunebox.toml`, and the
+  settings, the history, the admin account (set it up again with
+  `python -m tunebox admin setup`) and the listening PIN are gone.
 - **Logos** are kept in `data/logos/`, as downloaded. A PNG logo larger than
   128 px also gets a small copy in `data/logos/small/`, made at start-up
   (`logo_shrunk` in the log), which the station list shows; the original is
