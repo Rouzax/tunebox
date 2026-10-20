@@ -168,13 +168,13 @@ def state_with(*patterns: str) -> ConfigState:
 def test_refused_skips_stored_patterns_and_names_the_field() -> None:
     stored = state_with("(a+)+$")  # refused by the lint, but already stored
     candidate = state_with("(a+)+$", "(b+)+$")
-    reason = refused(candidate, stored, [])
+    reason = refused(candidate, stored, list)
     assert reason is not None and reason.startswith("channels[1].rules.played_by: ")
 
 
 def test_refused_lets_a_state_of_stored_patterns_through() -> None:
     stored = state_with("(a+)+$")
-    assert refused(stored, stored, []) is None
+    assert refused(stored, stored, list) is None
 
 
 def test_stored_refusals_lists_what_the_lint_now_refuses() -> None:

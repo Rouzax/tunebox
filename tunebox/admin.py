@@ -539,7 +539,7 @@ class Admin:
             stored, version = self._settings.load()
             if version != based_on:
                 return _json(409, {"error": "stale", "version": version})
-            reason = refused(state, stored, self._samples())
+            reason = refused(state, stored, self._samples)
             if reason:
                 return _json(400, {"error": "invalid", "message": reason})
             version, changed = self._settings.commit_changed(state, based_on, kind, target)

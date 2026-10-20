@@ -48,6 +48,7 @@ class World:
         (web / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
         (web / "notes.md").write_text("x", encoding="utf-8")
         self.applied: list[int] = []
+        self.samples_asked = 0
         self.apply_result: int | None = None
         self.pin = Pin(self.settings, self.accounts.server_key, clock=self.clock)
         self.admin = Admin(
@@ -57,7 +58,7 @@ class World:
             settings=self.settings,
             pin=self.pin,
             apply=self.apply,
-            samples=lambda: ["FISHER - Stay"],
+            samples=self.samples,
             clock=self.clock,
             monotonic=self.clock,
             sleep=lambda _s: None,
@@ -100,6 +101,10 @@ class World:
         if self.apply_result is not None:
             return self.apply_result
         return self.settings.load()[1]
+
+    def samples(self) -> list[str]:
+        self.samples_asked += 1
+        return ["FISHER - Stay"]
 
     def code(self, offset: int = 0) -> str:
         return crypto.totp(SECRET, int(self.clock.now // 30) + offset)
@@ -734,6 +739,16 @@ def test_stored_patterns_are_not_run_again(world: World, monkeypatch: pytest.Mon
     monkeypatch.setattr("tunebox.rulecheck.check", counting)
     assert save(world, csrf, 1, state_of(station("a", rules=rules), station("b"))).status == 200
     assert runs == []
+
+
+def test_recent_titles_are_gathered_only_for_a_new_pattern(world: World) -> None:
+    csrf = world.login()
+    assert save(world, csrf, 0, state_of(station("a"))).status == 200
+    assert save(world, csrf, 1, state_of(station("a", name="Renamed"))).status == 200
+    assert world.samples_asked == 0
+    rules = {"played_by": r"\s*\(Played by ([^)]*)\)\s*$"}
+    assert save(world, csrf, 2, state_of(station("a", rules=rules))).status == 200
+    assert world.samples_asked == 1
 
 
 def test_a_stale_save_never_runs_the_rule_check(

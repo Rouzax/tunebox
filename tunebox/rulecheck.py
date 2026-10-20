@@ -345,10 +345,14 @@ def patterns(state: ConfigState) -> list[tuple[str, str]]:
     return found
 
 
-def refused(candidate: ConfigState, stored: ConfigState, samples: list[str]) -> str | None:
+def refused(
+    candidate: ConfigState, stored: ConfigState, samples: Callable[[], list[str]]
+) -> str | None:
     """Why the candidate's new patterns may not be stored, or None. Patterns
     already stored are left alone: they have run on live titles, and a lint
-    that grew stricter must not block every save until they are edited."""
+    that grew stricter must not block every save until they are edited.
+    samples gives the titles to try new patterns on; gathering them reads
+    every channel, so it is asked only when there is a new pattern."""
     known = {pattern for _, pattern in patterns(stored)}
     new: dict[str, str] = {}
     for field, pattern in patterns(candidate):
@@ -361,7 +365,7 @@ def refused(candidate: ConfigState, stored: ConfigState, samples: list[str]) -> 
     if not new:
         return None
     listed = list(new)
-    result = check(listed, samples)
+    result = check(listed, samples())
     if result is None:
         return None
     at, reason = result
