@@ -445,3 +445,20 @@ legend {
     padding-top: 1rem;
     border-top:  1px solid var(--line);
 }
+
+.sessions {
+    width:           100%;
+    border-collapse: collapse;
+}
+
+.sessions th,
+.sessions td {
+    padding:       0.4rem 0.5rem;
+    text-align:    left;
+    border-bottom: 1px solid var(--line);
+}
+
+.confirm-code,
+.new-totp {
+    margin-top: 0.75rem;
+}
