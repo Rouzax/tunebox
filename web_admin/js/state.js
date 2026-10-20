@@ -259,3 +259,17 @@ export function saveMessage(data, done) {
     }
     return done;
 }
+
+// Every route takes a ticket; a page that draws after waiting for an answer
+// draws only while its ticket is the latest. A slow answer for a page the
+// owner has left must not draw over the page now open.
+export function tickets() {
+    let latest = 0;
+    return {
+        take() {
+            latest += 1;
+            const mine = latest;
+            return () => mine === latest;
+        },
+    };
+}

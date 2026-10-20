@@ -36,11 +36,15 @@ function guarded(ctx, handler) {
 }
 
 async function list(root, ctx) {
+    const current = ctx.stillOpen;
     const items = el('ul', {class: 'history'});
     const more = button('history', 'Older', null, {class: 'quiet', hidden: true});
     let last = null;
     async function page() {
         const {ok, status, data} = await ctx.request('GET', last === null ? 'history' : `history?before=${last}`);
+        if (!current()) {
+            return;
+        }
         if (!ok) {
             if (status !== 401) {
                 ctx.fail(data);
@@ -65,7 +69,11 @@ async function list(root, ctx) {
 }
 
 async function detail(root, ctx, id) {
+    const current = ctx.stillOpen;
     const {ok, status, data} = await ctx.request('GET', `history/${id}`);
+    if (!current()) {
+        return;
+    }
     if (status === 401) {
         return;
     }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
     addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, moveGroup,
-    moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setSettings, stationsByGroup, validId,
+    moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setSettings, stationsByGroup, tickets, validId,
 } from '../../web_admin/js/state.js';
 
 function base() {
@@ -153,4 +153,13 @@ test('the save message says what happened', () => {
         'Saved, but not live yet: tunebox could not start the change. The log says why.');
     assert.equal(saveMessage({changed: false, applied: false}, 'Saved.'),
         'Nothing new to save, but the stored change is still not live. The log says why.');
+});
+
+test('a page draw is current only until the next route', () => {
+    const pages = tickets();
+    const first = pages.take();
+    assert.equal(first(), true);
+    const second = pages.take();
+    assert.equal(first(), false);
+    assert.equal(second(), true);
 });

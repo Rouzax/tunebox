@@ -159,10 +159,11 @@ export async function render(root, ctx) {
             stay.focus();
         },
     };
+    const current = ctx.stillOpen;
     root.replaceChildren(settings.form);
     const pin = await pinForm(ctx, page);
     // The page may have been left while the PIN status loaded.
-    if (settings.form.isConnected) {
+    if (current()) {
         root.append(pin);
     }
 }

@@ -8,7 +8,7 @@ import {render as renderHistory} from './history.js';
 import {qrMatrix, qrSvg} from './qr.js';
 import {render as renderSettings} from './settings.js';
 import {render as renderStations} from './stations.js';
-import {decodeHashPart, saveMessage} from './state.js';
+import {decodeHashPart, saveMessage, tickets} from './state.js';
 
 const ERRORS = {
     login_failed: 'Login failed.',
@@ -61,8 +61,13 @@ let keepMessage = false;
 // The hash the view was drawn for, to go back to when leaving is refused.
 let shown = '';
 
+const pages = tickets();
+
 const ctx = {
     config: null,
+    // True while the page being drawn is still the one open; a page that
+    // waits for an answer checks it before it draws.
+    stillOpen: () => true,
     // The server's limits, from GET state; these are what it enforces
     // before it has answered.
     limits: {password_min: 12, pin_min: 6, pin_max: 8},
@@ -282,6 +287,7 @@ function route() {
         return;
     }
     shown = window.location.hash;
+    ctx.stillOpen = pages.take();
     const hash = window.location.hash || '#stations';
     for (const link of document.querySelectorAll('#shell nav a')) {
         link.classList.toggle('current', hash.startsWith(link.getAttribute('href')));

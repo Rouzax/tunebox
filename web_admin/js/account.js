@@ -152,7 +152,11 @@ function sessionsPart(ctx, sessions, redraw) {
 }
 
 export async function render(root, ctx) {
+    const current = ctx.stillOpen;
     const answer = await ctx.request('GET', 'account');
+    if (!current()) {
+        return;
+    }
     if (!answer.ok) {
         if (answer.status !== 401) {
             ctx.fail(answer.data);
