@@ -382,7 +382,12 @@ list then shows the current stations, so check them before you make the
 change again; an open edit form keeps what you typed, and saving it again
 applies it to the current stations. When a save gets no answer at all, the
 page says the change may or may not have been saved and shows what is
-stored.
+stored. Saving without changes stores nothing: no History entry, and the
+page says "No changes to save." When a change is stored but the running
+stations could not take it (a source that cannot be set up), the page says
+the change is stored but not live and the stations keep running as they
+were; the log has `apply_failed` with the reason. Fix the station and save
+again.
 
 ### Settings and the listening PIN
 
@@ -414,6 +419,11 @@ How it behaves:
   gets locked, keeps playing; the keypad appears within ten seconds, and the
   titles come back once the PIN is typed.
 - A new PIN, or switching it on from off, asks every device again.
+- Over the player, the keypad shows **Stop** while music plays, so the
+  driver can silence it before typing. Tab stays inside the keypad.
+- When the keypad says "Busy, trying again...", many addresses are guessing
+  at once and the try was not checked; the keypad sends it once more after
+  2 seconds by itself.
 - After 10 wrong PINs from one address, that address waits 15 minutes. When
   wrong PINs pour in from many addresses at once (more than 100 in an hour),
   tunebox checks one try every 2 seconds for everyone together and asks the
@@ -608,7 +618,9 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 - **Update** to the latest release. Copy `data/tunebox.db` first: a newer
   tunebox may upgrade the database, and an older one then refuses to start
   on it (`settings_unavailable` in the log), so going back means putting
-  the copy back.
+  the copy back. This release asks every browser for the PIN again (when one is set) and
+  makes the admin login ask for a code again on browsers it knew; the PIN
+  itself stays valid.
 
   ```sh
   cp data/tunebox.db data/tunebox.db.before-update
@@ -838,9 +850,10 @@ other content type, or a `Sec-Fetch-Site` other than `same-origin`) is a
 right PIN answers `204` and sets the `tunebox_grant` cookie (one year;
 `Secure` when your proxy says the visit came over https); a wrong one is a
 `401` with `{"error": "pin_wrong"}`; an address that must wait gets `429`
-with `{"error": "slow_down"}`; a try refused unchecked while many addresses
-are guessing gets `429` with `{"error": "busy"}` and `Retry-After: 2`. While the PIN is off it answers `204`
-without a cookie. While the PIN is on:
+with `{"error": "slow_down"}`; a try refused unchecked while many
+addresses are guessing gets `429` with `{"error": "busy"}` and
+`Retry-After: 2`. While the PIN is off it answers `204` without a cookie.
+While the PIN is on:
 
 - With **the whole player** locked and no grant, every page address
   answers with the PIN page, and `/api/*` (except `/api/pin` and

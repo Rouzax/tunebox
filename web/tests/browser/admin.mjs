@@ -17,7 +17,8 @@
 
 import {spawn, spawnSync} from 'node:child_process';
 import {createHmac} from 'node:crypto';
-import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {createServer as createHttpsServer} from 'node:https';
 import {createServer} from 'node:net';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
@@ -61,7 +62,7 @@ function totp(step) {
     return String((mac.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, '0');
 }
 
-function station(id, name) {
+function station(id, name, url = `https://example.invalid/${id}.aac`) {
     return [
         '[[channels]]',
         `id = "${id}"`,
@@ -69,13 +70,49 @@ function station(id, name) {
         'source = { type = "triton", mount = "OWR_INTERNATIONAL" }',
         '[[channels.streams]]',
         'name = "Default"',
-        `url = "https://example.invalid/${id}.aac"`,
-        'codec = "aac"',
+        `url = "${url}"`,
         '',
     ].join('\n');
 }
 
-async function startTunebox(folder, port) {
+// A local HTTPS stream of silent MP3 frames, sent at about real time after a
+// short burst, so a page can really play something without the network.
+// tunebox accepts only https stream URLs; the page is told to accept this
+// one's throwaway certificate.
+function silentStream(folder) {
+    const key = join(folder, 'stream.key');
+    const cert = join(folder, 'stream.crt');
+    const made = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+        '-subj', '/CN=localhost', '-keyout', key, '-out', cert], {encoding: 'utf8'});
+    if (made.status !== 0) {
+        throw new Error(`could not make a certificate for the local stream: ${made.stderr}`);
+    }
+    const frame = Buffer.alloc(417);
+    frame.set([0xff, 0xfb, 0x90, 0x00]);
+    const sockets = new Set();
+    const server = createHttpsServer({key: readFileSync(key), cert: readFileSync(cert)}, (request, response) => {
+        response.writeHead(200, {'Content-Type': 'audio/mpeg', 'Access-Control-Allow-Origin': '*'});
+        sockets.add(response);
+        const send = (frames) => response.write(Buffer.concat(Array(frames).fill(frame)));
+        send(80);
+        const timer = setInterval(() => send(38), 1000);
+        response.on('close', () => {
+            clearInterval(timer);
+            sockets.delete(response);
+        });
+    });
+    return new Promise((done) => server.listen(0, '127.0.0.1', () => done({
+        url: `https://127.0.0.1:${server.address().port}/live.mp3`,
+        close: () => {
+            for (const response of sockets) {
+                response.destroy();
+            }
+            server.close();
+        },
+    })));
+}
+
+async function startTunebox(folder, port, streamUrl) {
     writeFileSync(join(folder, 'tunebox.toml'), [
         '[server]',
         'host = "127.0.0.1"',
@@ -86,7 +123,7 @@ async function startTunebox(folder, port) {
         'enabled = true',
         `public_origin = "http://127.0.0.1:${port}"`,
         '',
-        station('first', 'First Station'),
+        station('first', 'First Station', streamUrl),
         station('second', 'Second Station'),
     ].join('\n'));
     const made = spawnSync(PYTHON, ['-c', [
@@ -135,12 +172,15 @@ async function run() {
     const failures = [];
     let tunebox = null;
     let browser = null;
+    let stream = null;
     let steps = 0;
     try {
-        tunebox = await startTunebox(folder, port);
+        stream = await silentStream(folder);
+        tunebox = await startTunebox(folder, port, stream.url);
         browser = await connect({port: DEVTOOLS_PORT});
         const {send, evaluate, on} = browser;
         await send('Page.enable');
+        await send('Security.setIgnoreCertificateErrors', {ignore: true});
         // Waits until the expression is true in the page; false after the
         // deadline.
         const until = async (expression, ms = 5000) => {
@@ -820,6 +860,85 @@ async function run() {
             return said === 'PIN saved. The player is open to everyone.' && status === 200 ? null : `${said} / ${status}`;
         });
 
+        // No step for a busy PIN answer: a flood needs 100 failures from
+        // addresses other than this browser's own. The server and keypad
+        // tests cover it.
+        await step('a PIN switched off shows the hidden stations', async () => {
+            const chosen = await adminCall('POST', 'pin', {mode: 'stations', pin: '13572468'});
+            if (chosen !== 200) {
+                return `choosing stations answered ${chosen}`;
+            }
+            // A device without the grant lists one station.
+            await send('Network.enable');
+            await send('Network.deleteCookies', {name: 'tunebox_grant', url: `${base}/`});
+            await send('Page.navigate', {url: `${base}/`});
+            const listed = () => evaluate(`document.querySelectorAll('.channel-groups .channel').length`);
+            if (!(await until(`document.querySelectorAll('.channel-groups .channel').length === 1`))) {
+                return `listed ${await listed()} stations before the change, expected 1`;
+            }
+            const off = await adminCall('POST', 'pin', {mode: 'off'});
+            if (off !== 200) {
+                return `switching off answered ${off}`;
+            }
+            // The page is not reloaded: its next poll sees the new revision.
+            return (await until(`document.querySelectorAll('.channel-groups .channel').length === 2`, 12000))
+                ? null : `still ${await listed()} stations 12 s after the PIN went off`;
+        });
+
+        await step('the keypad leaves Stop reachable', async () => {
+            // The page keeps its audio elements where the check can reach them.
+            const hook = await send('Page.addScriptToEvaluateOnNewDocument', {source: `
+                window.__audios = [];
+                const Real = window.Audio;
+                window.Audio = function () {
+                    const made = new Real();
+                    window.__audios.push(made);
+                    return made;
+                };`});
+            await send('Page.navigate', {url: `${base}/`});
+            if (!(await until(`document.querySelector('.play') && document.querySelector('.current-channel').textContent`))) {
+                return 'player not shown';
+            }
+            // A real mouse press: playing needs a user gesture.
+            const box = await evaluate(`(() => {
+                const r = document.querySelector('.play').getBoundingClientRect();
+                return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+            })()`);
+            for (const type of ['mousePressed', 'mouseReleased']) {
+                await send('Input.dispatchMouseEvent', {type, x: box.x, y: box.y, button: 'left', clickCount: 1});
+            }
+            const playing = `window.__audios.some((a) => !a.paused && a.currentTime > 0)`;
+            if (!(await until(playing, 10000))) {
+                return 'the local stream did not start playing';
+            }
+            const locked = await adminCall('POST', 'pin', {mode: 'site', pin: '97531246'});
+            if (locked !== 200) {
+                return `locking the site answered ${locked}`;
+            }
+            const stopShown = `${pinShown} && document.querySelector('.pin-stop') && !document.querySelector('.pin-stop').hidden`;
+            if (!(await until(stopShown, 15000))) {
+                return 'the keypad shows no Stop while the audio plays';
+            }
+            // Tab from the last control wraps to the first key.
+            await evaluate(`document.querySelector('.pin-stop').focus()`);
+            for (const type of ['keyDown', 'keyUp']) {
+                await send('Input.dispatchKeyEvent', {type, key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9});
+            }
+            const landed = await evaluate(`document.activeElement.dataset.key`);
+            if (landed !== '1') {
+                return `Tab from Stop landed on key "${landed}", expected the first key`;
+            }
+            await click('.pin-stop');
+            const stopped = await until(`window.__audios.every((a) => a.paused)`);
+            await send('Page.removeScriptToEvaluateOnNewDocument', {identifier: hook.result.identifier});
+            const off = await adminCall('POST', 'pin', {mode: 'off'});
+            await send('Page.navigate', {url: `${base}/admin/#stations`});
+            if (!stopped) {
+                return 'Stop did not stop the audio';
+            }
+            return off === 200 ? null : `switching off answered ${off}`;
+        });
+
         await step('the account page lists this browser', async () => {
             await evaluate(`window.location.hash = '#account'`);
             if (!(await until(`document.querySelectorAll('table.sessions tbody tr').length === 1`))) {
@@ -1053,6 +1172,9 @@ async function run() {
                 failures.push(`page error: ${error}`);
             }
             await browser.close();
+        }
+        if (stream) {
+            stream.close();
         }
         if (tunebox) {
             const exited = new Promise((done) => tunebox.child.once('exit', done));

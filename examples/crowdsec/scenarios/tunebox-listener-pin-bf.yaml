@@ -1,7 +1,8 @@
 # Twenty wrong listening PINs (or tries while locked out) from one address
-# within about ten minutes. tunebox already locks an address after ten
-# wrong PINs for fifteen minutes; this bans the address at the proxy for
-# whoever keeps going.
+# at once, or a steady stream faster than one every 30 seconds (a leaky
+# bucket of 20 that drains one every 30 s). tunebox already locks an
+# address after ten wrong PINs for fifteen minutes; this bans the address
+# at the proxy for whoever keeps going.
 type: leaky
 name: tunebox/listener-pin-bf
 description: "Repeated wrong PINs on the tunebox player"
