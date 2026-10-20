@@ -14,6 +14,10 @@
 //   node --experimental-websocket web/tests/browser/admin.mjs [screenshot folder]
 //
 // Exits 1 and lists every failure, 2 when the check could not run.
+//
+// For a failure that comes and goes, DEBUG_TUNEBOX_LOG=<file> runs tunebox
+// at debug level, writes its whole log there when a step fails, and adds the
+// page's hash, open section and view to each failure.
 
 import {spawn, spawnSync} from 'node:child_process';
 import {createHmac} from 'node:crypto';
@@ -107,7 +111,7 @@ function silentStream(folder) {
     const frame = Buffer.alloc(417);
     frame.set([0xff, 0xfb, 0x90, 0x00]);
     const sockets = new Set();
-    const server = createHttpsServer({key: readFileSync(key), cert: readFileSync(cert)}, (request, response) => {
+    const server = createHttpsServer({key: readFileSync(key), cert: readFileSync(cert)}, (_request, response) => {
         response.writeHead(200, {'Content-Type': 'audio/mpeg', 'Access-Control-Allow-Origin': '*'});
         sockets.add(response);
         const send = (frames) => response.write(Buffer.concat(Array(frames).fill(frame)));
@@ -160,7 +164,7 @@ async function startTunebox(folder, port, streamUrl, setup = false) {
     const log = [];
     const child = spawn(PYTHON, ['-m', 'tunebox'], {
         cwd: ROOT,
-        env: Object.assign({}, process.env, {TUNEBOX_CONFIG: join(folder, 'tunebox.toml'), LOG_LEVEL: 'info'}),
+        env: Object.assign({}, process.env, {TUNEBOX_CONFIG: join(folder, 'tunebox.toml'), LOG_LEVEL: process.env.DEBUG_TUNEBOX_LOG ? 'debug' : 'info'}),
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     child.stdout.on('data', (chunk) => log.push(String(chunk)));
@@ -177,6 +181,33 @@ async function startTunebox(folder, port, streamUrl, setup = false) {
     }
     child.kill();
     throw new Error(`tunebox did not start:\n${log.join('')}`);
+}
+
+// Error lines from tunebox's log, and each traceback whole: a traceback is
+// printed outside the JSON log (by socketserver, or at exit), and its first
+// line alone says nothing about what failed.
+function logProblems(text) {
+    const problems = [];
+    let traceback = null;
+    for (const line of text.split('\n')) {
+        if (traceback !== null) {
+            if (line.startsWith(' ') || line.startsWith('Traceback') || (line && !line.startsWith('{'))) {
+                traceback.push(line);
+                continue;
+            }
+            problems.push(traceback.join('\n'));
+            traceback = null;
+        }
+        if (/Traceback/.test(line)) {
+            traceback = [line];
+        } else if (/"level": ?"(error|critical)"/i.test(line)) {
+            problems.push(line);
+        }
+    }
+    if (traceback !== null) {
+        problems.push(traceback.join('\n'));
+    }
+    return problems;
 }
 
 async function channels(base) {
@@ -202,11 +233,17 @@ async function run() {
         await send('Security.setIgnoreCertificateErrors', {ignore: true});
         // Waits until the expression is true in the page; false after the
         // deadline.
+        // An expression that throws is not true yet: right after a
+        // navigation the old or a blank document can still be in place.
         const until = async (expression, ms = 5000) => {
             const deadline = Date.now() + ms;
             while (Date.now() < deadline) {
-                if (await evaluate(`Boolean(${expression})`)) {
-                    return true;
+                try {
+                    if (await evaluate(`Boolean(${expression})`)) {
+                        return true;
+                    }
+                } catch (error) {
+                    // Not there yet.
                 }
                 await sleep(100);
             }
@@ -221,6 +258,13 @@ async function run() {
                 }
             } catch (error) {
                 failures.push(`${name}: ${error.message}`);
+            }
+            if (process.env.DEBUG_TUNEBOX_LOG && failures.length && failures[failures.length - 1].startsWith(name)) {
+                try {
+                    failures.push(`  page: ${await evaluate(`JSON.stringify({hash: location.hash, shown: [...document.querySelectorAll('main > form, main > section')].filter((n) => !n.hidden).map((n) => n.id), view: (document.querySelector('#shell .view') || {}).innerHTML ? document.querySelector('#shell .view').innerHTML.slice(0, 400) : null, message: (document.querySelector('.message') || {}).textContent, at: Date.now()})`)}`);
+                } catch (error) {
+                    failures.push(`  page: ${error.message}`);
+                }
             }
         };
         const shoot = async (name) => {
@@ -673,11 +717,39 @@ async function run() {
             await evaluate(`[...document.querySelectorAll('.restore button')].find((b) => b.textContent.trim() === 'Restore').click()`);
             for (let i = 0; i < 30; i++) {
                 if ((await channels(base)).some((c) => c.id === 'first' && c.name === 'First Station')) {
-                    return null;
+                    // The page reloads and moves to the history after the
+                    // server answers; the next step must not start before.
+                    return (await until(`document.querySelector('.message').textContent === 'Restored.'`))
+                        ? null : `restored, but the page said: ${await message()}`;
                 }
                 await sleep(100);
             }
             return `old name not back (message: ${await message()})`;
+        });
+
+        // A page that waits for an answer must not draw once another page
+        // is open: hold a History answer, open Settings, then let it go.
+        await step('a slow answer does not draw over the page now open', async () => {
+            await send('Fetch.enable', {patterns: [{urlPattern: '*/admin/api/history/*'}]});
+            const paused = new Promise((resolve) => on('Fetch.requestPaused', resolve));
+            try {
+                await evaluate(`window.location.hash = '#history/1'`);
+                const held = await Promise.race([paused, sleep(5000).then(() => null)]);
+                if (!held) {
+                    return 'the History answer was never asked for';
+                }
+                await evaluate(`window.location.hash = '#settings'`);
+                if (!(await until(`document.querySelector('form.settings [name=delay_s]')`))) {
+                    return 'settings page not shown';
+                }
+                await send('Fetch.continueRequest', {requestId: held.requestId});
+                await sleep(500);
+                return (await evaluate(`Boolean(document.querySelector('form.settings [name=delay_s]'))`))
+                    ? null : 'the late History answer drew over the Settings page';
+            } finally {
+                on('Fetch.requestPaused', null);
+                await send('Fetch.disable');
+            }
         });
 
         await step('settings save the defaults and the start station', async () => {
@@ -1302,9 +1374,11 @@ async function run() {
             const exited = new Promise((done) => tunebox.child.once('exit', done));
             tunebox.child.kill('SIGTERM');
             await Promise.race([exited, sleep(5000)]);
-            const errors = tunebox.log.join('').split('\n').filter((line) => /"level": ?"(error|critical)"|Traceback/i.test(line));
-            for (const line of errors) {
-                failures.push(`tunebox: ${line}`);
+            if (process.env.DEBUG_TUNEBOX_LOG && failures.length) {
+                writeFileSync(process.env.DEBUG_TUNEBOX_LOG, tunebox.log.join(''));
+            }
+            for (const problem of logProblems(tunebox.log.join(''))) {
+                failures.push(`tunebox: ${problem}`);
             }
         }
         rmSync(folder, {recursive: true, force: true});

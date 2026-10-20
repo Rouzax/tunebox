@@ -127,7 +127,9 @@ export async function connect({port}) {
     const evaluate = async (expression) => {
         const answer = await send('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true});
         if (answer.result.exceptionDetails) {
-            throw new Error(`${expression.slice(0, 60)}: ${answer.result.exceptionDetails.text}`);
+            const details = answer.result.exceptionDetails;
+            const why = details.exception && details.exception.description ? details.exception.description : details.text;
+            throw new Error(`${expression.slice(0, 60)}: ${why}`);
         }
         return answer.result.result.value;
     };
