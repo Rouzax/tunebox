@@ -13,7 +13,7 @@ import re
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -31,6 +31,7 @@ from tunebox.config import (
 )
 from tunebox.limits import FailureLimit, Pace, group
 from tunebox.logs import event
+from tunebox.paths import inside
 from tunebox.pin import Pin, PinError, read_cookie
 from tunebox.rulecheck import check, lint
 from tunebox.settings import (
@@ -85,14 +86,19 @@ _TYPES = {
 class Request:
     method: str
     path: str
-    headers: Mapping[str, str]
+    # Every header line as received, so a repeated one can be told apart.
+    headers: tuple[tuple[str, str], ...]
     body: bytes
     client: str
     query: str = ""
 
     def header(self, name: str) -> str | None:
+        """The header's value; None when it is missing or repeated. A
+        repeated Origin, token or cookie line is a broken proxy or a forgery,
+        and either way not one value to trust."""
         wanted = name.lower()
-        return next((v for k, v in self.headers.items() if k.lower() == wanted), None)
+        found = [v for k, v in self.headers if k.lower() == wanted]
+        return found[0] if len(found) == 1 else None
 
     def cookie(self, name: str) -> str | None:
         return read_cookie(self.header("Cookie"), name)
@@ -196,7 +202,13 @@ class Admin:
             )
 
     def handle(self, request: Request) -> Response:
-        response = self._dispatch(request)
+        try:
+            response = self._dispatch(request)
+        except Exception:
+            # Logged here, inside the admin context, so the formatter
+            # withholds the exception text.
+            log.error("request_crashed", exc_info=True, extra={"fields": {"path": request.path}})
+            response = _error(500, "internal")
         return Response(
             response.status,
             response.body,
@@ -680,15 +692,9 @@ class Admin:
         return _json(200, dataclasses.asdict(status))
 
     def _static(self, relative: str) -> Response:
-        relative = urllib.parse.unquote(relative) or "index.html"
-        target = self._web
-        try:
-            target = (self._web / relative).resolve()
-            inside = target.is_relative_to(self._web) and target.is_file()
-        except OSError, ValueError:  # ValueError: an embedded NUL byte
-            inside = False
-        content_type = _TYPES.get(target.suffix) if inside else None
-        if content_type is None:
+        target = inside(self._web, urllib.parse.unquote(relative) or "index.html")
+        content_type = _TYPES.get(target.suffix) if target else None
+        if target is None or content_type is None:
             return _error(404, "not_found")
         return Response(200, target.read_bytes(), content_type)
 

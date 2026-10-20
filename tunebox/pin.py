@@ -71,12 +71,15 @@ def valid_pin(text: str) -> bool:
 
 def read_cookie(header: str | None, name: str) -> str | None:
     """Read pair by pair: SimpleCookie drops every cookie when one cookie of
-    another app on the host is malformed."""
-    for pair in (header or "").split(";"):
-        key, sep, value = pair.strip().partition("=")
-        if sep and key == name:
-            return value
-    return None
+    another app on the host is malformed. A name sent twice is None: a
+    sibling host can set a second cookie of the same name, and the browser
+    gives no way to tell which is ours."""
+    found = [
+        value
+        for key, sep, value in (pair.strip().partition("=") for pair in (header or "").split(";"))
+        if sep and key == name
+    ]
+    return found[0] if len(found) == 1 else None
 
 
 class Pin:

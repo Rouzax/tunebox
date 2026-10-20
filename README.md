@@ -272,7 +272,7 @@ Authenticator, 1Password, Aegis or similar), and one of these:
    machine by its IP address. `trusted_proxies` lets tunebox see the
    visitor's address behind the proxy. Without it every visitor looks like the proxy, so one person's
    wrong passwords would lock everyone out; tunebox then logs
-   `trusted_proxies_unset`.
+   `untrusted_forwarding`.
 2. Restart: `docker compose up -d`.
 3. Create the account:
 
@@ -642,7 +642,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 |---|---|---|
 | The container stops right away; the log says `tunebox: <something>: <reason>` | A mistake in `data/tunebox.toml`, or the file is missing. | Fix what the message names, then `docker compose up -d`. |
 | The container stops right away; the log says `settings_unavailable` | The `data` folder or `data/tunebox.db` is not writable by user id 1000, or `tunebox.db` is damaged or comes from a newer tunebox. | Most often it is the owner: `sudo chown -R 1000:1000 data` and restart. Otherwise restore `tunebox.db` from a back-up, or move it aside (with its `-wal` and `-shm` files): tunebox then starts with a new database and takes the stations from `tunebox.toml`. |
-| `trusted_proxies_unset` in the log | tunebox is behind a proxy but does not know it, so every visitor has the proxy's address. | Set `trusted_proxies` in `[server]` to the proxy's address or network and restart. |
+| `untrusted_forwarding` in the log | A request carries `X-Forwarded-For` but its sender is not in `trusted_proxies`: tunebox is behind a proxy it does not know (every visitor then has the proxy's address), or a client sends the header itself. Logged on any path, at most once an hour per sender. | Set `trusted_proxies` in `[server]` to the proxy's address or network and restart. |
 | The admin login says "Login failed" with the right password | The code was already used, the phone's clock is off, or a recovery code was typed with a mistake. The login goes back to the password page because tunebox does not say which of the two was wrong. | Press Next with the password still filled in, wait for the next code and check the phone's time. After five failures the address is locked for 15 minutes. |
 | The admin page says "Open the admin panel at the address set as public_origin" | It was opened by another address, such as the IP address instead of the host name, or http instead of https. | Open it at `public_origin`, exactly as written there. |
 | `/admin/` answers 404 although the panel is on, and the log says `admin_not_nearby` | `public_origin` is plain http and the request did not come from the home network: from the internet, or through a proxy that is not in `trusted_proxies`. | Open the panel directly at `public_origin` from the home network or the VPN. Through a proxy, set up https instead. |

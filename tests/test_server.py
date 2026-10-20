@@ -619,20 +619,14 @@ def test_every_logo_kind_is_sandboxed(server: TuneboxServer) -> None:
     assert headers["content-security-policy"] == "sandbox"
 
 
-def test_forwarded_header_without_trusted_proxies_warns_once(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_forwarding_from_an_untrusted_peer_is_warned_once(
+    server: TuneboxServer, caplog: pytest.LogCaptureFixture
 ) -> None:
-    settings = Settings(tmp_path / "t.db")
-    admin = Admin(Accounts(settings), AdminConfig(True, False, ORIGIN), tmp_path, settings=settings)
-    httpd = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, admin=admin)
-    serve(httpd)
     with caplog.at_level(logging.WARNING):
-        for _ in range(2):
-            request(httpd, "/admin/api/state", headers={"X-Forwarded-For": "198.51.100.7"})
-    httpd.shutdown()
-    httpd.server_close()
-    settings.close()
-    assert caplog.text.count("trusted_proxies_unset") == 1
+        for _ in range(3):
+            request(server, "/api/channels", headers={"X-Forwarded-For": "203.0.113.9"})
+    warned = [r for r in caplog.records if r.getMessage() == "untrusted_forwarding"]
+    assert len(warned) == 1
 
 
 def test_es_module_files_are_served_as_javascript(server: TuneboxServer) -> None:
@@ -912,3 +906,41 @@ def test_the_player_own_pin_post_passes(site: PinWorld) -> None:
     same = {"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}
     status, _, _ = request(site.httpd, "/api/pin", "POST", same, b'{"pin": "123456"}')
     assert status == 204
+
+
+@pytest.mark.parametrize("path", ["/vendor/../admin/", "/%61dmin/", "/web_admin/index.html"])
+def test_the_admin_pages_never_come_from_the_player_files(
+    admin_server: TuneboxServer, path: str
+) -> None:
+    status, _, body = request(admin_server, path)
+    assert b"<title>admin</title>" not in body
+    assert status == 404
+
+
+def test_length_errors_on_admin_paths_carry_the_admin_headers(
+    admin_server: TuneboxServer,
+) -> None:
+    connection = http.client.HTTPConnection("127.0.0.1", admin_server.server_address[1], timeout=5)
+    connection.putrequest("POST", "/admin/api/login")
+    connection.putheader("Transfer-Encoding", "chunked")
+    connection.endheaders()
+    response = connection.getresponse()
+    assert response.status == 411
+    assert response.getheader("Cache-Control") == "no-store"
+    assert response.getheader("Content-Security-Policy")
+    connection.close()
+
+
+def test_a_crash_inside_an_admin_request_answers_500_with_the_admin_headers(
+    admin_server: TuneboxServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admin = admin_server.admin
+    assert admin is not None
+
+    def boom(_request: Request) -> Response:
+        raise RuntimeError("broken")
+
+    monkeypatch.setattr(admin, "_state", boom)
+    status, headers, _ = request(admin_server, "/admin/api/state")
+    assert status == 500
+    assert headers["cache-control"] == "no-store"

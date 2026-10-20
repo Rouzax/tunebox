@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
-from tunebox.admin import Admin, Request, body_limit
+from tunebox.admin import ADMIN_HEADERS, Admin, Request, body_limit
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import Network, StreamConfig
@@ -21,6 +21,7 @@ from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
 from tunebox.logos import Logos
 from tunebox.logs import bound, event
 from tunebox.netguard import OTHER_FORWARDING, client_address, nearby, trusted_peer
+from tunebox.paths import inside
 from tunebox.pin import Pin
 from tunebox.runtime import Snapshot
 
@@ -159,7 +160,7 @@ class TuneboxServer(ThreadingHTTPServer):
         self.admin = admin
         self.pin = pin
         self.trusted = trusted
-        self.warned_proxies = False
+        self.forwarding = Once(3600)
         self.refusals = Once(600)
         self.bursts = bursts
         self.web_dir = web_dir.resolve()
@@ -212,12 +213,7 @@ class Handler(BaseHTTPRequestHandler):
             with bound("req"):
                 self._send_json(405, {"error": "method_not_allowed"}, False)
             return
-        if self.command == "POST":
-            read = self._read_body(body_limit(path) if is_admin else PIN_BODY)
-            if read is None:
-                return
-            body = read
-        elif (
+        if self.command != "POST" and (
             self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0"
         ):
             # GET and HEAD bodies are never read, so on a kept-alive connection
@@ -227,6 +223,12 @@ class Handler(BaseHTTPRequestHandler):
         # withhold exception text, which can carry what was typed.
         with bound("admin" if is_admin else "pin" if is_pin else "req"):
             try:
+                self._note_forwarding()
+                if self.command == "POST":
+                    read = self._read_body(body_limit(path) if is_admin else PIN_BODY, is_admin)
+                    if read is None:
+                        return
+                    body = read
                 if is_admin:
                     self._admin(path, target.query, head, body)
                 elif is_pin:
@@ -238,7 +240,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # keep one broken request out of socketserver's stderr
                 log.error("request_crashed", exc_info=True, extra={"fields": {"path": path}})
                 if self._status == 0:
-                    self._send_json(500, {"error": "internal"}, head)
+                    admin_headers = ADMIN_HEADERS if is_admin else None
+                    self._send_json(500, {"error": "internal"}, head, admin_headers)
             finally:
                 event(
                     log,
@@ -250,18 +253,19 @@ class Handler(BaseHTTPRequestHandler):
                     duration_ms=round((time.monotonic() - started) * 1000),
                 )
 
-    def _read_body(self, limit: int) -> bytes | None:
+    def _read_body(self, limit: int, admin: bool) -> bytes | None:
         """The request body, or None after answering 411 or 413. A body
         that is not read would be parsed as the next request, so a refused
         one also ends the connection."""
+        headers = ADMIN_HEADERS if admin else None
         length = self.headers.get("Content-Length")
         if self.headers.get("Transfer-Encoding") or length is None or not length.isdigit():
             self.close_connection = True
-            self._send_json(411, {"error": "length_required"}, False)
+            self._send_json(411, {"error": "length_required"}, False, headers)
             return None
         if int(length) > limit:
             self.close_connection = True
-            self._send_json(413, {"error": "too_large"}, False)
+            self._send_json(413, {"error": "too_large"}, False, headers)
             return None
         return self.rfile.read(int(length))
 
@@ -271,11 +275,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(404, {"error": "not_found"}, head)
         forwarded = self._forwarded()
         peer = self.client_address[0]
-        if forwarded and not self.app.trusted and not self.app.warned_proxies:
-            self.app.warned_proxies = True
-            # Every client would share the proxy's address: limits and
-            # CrowdSec would then punish everyone at once.
-            event(log, logging.WARNING, "trusted_proxies_unset", peer=peer)
         client = self._client()
         if admin.plain_http:
             other = any(self.headers.get(name) for name in OTHER_FORWARDING)
@@ -286,9 +285,19 @@ class Handler(BaseHTTPRequestHandler):
                 event(log, level, "admin_not_nearby", client=client, peer=peer)
                 return self._send_json(404, {"error": "not_found"}, head)
         method = "GET" if head else self.command
-        headers = dict(self.headers.items())
+        headers = tuple(self.headers.items())
         response = admin.handle(Request(method, path, headers, body, client, query))
         self._send(response.status, response.body, response.content_type, head, response.headers)
+
+    def _note_forwarding(self) -> None:
+        """Forwarding headers from a peer that is not a trusted proxy: either
+        trusted_proxies is unset or misses the real proxy (then every client
+        shares the proxy's address, and limits and CrowdSec punish everyone
+        at once), or a client is sending them itself."""
+        peer = self.client_address[0]
+        untrusted = self._forwarded() and not trusted_peer(peer, self.app.trusted)
+        if untrusted and self.app.forwarding.first(peer):
+            event(log, logging.WARNING, "untrusted_forwarding", peer=peer)
 
     def _forwarded(self) -> str | None:
         # Every line: a proxy may add its own line after the client's, and
@@ -464,13 +473,7 @@ class Handler(BaseHTTPRequestHandler):
         page against."""
         relative = urllib.parse.unquote(path).lstrip("/") or "index.html"
         web_dir = self.app.web_dir
-        target: Path | None
-        try:
-            candidate = (web_dir / relative).resolve()
-            inside = candidate.is_relative_to(web_dir) and candidate.is_file()
-            target = candidate if inside else None
-        except OSError, ValueError:  # ValueError: an embedded NUL byte
-            target = None
+        target = inside(web_dir, relative)
         content_type = CONTENT_TYPES.get(target.suffix) if target else None
         if target is None or content_type is None:
             return self._send_json(404, {"error": "not_found"}, head)

@@ -212,3 +212,8 @@ def test_read_cookie_skips_malformed_pairs() -> None:
     assert read_cookie(header, "tunebox_grant") == "x.y"
     assert read_cookie(header, "missing") is None
     assert read_cookie(None, "a") is None
+
+
+def test_read_cookie_refuses_a_repeated_name() -> None:
+    assert read_cookie("a=1; b=2", "a") == "1"
+    assert read_cookie("a=1; a=2", "a") is None

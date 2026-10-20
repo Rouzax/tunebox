@@ -70,18 +70,18 @@ class World:
         content_type: str = "application/json",
         client: str = "198.51.100.7",
     ) -> Response:
-        headers: dict[str, str] = {"Content-Type": content_type}
+        headers: list[tuple[str, str]] = [("Content-Type", content_type)]
         if origin == "":
             origin = self.origin
         if origin:
-            headers["Origin"] = origin
+            headers.append(("Origin", origin))
         if csrf:
-            headers["X-Tunebox-CSRF"] = csrf
+            headers.append(("X-Tunebox-CSRF", csrf))
         if self.cookies:
-            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+            headers.append(("Cookie", "; ".join(f"{k}={v}" for k, v in self.cookies.items())))
         raw = b"" if body is None else json.dumps(body).encode()
         path, _, query = path.partition("?")
-        response = self.admin.handle(Request(method, path, headers, raw, client, query))
+        response = self.admin.handle(Request(method, path, tuple(headers), raw, client, query))
         for name, value in response.headers:
             if name == "Set-Cookie":
                 cookie_name, _, rest = value.partition("=")
@@ -170,7 +170,7 @@ def test_a_known_browser_grant_from_plain_http_gets_no_lane_on_https(tmp_path: P
     stranger = Request(
         "POST",
         "/admin/api/login",
-        {"Origin": ORIGIN, "Content-Type": "application/json"},
+        (("Origin", ORIGIN), ("Content-Type", "application/json")),
         json.dumps({"password": "x" * 12, "code": "1"}).encode(),
         "203.0.113.5",
     )
@@ -179,11 +179,11 @@ def test_a_known_browser_grant_from_plain_http_gets_no_lane_on_https(tmp_path: P
     sniffed = Request(
         "POST",
         "/admin/api/login",
-        {
-            "Origin": ORIGIN,
-            "Content-Type": "application/json",
-            "Cookie": f"__Secure-tunebox_known={grant}",
-        },
+        (
+            ("Origin", ORIGIN),
+            ("Content-Type", "application/json"),
+            ("Cookie", f"__Secure-tunebox_known={grant}"),
+        ),
         json.dumps({"password": PASSWORD, "code": world.code(1)}).encode(),
         "198.51.100.7",
     )
@@ -276,7 +276,7 @@ def test_the_global_pace_has_a_lane_for_known_browsers(world: World) -> None:
         Request(
             "POST",
             "/admin/api/login",
-            {"Origin": ORIGIN, "Content-Type": "application/json"},
+            (("Origin", ORIGIN), ("Content-Type", "application/json")),
             json.dumps({"password": "x" * 12, "code": "1"}).encode(),
             "203.0.113.5",
         )
@@ -376,7 +376,7 @@ def test_unknown_api_paths_and_bad_bodies(world: World) -> None:
     raw = Request(
         "POST",
         "/admin/api/login",
-        {"Origin": ORIGIN, "Content-Type": "application/json"},
+        (("Origin", ORIGIN), ("Content-Type", "application/json")),
         b"{",
         "a",
     )
@@ -763,7 +763,7 @@ def test_a_password_change_keeps_this_browser_and_its_lane(world: World) -> None
     assert response.status == 204
     assert world.cookies["__Secure-tunebox_known"] != old_known
     assert world.call("GET", "/admin/api/account").status == 200
-    headers = {"Cookie": f"__Secure-tunebox_known={old_known}"}
+    headers = (("Cookie", f"__Secure-tunebox_known={old_known}"),)
     old = Request("POST", "/admin/api/login", headers, b"", "x")
     assert not world.admin._known(old)  # pyright: ignore[reportPrivateUsage]
 
@@ -904,3 +904,37 @@ def test_a_locked_reauth_is_not_a_ban_signal(
         assert world.call("POST", reauth, {"code": "000000"}, csrf=csrf).status == 429
     limited = [r for r in caplog.records if r.getMessage() == "admin_rate_limited"]
     assert limited[0].__dict__["fields"]["why"] == "reauth"
+
+
+def test_a_repeated_header_counts_as_absent() -> None:
+    request = Request("POST", "/admin/api/login", (("Origin", "a"), ("origin", "b")), b"", "x")
+    assert request.header("Origin") is None
+    single = Request("POST", "/admin/api/login", (("Origin", "a"),), b"", "x")
+    assert single.header("origin") == "a"
+
+
+def test_a_repeated_cookie_counts_as_absent(world: World) -> None:
+    csrf = world.login()
+    token = world.cookies["__Secure-tunebox_admin"]
+    world.cookies.clear()
+    headers = (
+        ("Cookie", f"__Secure-tunebox_admin={token}; __Secure-tunebox_admin=tossed"),
+        ("Origin", ORIGIN),
+        ("Content-Type", "application/json"),
+        ("X-Tunebox-CSRF", csrf),
+    )
+    answer = world.admin.handle(Request("GET", "/admin/api/config", headers, b"", "x"))
+    assert answer.status == 401
+
+
+def test_a_crashing_route_answers_500_with_the_admin_headers(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(_request: Request) -> Response:
+        raise RuntimeError("broken")
+
+    monkeypatch.setattr(world.admin, "_state", boom)
+    answer = world.call("GET", "/admin/api/state")
+    assert answer.status == 500
+    assert json_of(answer) == {"error": "internal"}
+    assert dict(answer.headers)["Cache-Control"] == "no-store"

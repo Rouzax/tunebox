@@ -71,3 +71,12 @@ def test_the_pin_page_loads_only_its_own_script() -> None:
     html = (WEB / "pin.html").read_text(encoding="utf-8")
     assert re.findall(r'<script[^>]*src="([^"]+)"', html) == ["/js/pinpage.js"]
     assert 'class="pin-screen"' in html
+
+
+def test_every_vendor_file_the_admin_pages_import_exists() -> None:
+    root = Path(__file__).parent.parent
+    for page in (root / "web_admin").rglob("*"):
+        if page.suffix not in (".js", ".html", ".css"):
+            continue
+        for found in re.findall(r"/vendor/[^'\")\s#?]+", page.read_text(encoding="utf-8")):
+            assert (root / "web" / found.lstrip("/")).is_file(), f"{page.name}: {found}"

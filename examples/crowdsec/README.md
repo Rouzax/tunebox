@@ -16,7 +16,7 @@ few typos.
   CrowdSec that faces the internet should not have.
 - `trusted_proxies` set in `tunebox.toml` to your proxy's address, so the
   logged `client` is the visitor and not the proxy. tunebox logs
-  `trusted_proxies_unset` when a proxy header arrives without it.
+  `untrusted_forwarding` (any path) when a forwarding header arrives from a peer outside it.
 
 ## Install
 
