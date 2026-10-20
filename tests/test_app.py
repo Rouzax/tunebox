@@ -1,3 +1,4 @@
+import json
 import logging
 import signal
 import socket
@@ -7,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from tunebox import app
 from tunebox.accounts import Accounts
 from tunebox.app import WEB_ADMIN_DIR, StopSignal, main, open_settings, shut_down
 from tunebox.config import state_from_toml
@@ -218,3 +220,46 @@ def test_a_signing_key_that_cannot_be_stored_stops_startup(
         # touch the database on the player's path.
         assert main() == 2
     assert "disk full" in capsys.readouterr().err
+
+
+def start_on_a_taken_port(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, log_file: str) -> int:
+    """Runs main until it fails to listen: the start-up lines are logged by then."""
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        config = tmp_path / "tunebox.toml"
+        config.write_text(
+            f'[server]\nhost = "127.0.0.1"\nport = {port}\nlog_file = "{log_file}"\n\n'
+            + CHANNEL_TOML,
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LOG_LEVEL", "info")
+        monkeypatch.setenv("TUNEBOX_CONFIG", str(config))
+        return main()
+
+
+def test_the_log_file_gets_the_start_up_lines(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert start_on_a_taken_port(monkeypatch, tmp_path, "logs/tunebox.log") == 2
+    lines = (tmp_path / "logs" / "tunebox.log").read_text(encoding="utf-8").splitlines()
+    assert "config_from_file" in {json.loads(line)["event"] for line in lines}
+
+
+def test_a_log_file_that_cannot_be_made_does_not_stop_tunebox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "blocked").write_text("a file, not a folder", encoding="utf-8")
+    seen: list[str] = []
+    real_event = app.event
+
+    def record(logger: logging.Logger, level: int, name: str, **fields: object) -> None:
+        seen.append(name)
+        real_event(logger, level, name, **fields)
+
+    monkeypatch.setattr(app, "event", record)
+    assert start_on_a_taken_port(monkeypatch, tmp_path, "blocked/tunebox.log") == 2
+    assert "log_file_unavailable" in seen
+    # It went on to the listen step, past the log file.
+    assert "cannot listen" in capsys.readouterr().err

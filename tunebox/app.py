@@ -21,7 +21,7 @@ from tunebox.channel import Channel
 from tunebox.config import ChannelConfig, ConfigError, ConfigState, load
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
-from tunebox.logs import configure, event
+from tunebox.logs import add_file, configure, event
 from tunebox.netguard import Guard
 from tunebox.pin import Pin
 from tunebox.runtime import Runtime
@@ -49,6 +49,19 @@ def main() -> int:
     except ConfigError as error:
         print(f"tunebox: {error}", file=sys.stderr)
         return 2
+
+    if config.server.log_file is not None:
+        try:
+            add_file(config.server.log_file)
+        except OSError as error:
+            # Logging is best-effort: the player matters more than its copy.
+            event(
+                log,
+                logging.WARNING,
+                "log_file_unavailable",
+                path=str(config.server.log_file),
+                error=str(error),
+            )
 
     try:
         settings = open_settings(

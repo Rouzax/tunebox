@@ -105,6 +105,8 @@ class ServerConfig:
     data_dir: Path
     # Only these may say who the client is (X-Forwarded-For).
     trusted_proxies: tuple[Network, ...] = ()
+    # A copy of the log lines in a file, for readers without the container's output.
+    log_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -171,16 +173,22 @@ def load(path: Path) -> Config:
 def parse(data: dict[str, Any], base_dir: Path) -> Config:
     _no_unknown(data, {"server", "defaults", "channels", "player", "admin"}, "")
     server_table = _table(data, "server", "server")
-    _no_unknown(server_table, {"host", "port", "data_dir", "trusted_proxies"}, "server")
+    _no_unknown(server_table, {"host", "port", "data_dir", "trusted_proxies", "log_file"}, "server")
     port = _int(server_table, "port", "server.port", 8080)
     if not 1 <= port <= 65535:
         raise ConfigError("server.port: must be between 1 and 65535")
+    data_dir = Path(_str(server_table, "data_dir", "server.data_dir", str(base_dir)))
+    log_file = _optional_str(server_table, "log_file", "server.log_file")
+    if log_file is not None and not log_file.strip():
+        raise ConfigError("server.log_file: must not be empty")
     server = ServerConfig(
         # Inside the container; the compose file publishes the port on loopback only.
         host=_str(server_table, "host", "server.host", "0.0.0.0"),
         port=port,
-        data_dir=Path(_str(server_table, "data_dir", "server.data_dir", str(base_dir))),
+        data_dir=data_dir,
         trusted_proxies=_networks(server_table),
+        # A relative path is inside the data folder.
+        log_file=data_dir / log_file if log_file is not None else None,
     )
 
     state = state_from_toml(data)

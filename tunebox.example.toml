@@ -7,6 +7,9 @@ port = 8080
 # Behind a reverse proxy: its address or network, so tunebox sees visitors'
 # addresses (needed for the admin panel's limits).
 # trusted_proxies = ["172.18.0.0/16"]
+# Also write the log to a file, inside data_dir unless absolute, for a log
+# reader without access to Docker (CrowdSec, see examples/crowdsec/).
+# log_file = "logs/tunebox.log"
 
 [defaults]
 # Seconds after a track's start time at which it counts as heard. The player

@@ -8,8 +8,12 @@ few typos.
 
 ## What you need
 
-- CrowdSec reading Docker logs (the `docker` data source) on the host that
-  runs tunebox, and a bouncer in front of tunebox, at the reverse proxy.
+- CrowdSec able to read tunebox's log, and a bouncer in front of tunebox,
+  at the reverse proxy. Either CrowdSec reads Docker's logs (the `docker`
+  data source, `acquis.yaml`), or tunebox writes its log to a file as well
+  (`log_file` in `[server]`) and CrowdSec reads that file
+  (`acquis-file.yaml`). The file needs no access to Docker, which a
+  CrowdSec that faces the internet should not have.
 - `trusted_proxies` set in `tunebox.toml` to your proxy's address, so the
   logged `client` is the visitor and not the proxy. tunebox logs
   `trusted_proxies_unset` when a proxy header arrives without it.
@@ -17,7 +21,10 @@ few typos.
 ## Install
 
 1. Copy `acquis.yaml` to `/etc/crowdsec/acquis.d/tunebox.yaml` and set
-   `container_name` to your container's name.
+   `container_name` to your container's name. With the log file instead,
+   set `log_file = "logs/tunebox.log"` in `tunebox.toml`, mount that
+   folder read-only into CrowdSec, copy `acquis-file.yaml` as
+   `tunebox.yaml` and set its path to where CrowdSec sees the file.
 2. Copy `parsers/s01-parse/tunebox-logs.yaml` to
    `/etc/crowdsec/parsers/s01-parse/`.
 3. Copy the files in `scenarios/` to `/etc/crowdsec/scenarios/`.

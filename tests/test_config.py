@@ -354,3 +354,15 @@ def test_a_station_can_need_the_pin(tmp_path: Path) -> None:
     assert parse(minimal(), tmp_path).channels[0].needs_pin is False
     with pytest.raises(ConfigError, match=r"channels\[0\]\.needs_pin"):
         parse(minimal(needs_pin="yes"), tmp_path)
+
+
+def test_a_log_file_is_optional_and_lives_under_the_data_folder(tmp_path: Path) -> None:
+    assert parse(minimal(), tmp_path).server.log_file is None
+    data = {**minimal(), "server": {"data_dir": "/data", "log_file": "logs/tunebox.log"}}
+    assert parse(data, tmp_path).server.log_file == Path("/data/logs/tunebox.log")
+    data = {**minimal(), "server": {"log_file": "/var/log/t.log"}}
+    assert parse(data, tmp_path).server.log_file == Path("/var/log/t.log")
+    with pytest.raises(ConfigError, match=r"server\.log_file"):
+        parse({**minimal(), "server": {"log_file": 3}}, tmp_path)
+    with pytest.raises(ConfigError, match=r"server\.log_file"):
+        parse({**minimal(), "server": {"log_file": ""}}, tmp_path)

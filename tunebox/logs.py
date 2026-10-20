@@ -10,7 +10,14 @@ import secrets
 import sys
 import time
 from collections.abc import Generator
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any, TextIO, cast
+
+# A log file rotates by itself at this size, keeping this many old files,
+# so it needs no logrotate or signal and a reader can follow the name.
+LOG_FILE_BYTES = 10 * 1024 * 1024
+LOG_FILE_BACKUPS = 5
 
 context_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("context_id", default=None)
 
@@ -75,3 +82,14 @@ def configure(spec: str, stream: TextIO = sys.stdout) -> None:
     root.setLevel(levels.pop("", logging.INFO))
     for logger_name, level in levels.items():
         logging.getLogger(logger_name).setLevel(level)
+
+
+def add_file(path: Path, max_bytes: int = LOG_FILE_BYTES, backups: int = LOG_FILE_BACKUPS) -> None:
+    """Also writes every line to path (for a log reader such as CrowdSec
+    that cannot read the container's own output). Call after configure,
+    which replaces the handlers. Raises OSError when the folder or file
+    cannot be made."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backups, encoding="utf-8")
+    handler.setFormatter(JsonFormatter())
+    logging.getLogger().addHandler(handler)

@@ -1,10 +1,11 @@
 import io
 import json
 import logging
+from pathlib import Path
 
 import pytest
 
-from tunebox.logs import bound, configure, event
+from tunebox.logs import add_file, bound, configure, event
 
 
 def lines(buffer: io.StringIO) -> list[dict[str, object]]:
@@ -78,3 +79,21 @@ def test_pin_requests_withhold_exception_text() -> None:
     out = buffer.getvalue()
     assert "secret-pin-1234" not in out
     assert "ValueError (details withheld" in out
+
+
+def test_a_log_file_gets_the_same_lines_and_rotates(tmp_path: Path) -> None:
+    configure("info", io.StringIO())
+    target = tmp_path / "logs" / "tunebox.log"
+    add_file(target, max_bytes=400, backups=2)
+    log = logging.getLogger("tunebox.test")
+    for index in range(20):
+        event(log, logging.WARNING, "listener_pin_failed", client="203.0.113.9", n=index)
+    lines = target.read_text(encoding="utf-8").splitlines()
+    assert lines and json.loads(lines[-1])["event"] == "listener_pin_failed"
+    assert json.loads(lines[-1])["n"] == 19
+    assert sorted(p.name for p in target.parent.iterdir()) == [
+        "tunebox.log",
+        "tunebox.log.1",
+        "tunebox.log.2",
+    ]
+    configure("info", io.StringIO())

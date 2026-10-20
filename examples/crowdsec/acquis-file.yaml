@@ -1,0 +1,10 @@
+# Reads tunebox's log from the file [server] log_file writes, for a CrowdSec
+# that cannot read Docker's logs. Put this in /etc/crowdsec/acquis.d/tunebox.yaml
+# and set the path to where CrowdSec sees that file. Name the file itself,
+# not a pattern: tunebox renames full files to tunebox.log.1 and so on, and
+# a pattern would read their lines a second time.
+source: file
+filenames:
+  - /var/log/tunebox/tunebox.log
+labels:
+  type: tunebox

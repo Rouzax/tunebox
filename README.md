@@ -680,6 +680,7 @@ is reported at startup instead of being ignored.
 | `port` | `8080` | Port to listen on. Keep 8080 in the container; the health check uses it. |
 | `data_dir` | the folder of the config file | Where `tunebox.db` is kept. |
 | `trusted_proxies` | none | Addresses or networks of your reverse proxy, such as `["172.18.0.0/16"]`. Only connections from these may name the visitor's address (`X-Forwarded-For`). With a plain-http panel, a connection from these that names no visitor is refused, so keep the range to the proxy and leave out your own devices. |
+| `log_file` | none | Also write the log to this file, for a log reader that cannot read the container's output (such as CrowdSec without access to Docker). A relative path is inside `data_dir`, such as `"logs/tunebox.log"`. tunebox starts a new file at 10 MB and keeps five old ones (`tunebox.log.1` to `.5`). If the file cannot be written, tunebox logs `log_file_unavailable` and runs on without it. |
 
 `[admin]` (optional; see [Set up the admin panel](#set-up-the-admin-panel))
 
