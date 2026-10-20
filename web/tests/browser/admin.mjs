@@ -1220,7 +1220,9 @@ async function run() {
             const deadline = Date.now() + 3000;
             while (Date.now() < deadline) {
                 if ((await channels(base)).some((c) => c.id === 'first' && c.name === 'Kept Across Login')) {
-                    return null;
+                    // The page re-reads the config before it moves on; a form
+                    // touched before then makes it ask instead of leaving.
+                    return (await until(`location.hash === '#stations'`)) ? null : 'the page stayed after saving';
                 }
                 await sleep(100);
             }
