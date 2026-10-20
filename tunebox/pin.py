@@ -36,7 +36,8 @@ LOCK_S = 900
 FLOOD = 100
 FLOOD_WINDOW_S = 3600
 FLOOD_PACE_S = 2.0
-_GRANT_VERSION = "p1"
+GRANT_PURPOSE = "listener-grant"
+_GRANT_VERSION = "p2"
 
 
 class PinError(Exception):
@@ -114,7 +115,7 @@ class Pin:
     def granted(self, cookie_header: str | None) -> bool:
         state = self._state
         value = read_cookie(cookie_header, GRANT_COOKIE)
-        payload = crypto.unsign(self._key(), value) if value else None
+        payload = crypto.unsign(self._key(), value, GRANT_PURPOSE) if value else None
         if payload is None:
             return False
         try:
@@ -152,7 +153,9 @@ class Pin:
         expiry = int(self._clock() + GRANT_S)
         # The device id names this grant; usage (stage 4) will count by it.
         payload = f"{_GRANT_VERSION}.{secrets.token_hex(8)}.{state.generation}.{expiry}"
-        return Attempt(True, cookie=self._cookie(crypto.sign(self._key(), payload), secure))
+        return Attempt(
+            True, cookie=self._cookie(crypto.sign(self._key(), payload, GRANT_PURPOSE), secure)
+        )
 
     def change(self, mode: str, pin: str | None) -> PinStatus:
         """Sets the mode and the PIN (None keeps it). A new PIN, and leaving

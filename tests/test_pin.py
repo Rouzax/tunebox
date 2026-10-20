@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from tunebox import crypto
 from tunebox.pin import GRANT_COOKIE, GRANT_S, Pin, PinError, read_cookie, valid_pin
 from tunebox.settings import Settings
 
@@ -217,3 +218,12 @@ def test_read_cookie_skips_malformed_pairs() -> None:
 def test_read_cookie_refuses_a_repeated_name() -> None:
     assert read_cookie("a=1; b=2", "a") == "1"
     assert read_cookie("a=1; a=2", "a") is None
+
+
+def test_a_grant_for_another_purpose_is_refused(world: World) -> None:
+    world.pin.change("site", "123456")
+    expiry = int(world.clock.now) + 999
+    forged = crypto.sign(KEY, f"p2.dev.1.{expiry}", "known-browser")
+    assert world.pin.locks_site(f"{GRANT_COOKIE}={forged}")
+    genuine = crypto.sign(KEY, f"p2.dev.1.{expiry}", "listener-grant")
+    assert not world.pin.locks_site(f"{GRANT_COOKIE}={genuine}")

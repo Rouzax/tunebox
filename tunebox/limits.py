@@ -56,6 +56,17 @@ class FailureLimit:
     def __len__(self) -> int:
         return len(self._entries)
 
+    def _drop_idle(self, now: float) -> None:
+        """Drops the least recently used entries that hold nothing: no
+        attempt in the window and no lock. Stops at the first that still
+        holds something, so each call costs little."""
+        while self._entries:
+            key, oldest = next(iter(self._entries.items()))
+            recent = oldest.attempts and oldest.attempts[-1] > now - self._window
+            if recent or now < oldest.locked_until:
+                return
+            del self._entries[key]
+
     def reserve(self, key: str) -> Callable[[], None] | None:
         """A function that gives the attempt back on success, or None when
         the key is locked."""
@@ -63,6 +74,7 @@ class FailureLimit:
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
+                self._drop_idle(now)
                 entry = self._entries[key] = _Entry()
                 while len(self._entries) > self._max:
                     self._entries.popitem(last=False)

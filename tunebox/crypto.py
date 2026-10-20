@@ -145,12 +145,17 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def sign(key: bytes, payload: str) -> str:
-    mac = hmac.new(key, payload.encode(), hashlib.sha256).digest()
-    return f"{payload}.{_b64(mac)}"
+def _mac(key: bytes, payload: str, purpose: str) -> bytes:
+    # The purpose is part of what is signed but not of the value: a value
+    # signed for one use never verifies for another.
+    return hmac.new(key, f"{purpose}\n{payload}".encode(), hashlib.sha256).digest()
 
 
-def unsign(key: bytes, value: str) -> str | None:
+def sign(key: bytes, payload: str, purpose: str) -> str:
+    return f"{payload}.{_b64(_mac(key, payload, purpose))}"
+
+
+def unsign(key: bytes, value: str, purpose: str) -> str | None:
     payload, dot, mac = value.rpartition(".")
     if not dot or not payload:
         return None
@@ -158,5 +163,4 @@ def unsign(key: bytes, value: str) -> str | None:
         given = _unb64(mac)
     except ValueError:  # bad base64 (binascii.Error) is a ValueError too
         return None
-    expected = hmac.new(key, payload.encode(), hashlib.sha256).digest()
-    return payload if hmac.compare_digest(given, expected) else None
+    return payload if hmac.compare_digest(given, _mac(key, payload, purpose)) else None

@@ -10,7 +10,6 @@ import hmac
 import json
 import logging
 import re
-import threading
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -29,11 +28,11 @@ from tunebox.config import (
     ConfigError,
     ConfigState,
 )
-from tunebox.limits import FailureLimit, Pace, group
 from tunebox.logs import event
 from tunebox.paths import inside
 from tunebox.pin import Pin, PinError, read_cookie
 from tunebox.rulecheck import check, lint
+from tunebox.sessions import KNOWN_S, Gate
 from tunebox.settings import (
     Settings,
     SettingsUnavailable,
@@ -56,7 +55,6 @@ MAX_TARGET = 200
 LARGE_ROUTES = {"config": MAX_STATE_BODY}
 SESSION_COOKIE = "tunebox_admin"
 KNOWN_COOKIE = "tunebox_known"
-KNOWN_S = 365 * 86_400
 SETUP_TOKEN_S = 900
 ADMIN_CSP = "; ".join(
     [
@@ -151,6 +149,7 @@ class Admin:
         samples: Callable[[], list[str]] = list,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         """pin is the listening PIN the settings page sets; apply reloads the
         running channels after a change; samples gives recent titles that
@@ -168,22 +167,12 @@ class Admin:
         prefix = "" if self.plain_http else "__Secure-"
         self.session_cookie = prefix + SESSION_COOKIE
         self.known_cookie = prefix + KNOWN_COOKIE
-        # A grant read on the network over plain http must not give a lane
-        # once the panel moves to https.
-        self._grant_version = "h1" if self.plain_http else "k1"
         if self.plain_http:
             event(log, logging.WARNING, "admin_plain_http", origin=config.public_origin)
         self._web = web_dir.resolve()
         self._clock = clock
         self._monotonic = monotonic
-        self._failures = FailureLimit(5, window_s=900, lock_s=900, clock=monotonic)
-        self._pace = Pace(1.0, clock=monotonic)
-        self._known_pace = Pace(1.0, clock=monotonic)
-        # scrypt takes about 33 MB and 0.1 s; more at once is a way to run
-        # tunebox out of memory.
-        self._hashing = threading.BoundedSemaphore(2)
-        # New authenticator secrets waiting for their first code, by session.
-        self._new_totp: dict[str, bytes] = {}
+        self.gate = Gate(accounts.server_key, self.plain_http, clock, monotonic, sleep)
         self._setup_token: str | None = None
         self._setup_until = 0.0
         self._setup_secret: bytes | None = None
@@ -351,23 +340,22 @@ class Admin:
             return _error(400, "bad_request")
         # The address lock first: a locked address must not spend the
         # shared pace, or one host could keep everyone else out.
-        release = self._failures.reserve(group(request.client))
+        release = self.gate.reserve(request.client)
         if release is None:
             return self._limited(request, "address")
-        known = self._known(request)
-        if not (self._known_pace if known else self._pace).allow():
+        if not self.gate.pace(self._known(request)):
             release()
             return self._limited(request, "pace")
-        if not self._hashing.acquire(blocking=False):
-            release()
-            return self._limited(request, "busy")
-        try:
+        started = self._monotonic()
+        with self.gate.hashing() as took:
+            if not took:
+                release()
+                return self._limited(request, "busy")
             user_agent = request.header("User-Agent") or ""
             outcome = self._accounts.login(
                 body["password"], body["code"], request.client, user_agent
             )
-        finally:
-            self._hashing.release()
+        self.gate.floor(started)
         if outcome.reason == "unavailable":
             # A right login that could not be saved is not a failure of
             # this address.
@@ -390,17 +378,12 @@ class Admin:
             200,
             {"csrf": outcome.csrf},
             self._cookie(self.session_cookie, outcome.token or "", ABSOLUTE_S),
-            self._known_grant(),
+            self._known_grant(self._accounts.generation()),
         )
 
-    def _known_grant(self) -> tuple[str, str]:
-        """The known-browser cookie for the account's current generation."""
-        expiry = int(self._clock() + KNOWN_S)
-        grant = crypto.sign(
-            self._accounts.server_key(),
-            f"{self._grant_version}.{self._accounts.generation()}.{expiry}",
-        )
-        return self._cookie(self.known_cookie, grant, KNOWN_S)
+    def _known_grant(self, generation: int) -> tuple[str, str]:
+        """The known-browser cookie for an account generation."""
+        return self._cookie(self.known_cookie, self.gate.known_grant(generation), KNOWN_S)
 
     def _logout(self, request: Request) -> Response:
         session = self._session(request)
@@ -412,21 +395,12 @@ class Admin:
             event(log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="token")
             return _error(403, "bad_csrf")
         self._accounts.logout(request.cookie(self.session_cookie) or "")
+        self.gate.forget_totp(session.token_hash)
         return Response(204, headers=(self._cookie(self.session_cookie, "", 0),))
 
     def _known(self, request: Request) -> bool:
-        """A browser that logged in before, by a signed cookie naming the
-        current account generation; it gets its own lane in the pace."""
-        value = request.cookie(self.known_cookie)
-        payload = crypto.unsign(self._accounts.server_key(), value) if value else None
-        if payload is None:
-            return False
-        try:
-            version, generation, expiry = payload.split(".")
-            current = int(generation) == self._accounts.generation()
-            return version == self._grant_version and current and int(expiry) > self._clock()
-        except ValueError:
-            return False
+        """A browser that logged in before gets its own lane in the pace."""
+        return self.gate.known(request.cookie(self.known_cookie), self._accounts.generation())
 
     def _limited(self, request: Request, why: str) -> Response:
         event(log, logging.WARNING, "admin_rate_limited", client=request.client, why=why)
@@ -441,7 +415,7 @@ class Admin:
 
     def _setup_allowed(self, request: Request, token: str) -> bool:
         """A wrong token counts as a failed login for the address."""
-        release = self._failures.reserve(group(request.client))
+        release = self.gate.reserve(request.client)
         if release is None:
             return False
         if self._setup_open() and _same(token, self._setup_token or ""):
@@ -482,14 +456,13 @@ class Admin:
         if step is None:
             return _error(400, "code_wrong")
         codes = crypto.new_recovery_codes()
-        if not self._hashing.acquire(blocking=False):
-            return self._limited(request, "busy")
-        try:
-            self._accounts.create(body["password"], secret, codes, step)
-        except AccountError:
-            return _error(401, "setup_refused")
-        finally:
-            self._hashing.release()
+        with self.gate.hashing() as took:
+            if not took:
+                return self._limited(request, "busy")
+            try:
+                self._accounts.create(body["password"], secret, codes, step)
+            except AccountError:
+                return _error(401, "setup_refused")
         self._setup_token = None
         self._setup_secret = None
         event(log, logging.WARNING, "admin_account_created", client=request.client)
@@ -616,7 +589,7 @@ class Admin:
         body = _body(request, ("code",))
         if body is None:
             return _error(400, "bad_request")
-        release = self._failures.reserve(group(request.client))
+        release = self.gate.reserve(request.client)
         if release is None:
             # Not why=address, which the CrowdSec ban scenario counts: this
             # is someone with a session typing codes wrong.
@@ -647,21 +620,19 @@ class Admin:
             password.encode()
         except UnicodeEncodeError:  # a lone surrogate from a JSON escape
             return _error(400, "bad_request")
-        if not self._hashing.acquire(blocking=False):
-            return self._limited(request, "busy")
-        try:
+        with self.gate.hashing() as took:
+            if not took:
+                return self._limited(request, "busy")
             self._accounts.change_password(session, password)
-        finally:
-            self._hashing.release()
         event(log, logging.INFO, "admin_change", kind="password", client=request.client)
-        return Response(204, headers=(self._known_grant(),))
+        return Response(204, headers=(self._known_grant(self._accounts.generation()),))
 
     def _totp_start(self, request: Request) -> Response:
         session = self._fresh(request)
         if session is None:
             return _error(403, "reauth_required")
         secret = crypto.new_totp_secret()
-        self._new_totp[session.token_hash] = secret
+        self.gate.hold_totp(session.token_hash, secret)
         return _json(200, {"secret": crypto.secret_text(secret), "uri": crypto.otpauth_uri(secret)})
 
     def _totp_finish(self, request: Request) -> Response:
@@ -671,7 +642,7 @@ class Admin:
         session = self._fresh(request)
         if session is None:
             return _error(403, "reauth_required")
-        secret = self._new_totp.get(session.token_hash)
+        secret = self.gate.take_totp(session.token_hash)
         if secret is None:
             return _error(400, "no_new_secret")
         step = crypto.matching_step(secret, body["code"].strip(), self._clock(), -1)
@@ -679,9 +650,9 @@ class Admin:
             return _error(400, "code_wrong")
         self._accounts.replace_totp(session, secret, step)
         # Every session but this one has ended; their waiting secrets too.
-        self._new_totp.clear()
+        self.gate.drop_totp(keep=())
         event(log, logging.INFO, "admin_change", kind="totp", client=request.client)
-        return Response(204, headers=(self._known_grant(),))
+        return Response(204, headers=(self._known_grant(self._accounts.generation()),))
 
     def _recovery(self, request: Request) -> Response:
         session = self._fresh(request)
@@ -689,14 +660,18 @@ class Admin:
             return _error(403, "reauth_required")
         codes = self._accounts.replace_recovery_codes(session)
         event(log, logging.INFO, "admin_change", kind="recovery_codes", client=request.client)
-        return _json(200, {"recovery_codes": codes}, self._known_grant())
+        return _json(200, {"recovery_codes": codes}, self._known_grant(self._accounts.generation()))
 
     def _end_session(self, request: Request) -> Response:
         wanted = request.path.removeprefix("/admin/api/account/sessions/").split("/")[0]
         if wanted == session_id(self._live(request).token_hash):
             return _error(400, "this_session")
-        if not self._accounts.end_session(wanted):
+        ended = self._accounts.end_session(wanted)
+        if ended is None:
             return _error(404, "not_found")
+        # Other live sessions keep their waiting secrets: they may be
+        # halfway through a change.
+        self.gate.forget_totp(ended)
         event(log, logging.INFO, "admin_change", kind="session_end", client=request.client)
         return Response(204)
 

@@ -313,14 +313,18 @@ class Accounts:
             for token_hash, created, seen, address, agent in rows
         ]
 
-    def end_session(self, wanted: str) -> bool:
+    def end_session(self, wanted: str) -> str | None:
+        """The token hash of the session it ended, or None."""
         if not _SESSION_ID.fullmatch(wanted):
-            return False
+            return None
         with self._settings.transaction() as db:
-            ended = db.execute(
-                "DELETE FROM sessions WHERE substr(token_hash, 1, 16) = ?", (wanted,)
-            ).rowcount
-        return ended > 0
+            row = db.execute(
+                "SELECT token_hash FROM sessions WHERE substr(token_hash, 1, 16) = ?", (wanted,)
+            ).fetchone()
+            if row is None:
+                return None
+            db.execute("DELETE FROM sessions WHERE token_hash = ?", (row[0],))
+        return str(row[0])
 
     def logout(self, token: str) -> None:
         with self._settings.transaction() as db:

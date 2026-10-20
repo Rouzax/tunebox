@@ -243,15 +243,16 @@ def test_sessions_lists_the_live_ones_and_ends_one(accounts: Accounts, clock: Cl
     assert listed[0].user_agent == "Firefox 132, Linux"
     assert listed[0].id == session_id(live(accounts, second).token_hash)
     assert len(listed[0].id) == 16
-    assert accounts.end_session(listed[1].id)
+    first_hash = live(accounts, first).token_hash
+    assert accounts.end_session(listed[1].id) == first_hash
     assert accounts.session(first) is None
     assert accounts.session(second) is not None
-    assert not accounts.end_session(listed[1].id)
+    assert accounts.end_session(listed[1].id) is None
 
 
 @pytest.mark.parametrize("bad", ["", "XYZ", "0" * 64, "%", "abc'--"])
 def test_end_session_ignores_ids_that_are_not_ids(accounts: Accounts, bad: str) -> None:
-    assert not accounts.end_session(bad)
+    assert accounts.end_session(bad) is None
 
 
 def test_expired_sessions_are_pruned_at_the_next_login(accounts: Accounts, clock: Clock) -> None:

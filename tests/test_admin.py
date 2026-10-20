@@ -57,6 +57,7 @@ class World:
             samples=lambda: ["FISHER - Stay"],
             clock=self.clock,
             monotonic=self.clock,
+            sleep=lambda _s: None,
         )
         self.cookies: dict[str, str] = {}
 
@@ -992,3 +993,19 @@ def test_a_long_target_is_refused(world: World) -> None:
     csrf = world.login()
     body = {"based_on": 0, "state": state_of(station("owr")), "target": "x" * 201}
     assert world.call("POST", "/admin/api/config", body, csrf=csrf).status == 400
+
+
+def test_a_wrong_password_and_a_wrong_code_take_the_same_floor(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    floors: list[float] = []
+    monkeypatch.setattr(world.admin.gate, "floor", floors.append)
+    world.call("POST", "/admin/api/login", {"password": "wrong password!", "code": "000000"})
+    world.clock.now += 2  # past the shared pace
+    world.call(
+        "POST",
+        "/admin/api/login",
+        {"password": PASSWORD, "code": "000000"},
+        client="198.51.100.8",
+    )
+    assert len(floors) == 2

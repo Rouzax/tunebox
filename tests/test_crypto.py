@@ -60,12 +60,19 @@ def test_recovery_codes_are_distinct_and_recognised() -> None:
 
 def test_signed_values_round_trip_and_reject_tampering() -> None:
     key = b"k" * 32
-    signed = crypto.sign(key, "k1.3.1999999999")
-    assert crypto.unsign(key, signed) == "k1.3.1999999999"
-    assert crypto.unsign(key, signed.replace("k1.3", "k1.4")) is None
-    assert crypto.unsign(b"x" * 32, signed) is None
-    assert crypto.unsign(key, "no-signature") is None
-    assert crypto.unsign(key, "payload.!!!") is None
+    signed = crypto.sign(key, "k1.3.1999999999", "known-browser")
+    assert crypto.unsign(key, signed, "known-browser") == "k1.3.1999999999"
+    assert crypto.unsign(key, signed.replace("k1.3", "k1.4"), "known-browser") is None
+    assert crypto.unsign(b"x" * 32, signed, "known-browser") is None
+    assert crypto.unsign(key, "no-signature", "known-browser") is None
+    assert crypto.unsign(key, "payload.!!!", "known-browser") is None
+
+
+def test_a_signature_is_bound_to_its_purpose() -> None:
+    key = b"k" * 32
+    signed = crypto.sign(key, "p2.dev.1.99", "listener-grant")
+    assert crypto.unsign(key, signed, "listener-grant") == "p2.dev.1.99"
+    assert crypto.unsign(key, signed, "known-browser") is None
 
 
 def test_tokens_are_long_and_hashed() -> None:

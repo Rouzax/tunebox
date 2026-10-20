@@ -81,3 +81,23 @@ def test_once_forgets_the_oldest_group_when_full() -> None:
     for address in ("10.0.0.1", "10.0.0.2", "10.0.0.3"):
         assert once.first(address)
     assert once.first("10.0.0.1")
+
+
+def test_idle_entries_are_dropped_when_new_keys_arrive() -> None:
+    clock = Clock()
+    limit = FailureLimit(5, window_s=60, lock_s=60, clock=clock)
+    for n in range(100):
+        assert limit.reserve(f"198.51.100.{n}") is not None
+    clock.now += 61
+    limit.reserve("203.0.113.1")
+    assert len(limit) == 1
+
+
+def test_a_locked_entry_is_kept_until_its_lock_ends() -> None:
+    clock = Clock()
+    limit = FailureLimit(1, window_s=60, lock_s=600, clock=clock)
+    limit.reserve("a")
+    assert limit.reserve("a") is None  # locked now
+    clock.now += 61
+    limit.reserve("b")
+    assert limit.reserve("a") is None
