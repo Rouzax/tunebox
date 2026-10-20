@@ -18,7 +18,7 @@ from tunebox.channel import Channel
 from tunebox.config import AdminConfig, ChannelConfig, PlayerConfig, StreamConfig
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
-from tunebox.pin import Pin
+from tunebox.pin import Attempt, Pin
 from tunebox.runtime import EMPTY, Snapshot
 from tunebox.server import CSP, TuneboxServer, etag_matches
 from tunebox.settings import Settings
@@ -867,3 +867,17 @@ def test_healthz_detail_only_for_a_direct_local_caller(server: TuneboxServer, he
     assert "channels" in json.loads(body)
     _, _, body = request(server, "/healthz", headers={header: "for=203.0.113.9"})
     assert json.loads(body) == {"status": "ok"}
+
+
+def test_a_paced_pin_attempt_is_429_and_no_failure(
+    site: PinWorld, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def busy(pin: str, client: str, secure: bool = True) -> Attempt:
+        return Attempt(False, reason="busy")
+
+    monkeypatch.setattr(site.pin, "attempt", busy)
+    with caplog.at_level(logging.INFO):
+        status, headers, body = give_pin(site.httpd)
+    assert (status, json.loads(body)) == (429, {"error": "slow_down"})
+    assert headers["cache-control"] == "no-store"
+    assert not [r for r in caplog.records if r.getMessage() == "listener_pin_failed"]

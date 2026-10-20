@@ -20,7 +20,6 @@ class Clock:
 class World:
     def __init__(self, tmp_path: Path) -> None:
         self.clock = Clock()
-        self.slept: list[float] = []
         self.settings = Settings(tmp_path / "t.db")
         self.pin = self.make()
 
@@ -30,7 +29,6 @@ class World:
             lambda: KEY,
             clock=self.clock,
             monotonic=self.clock,
-            sleep=self.slept.append,
         )
 
 
@@ -129,16 +127,31 @@ def test_ten_failures_lock_the_address_group(world: World) -> None:
     assert world.pin.attempt("123456", "2001:db8::99").ok
 
 
-def test_a_flood_of_failures_slows_every_attempt(world: World) -> None:
+def test_a_flood_of_failures_paces_everyone_together(world: World) -> None:
     world.pin.change("site", "123456")
     for index in range(100):
         world.pin.attempt("000000", f"203.0.113.{index}")
-    assert world.slept == []
-    world.pin.attempt("000000", "198.51.100.1")
-    assert world.slept == [2.0]
+    # Past the flood: one checked guess per 2 s across all addresses, the
+    # rest refused at once (no thread waits), however many arrive together.
+    assert world.pin.attempt("000000", "198.51.100.1").reason == "wrong"
+    assert world.pin.attempt("123456", "198.51.100.2").reason == "busy"
+    assert world.pin.attempt("123456", "198.51.100.3").reason == "busy"
+    world.clock.now += 2
+    assert world.pin.attempt("123456", "198.51.100.3").ok
     world.clock.now += 3601
-    world.pin.attempt("000000", "198.51.100.2")
-    assert world.slept == [2.0]
+    assert world.pin.attempt("000000", "198.51.100.4").reason == "wrong"
+    assert world.pin.attempt("000000", "198.51.100.5").reason == "wrong"
+
+
+def test_a_paced_attempt_does_not_count_against_the_address(world: World) -> None:
+    world.pin.change("site", "123456")
+    for index in range(100):
+        world.pin.attempt("000000", f"203.0.113.{index}")
+    world.pin.attempt("000000", "198.51.100.1")
+    for _ in range(20):
+        assert world.pin.attempt("123456", "198.51.100.9").reason == "busy"
+    world.clock.now += 2
+    assert world.pin.attempt("123456", "198.51.100.9").ok
 
 
 def test_changing_the_pin_signs_every_device_out(world: World) -> None:

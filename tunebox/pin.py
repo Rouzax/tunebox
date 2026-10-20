@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Literal, cast
 
 from tunebox import crypto
-from tunebox.limits import FailureLimit, group
+from tunebox.limits import FailureLimit, Pace, group
 from tunebox.settings import Settings
 
 MODES = ("off", "site", "stations")
@@ -30,10 +30,12 @@ FAIL_LIMIT = 10
 FAIL_WINDOW_S = 900
 LOCK_S = 900
 # Many addresses each guessing a few times: past this many failures in the
-# window, every attempt waits, which caps guessing for everyone together.
+# window, one attempt per FLOOD_PACE_S is checked for everyone together and
+# the rest are refused at once. A wait per attempt would not cap guesses
+# that arrive in parallel, and would hold a thread for each.
 FLOOD = 100
 FLOOD_WINDOW_S = 3600
-FLOOD_DELAY_S = 2.0
+FLOOD_PACE_S = 2.0
 _GRANT_VERSION = "p1"
 
 
@@ -52,7 +54,8 @@ class Attempt:
     ok: bool
     # The whole Set-Cookie value for the grant, when ok.
     cookie: str | None = None
-    reason: Literal["wrong", "locked", "off"] | None = None
+    # busy: refused unchecked while the flood pace is on; not a failure.
+    reason: Literal["wrong", "locked", "busy", "off"] | None = None
 
 
 @dataclass(frozen=True)
@@ -86,13 +89,12 @@ class Pin:
         key: Callable[[], bytes],
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._settings = settings
         self._key = key
         self._clock = clock
         self._monotonic = monotonic
-        self._sleep = sleep
+        self._pace = Pace(FLOOD_PACE_S, clock=monotonic)
         self._lock = threading.Lock()
         self._failures = FailureLimit(FAIL_LIMIT, FAIL_WINDOW_S, LOCK_S, clock=monotonic)
         self._recent: deque[float] = deque()
@@ -134,11 +136,11 @@ class Pin:
         state = self._state
         if state.mode == "off":
             return Attempt(False, reason="off")
+        if self._flooded() and not self._pace.allow():
+            return Attempt(False, reason="busy")
         release = self._failures.reserve(group(client))
         if release is None:
             return Attempt(False, reason="locked")
-        if self._flooded():
-            self._sleep(FLOOD_DELAY_S)
         given = self._digest(pin) if valid_pin(pin) else ""
         if state.digest is None or not hmac.compare_digest(given, state.digest):
             self._note_failure()

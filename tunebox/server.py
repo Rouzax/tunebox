@@ -341,6 +341,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(204, b"", "text/plain", head, [*NO_STORE.items(), cookie])
         if result.reason == "off":
             return self._send(204, b"", "text/plain", head, NO_STORE)
+        if result.reason == "busy":
+            # Someone's flood, not this address's guess: no CrowdSec strike.
+            event(log, logging.DEBUG, "listener_pin_paced", client=client)
+            return self._send_json(429, {"error": "slow_down"}, head, NO_STORE)
         event(log, logging.WARNING, "listener_pin_failed", client=client, reason=result.reason)
         if result.reason == "locked":
             return self._send_json(429, {"error": "slow_down"}, head, NO_STORE)
