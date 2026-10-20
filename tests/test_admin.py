@@ -1378,6 +1378,23 @@ def test_an_unreadable_account_does_not_lock_the_owner_out(
     assert world.call("POST", "/admin/api/login", good).status == 200
 
 
+def test_an_unreadable_generation_does_not_lock_the_owner_out(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable() -> int:
+        raise SettingsUnavailable("down")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(world.accounts, "generation", unreadable)
+        for _ in range(6):
+            world.clock.now += 2
+            good = {"password": PASSWORD, "code": world.code()}
+            assert world.call("POST", "/admin/api/login", good).status == 503
+    world.clock.now += 2
+    good = {"password": PASSWORD, "code": world.code()}
+    assert world.call("POST", "/admin/api/login", good).status == 200
+
+
 def test_an_unreadable_account_gives_the_reauth_slot_back(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:

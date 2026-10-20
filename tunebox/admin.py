@@ -123,7 +123,8 @@ class Response:
 
 
 _UINT = re.compile(r"[0-9]{1,18}")
-_LENGTH = re.compile(r"[0-9]+")
+# Bounded so int() never meets its 4300-digit limit; no real body is longer.
+_LENGTH = re.compile(r"[0-9]{1,18}")
 
 
 def _uint(text: str) -> int | None:
@@ -787,7 +788,7 @@ def _with_admin_headers(response: Response) -> Response:
 
 
 def content_length(value: str | None) -> int | None:
-    """A Content-Length header's value; None unless it is ASCII digits only."""
+    """A Content-Length header's value; None unless it is 1 to 18 ASCII digits."""
     return int(value) if value is not None and _LENGTH.fullmatch(value) else None
 
 

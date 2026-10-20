@@ -1267,13 +1267,15 @@ def exchange(httpd: TuneboxServer, raw: bytes) -> bytes:
 
 
 @pytest.mark.parametrize("path", [b"/admin/api/config", b"/admin/api/login", b"/api/pin"])
-def test_a_length_in_other_digits_is_refused_not_crashed(
-    admin_server: TuneboxServer, caplog: pytest.LogCaptureFixture, path: bytes
+# Superscript two: str.isdigit() takes it, int() does not. Past 4300 digits
+# int() refuses ASCII digits too.
+@pytest.mark.parametrize("length", [b"\xb2", b"1" * 4301], ids=["superscript", "4301-digits"])
+def test_an_unusable_length_is_refused_not_crashed(
+    admin_server: TuneboxServer, caplog: pytest.LogCaptureFixture, path: bytes, length: bytes
 ) -> None:
-    # Superscript two: str.isdigit() takes it, int() does not.
     raw = (
         b"POST " + path + b" HTTP/1.1\r\nHost: x\r\nOrigin: " + ORIGIN.encode() + b"\r\n"
-        b"Content-Type: application/json\r\nContent-Length: \xb2\r\n\r\n{}"
+        b"Content-Type: application/json\r\nContent-Length: " + length + b"\r\n\r\n{}"
     )
     with caplog.at_level(logging.DEBUG):
         received = exchange(admin_server, raw)
