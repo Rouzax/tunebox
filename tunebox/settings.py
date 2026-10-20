@@ -1,7 +1,8 @@
 """The configuration the admin panel edits: stations, groups and settings,
 with a version that every change bumps and a history of every change. The
 same database holds the admin account, its sessions and recovery codes,
-and the server's signing key (used by accounts.py).
+the listening PIN, and the server's signing key (used by accounts.py and
+pin.py).
 
 Unlike the cover store this never falls back to memory: edits that vanish
 on the next restart are worse than a tunebox that refuses to start."""
@@ -73,6 +74,15 @@ MIGRATIONS: tuple[str, ...] = (
         user_agent TEXT
     );
     CREATE TABLE secrets (key TEXT PRIMARY KEY, value BLOB NOT NULL)
+    """,
+    """
+    ALTER TABLE sessions ADD COLUMN reauth_at REAL;
+    CREATE TABLE listener_pin (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        mode TEXT NOT NULL,
+        digest TEXT,
+        generation INTEGER NOT NULL
+    )
     """,
 )
 

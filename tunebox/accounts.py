@@ -8,6 +8,7 @@ counted for the whole account."""
 
 from __future__ import annotations
 
+import re
 import secrets
 import sqlite3
 import time
@@ -26,6 +27,9 @@ ABSOLUTE_S = 43_200
 TOTP_SUSPECT = 10
 TOTP_WINDOW_S = 86_400
 MAX_BACKOFF_S = 3600
+# A sensitive change needs a code typed this recently in the same session.
+REAUTH_S = 300
+_SESSION_ID = re.compile(r"[0-9a-f]{16}")
 
 
 # The log and the CrowdSec scenarios match these words. "unavailable": the
@@ -42,6 +46,22 @@ class Session:
     token_hash: str
     csrf: str
     address: str | None
+    # When a code was last typed in this session to confirm a change.
+    reauth_at: float | None = None
+
+
+@dataclass(frozen=True)
+class SessionInfo:
+    # Enough of the token hash to name the session; never the token.
+    id: str
+    created_at: float
+    last_seen: float
+    address: str | None
+    user_agent: str
+
+
+def session_id(token_hash: str) -> str:
+    return token_hash[:16]
 
 
 @dataclass(frozen=True)
@@ -109,11 +129,13 @@ class Accounts:
             db.execute("DELETE FROM recovery_codes")
             db.execute("DELETE FROM sessions")
             db.execute(
-                "INSERT INTO admin VALUES (1, ?, ?, ?, 0, NULL, NULL, ?, ?, ?)",
+                "INSERT INTO admin (id, password_hash, totp_secret, totp_last_step,"
+                " totp_fail_count, totp_fail_since, totp_fail_last, generation, created_at,"
+                " updated_at) VALUES (1, ?, ?, ?, 0, NULL, NULL, ?, ?, ?)",
                 (stored, secret, step, generation, now, now),
             )
             db.executemany(
-                "INSERT INTO recovery_codes VALUES (?, NULL)",
+                "INSERT INTO recovery_codes (hash, used_at) VALUES (?, NULL)",
                 [(crypto.code_hash(code),) for code in recovery],
             )
 
@@ -122,29 +144,80 @@ class Accounts:
         stored = admin.password_hash if admin else crypto.dummy_hash()
         if not crypto.verify_password(stored, password) or admin is None:
             return Outcome(False, "password")
+        token = csrf = ""
+
+        def open_session(db: sqlite3.Connection, now: float) -> None:
+            nonlocal token, csrf
+            token, csrf = self._open(db, now, address, user_agent)
+
+        reason = self._confirm(admin, code, open_session)
+        if reason is not None:
+            return Outcome(False, reason)
+        return Outcome(True, token=token, csrf=csrf)
+
+    def reauth(self, session: Session, code: str) -> Reason | None:
+        """Marks the session as having typed a code just now; None when done.
+        The code is claimed like a login's, so neither can use it twice."""
+        admin = self._admin()
+        if admin is None:
+            return "totp"
+
+        def mark(db: sqlite3.Connection, now: float) -> None:
+            db.execute(
+                "UPDATE sessions SET reauth_at = ? WHERE token_hash = ?", (now, session.token_hash)
+            )
+
+        return self._confirm(admin, code, mark)
+
+    def fresh(self, session: Session) -> bool:
+        return session.reauth_at is not None and self._clock() - session.reauth_at <= REAUTH_S
+
+    def _confirm(
+        self, admin: _Admin, code: str, then: Callable[[sqlite3.Connection, float], None]
+    ) -> Reason | None:
+        """Checks a TOTP or recovery code and, in the transaction that claims
+        it, runs then. Wrong codes are counted for the whole account."""
         now = self._clock()
-        if crypto.is_recovery_code(code):
-            # Checked before the backoff: it is the owner's way in.
-            return self._login_recovery(code, now, address, user_agent)
-        if self._backing_off(admin, now):
-            return Outcome(False, "backoff")
-        step = crypto.matching_step(admin.secret, code.strip(), now, admin.last_step)
-        if step is None:
-            self._count_failure(now)
-            return Outcome(False, "totp")
+        recovery = crypto.is_recovery_code(code)
+        # A recovery code is checked before the backoff: it is the owner's way in.
+        if not recovery and self._backing_off(admin, now):
+            return "backoff"
+        step = None
+        if not recovery:
+            step = crypto.matching_step(admin.secret, code.strip(), now, admin.last_step)
+            if step is None:
+                self._count_failure(now)
+                return "totp"
         try:
             with self._settings.transaction() as db:
-                claimed = db.execute(
-                    "UPDATE admin SET totp_last_step = ?, totp_fail_count = 0,"
-                    " totp_fail_since = NULL, totp_fail_last = NULL WHERE totp_last_step < ?",
-                    (step, step),
-                ).rowcount
-                if not claimed:
-                    return Outcome(False, "totp")
-                token, csrf = self._open(db, now, address, user_agent)
+                if recovery:
+                    claimed = db.execute(
+                        "UPDATE recovery_codes SET used_at = ? WHERE hash = ? AND used_at IS NULL",
+                        (now, crypto.code_hash(code)),
+                    ).rowcount
+                    if claimed:
+                        db.execute(
+                            "UPDATE admin SET totp_fail_count = 0, totp_fail_since = NULL,"
+                            " totp_fail_last = NULL"
+                        )
+                else:
+                    claimed = db.execute(
+                        "UPDATE admin SET totp_last_step = ?, totp_fail_count = 0,"
+                        " totp_fail_since = NULL, totp_fail_last = NULL WHERE totp_last_step < ?",
+                        (step, step),
+                    ).rowcount
+                if claimed:
+                    then(db, now)
         except SettingsWriteError:
-            return Outcome(False, "unavailable")
-        return Outcome(True, token=token, csrf=csrf)
+            return "unavailable"
+        if not claimed:
+            if recovery:
+                # A wrong recovery code after a correct password counts like
+                # a wrong code: someone may have the password.
+                self._count_failure(now)
+                return "recovery"
+            return "totp"
+        return None
 
     def session(self, token: str) -> Session | None:
         """The live session for a cookie value; asking keeps it alive. The
@@ -154,19 +227,21 @@ class Accounts:
         hashed = crypto.token_hash(token)
         with self._settings.read() as db:
             row = db.execute(
-                "SELECT csrf_token, last_seen, absolute_expiry, address FROM sessions"
+                "SELECT csrf_token, last_seen, absolute_expiry, address, reauth_at FROM sessions"
                 " WHERE token_hash = ?",
                 (hashed,),
             ).fetchone()
         if row is None:
             return None
-        csrf, last_seen, expiry, address = cast("tuple[str, float, float, str | None]", row)
+        csrf, last_seen, expiry, address, reauth_at = cast(
+            "tuple[str, float, float, str | None, float | None]", row
+        )
         if now - last_seen > IDLE_S or now > expiry:
             self._try_write("DELETE FROM sessions WHERE token_hash = ?", (hashed,))
             return None
         if now - last_seen > TOUCH_S:
             self._try_write("UPDATE sessions SET last_seen = ? WHERE token_hash = ?", (now, hashed))
-        return Session(hashed, csrf, address)
+        return Session(hashed, csrf, address, reauth_at)
 
     def _try_write(self, sql: str, params: tuple[object, ...]) -> None:
         try:
@@ -174,6 +249,31 @@ class Accounts:
                 db.execute(sql, params)
         except SettingsWriteError:
             pass
+
+    def sessions(self) -> list[SessionInfo]:
+        now = self._clock()
+        with self._settings.read() as db:
+            rows = cast(
+                "list[tuple[str, float, float, str | None, str | None]]",
+                db.execute(
+                    "SELECT token_hash, created_at, last_seen, address, user_agent FROM sessions"
+                    " WHERE last_seen >= ? AND absolute_expiry >= ? ORDER BY created_at DESC",
+                    (now - IDLE_S, now),
+                ).fetchall(),
+            )
+        return [
+            SessionInfo(session_id(token_hash), created, seen, address, agent or "")
+            for token_hash, created, seen, address, agent in rows
+        ]
+
+    def end_session(self, wanted: str) -> bool:
+        if not _SESSION_ID.fullmatch(wanted):
+            return False
+        with self._settings.transaction() as db:
+            ended = db.execute(
+                "DELETE FROM sessions WHERE substr(token_hash, 1, 16) = ?", (wanted,)
+            ).rowcount
+        return ended > 0
 
     def logout(self, token: str) -> None:
         with self._settings.transaction() as db:
@@ -215,36 +315,18 @@ class Accounts:
                 (now, TOTP_WINDOW_S, now, TOTP_WINDOW_S, now, now),
             )
 
-    def _login_recovery(self, code: str, now: float, address: str, user_agent: str) -> Outcome:
-        token = csrf = ""
-        try:
-            with self._settings.transaction() as db:
-                used = db.execute(
-                    "UPDATE recovery_codes SET used_at = ? WHERE hash = ? AND used_at IS NULL",
-                    (now, crypto.code_hash(code)),
-                ).rowcount
-                if used:
-                    db.execute(
-                        "UPDATE admin SET totp_fail_count = 0, totp_fail_since = NULL,"
-                        " totp_fail_last = NULL"
-                    )
-                    token, csrf = self._open(db, now, address, user_agent)
-        except SettingsWriteError:
-            return Outcome(False, "unavailable")
-        if not used:
-            # A wrong recovery code after a correct password counts like a
-            # wrong code: someone may have the password.
-            self._count_failure(now)
-            return Outcome(False, "recovery")
-        return Outcome(True, token=token, csrf=csrf)
-
     def _open(
         self, db: sqlite3.Connection, now: float, address: str, user_agent: str
     ) -> tuple[str, str]:
         token = crypto.new_token()
         csrf = crypto.new_token()
+        # Expired rows are only ever removed here and when they are next used.
         db.execute(
-            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "DELETE FROM sessions WHERE last_seen < ? OR absolute_expiry < ?", (now - IDLE_S, now)
+        )
+        db.execute(
+            "INSERT INTO sessions (token_hash, csrf_token, created_at, last_seen,"
+            " absolute_expiry, address, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (crypto.token_hash(token), csrf, now, now, now + ABSOLUTE_S, address, user_agent[:200]),
         )
         return token, csrf

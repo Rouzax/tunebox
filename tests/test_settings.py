@@ -212,3 +212,15 @@ def test_history_pages_newest_first(settings: Settings) -> None:
     assert [c.id for c in before.channels] == ["c0", "c1"]
     assert [c.id for c in after.channels] == ["c0", "c1", "c2"]
     assert settings.history_entry(9999) is None
+
+
+def test_schema_3_adds_the_pin_table_and_the_reauth_column(settings: Settings) -> None:
+    with settings.read() as db:
+        tables = {
+            row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)")}
+        version = db.execute("SELECT version FROM schema_version").fetchone()[0]
+    assert "listener_pin" in tables
+    assert "reauth_at" in columns
+    assert version == len(MIGRATIONS) == 3

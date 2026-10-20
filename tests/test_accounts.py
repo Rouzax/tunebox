@@ -4,7 +4,15 @@ from pathlib import Path
 import pytest
 
 from tunebox import crypto
-from tunebox.accounts import ABSOLUTE_S, IDLE_S, AccountError, Accounts
+from tunebox.accounts import (
+    ABSOLUTE_S,
+    IDLE_S,
+    REAUTH_S,
+    AccountError,
+    Accounts,
+    Session,
+    session_id,
+)
 from tunebox.settings import Settings
 
 PASSWORD = "a long enough password"
@@ -165,3 +173,91 @@ def test_wrong_recovery_codes_count_too(accounts: Accounts) -> None:
     for _ in range(10):
         assert accounts.login(PASSWORD, "zzzz-zzzz-zzzz", "a", "b").reason == "recovery"
     assert accounts.totp_suspected()
+
+
+def login(accounts: Accounts, clock: Clock, offset: int = 0, address: str = "a") -> str:
+    outcome = accounts.login(PASSWORD, code(clock, offset), address, "Firefox 132, Linux")
+    assert outcome.ok and outcome.token
+    return outcome.token
+
+
+def live(accounts: Accounts, token: str) -> Session:
+    session = accounts.session(token)
+    assert session is not None
+    return session
+
+
+def test_a_new_session_is_not_fresh(accounts: Accounts, clock: Clock) -> None:
+    session = live(accounts, login(accounts, clock))
+    assert session.reauth_at is None
+    assert not accounts.fresh(session)
+
+
+def test_a_fresh_code_makes_the_session_fresh_for_five_minutes(
+    accounts: Accounts, clock: Clock
+) -> None:
+    token = login(accounts, clock)
+    clock.now += 30
+    assert accounts.reauth(live(accounts, token), code(clock)) is None
+    assert accounts.fresh(live(accounts, token))
+    clock.now += REAUTH_S + 1
+    assert not accounts.fresh(live(accounts, token))
+
+
+def test_reauth_refuses_the_code_used_to_log_in(accounts: Accounts, clock: Clock) -> None:
+    token = login(accounts, clock)
+    assert accounts.reauth(live(accounts, token), code(clock)) == "totp"
+    assert not accounts.fresh(live(accounts, token))
+
+
+def test_wrong_reauth_codes_count_like_wrong_login_codes(accounts: Accounts, clock: Clock) -> None:
+    token = login(accounts, clock)
+    for _ in range(10):
+        assert accounts.reauth(live(accounts, token), "000000") == "totp"
+    assert accounts.totp_suspected()
+
+
+def test_reauth_takes_a_recovery_code_once(accounts: Accounts, clock: Clock) -> None:
+    token = login(accounts, clock)
+    assert accounts.reauth(live(accounts, token), "AAAA-bbbb-cccc") is None
+    assert accounts.fresh(live(accounts, token))
+    other = login(accounts, clock, offset=1, address="b")
+    assert accounts.reauth(live(accounts, other), "aaaa-bbbb-cccc") == "recovery"
+
+
+def test_reauth_of_one_session_leaves_the_others_stale(accounts: Accounts, clock: Clock) -> None:
+    first = login(accounts, clock)
+    second = login(accounts, clock, offset=1, address="b")
+    clock.now += 60
+    assert accounts.reauth(live(accounts, first), code(clock)) is None
+    assert accounts.fresh(live(accounts, first))
+    assert not accounts.fresh(live(accounts, second))
+
+
+def test_sessions_lists_the_live_ones_and_ends_one(accounts: Accounts, clock: Clock) -> None:
+    first = login(accounts, clock, address="198.51.100.7")
+    clock.now += 10
+    second = login(accounts, clock, offset=1, address="198.51.100.8")
+    listed = accounts.sessions()
+    assert [s.address for s in listed] == ["198.51.100.8", "198.51.100.7"]
+    assert listed[0].user_agent == "Firefox 132, Linux"
+    assert listed[0].id == session_id(live(accounts, second).token_hash)
+    assert len(listed[0].id) == 16
+    assert accounts.end_session(listed[1].id)
+    assert accounts.session(first) is None
+    assert accounts.session(second) is not None
+    assert not accounts.end_session(listed[1].id)
+
+
+@pytest.mark.parametrize("bad", ["", "XYZ", "0" * 64, "%", "abc'--"])
+def test_end_session_ignores_ids_that_are_not_ids(accounts: Accounts, bad: str) -> None:
+    assert not accounts.end_session(bad)
+
+
+def test_expired_sessions_are_pruned_at_the_next_login(accounts: Accounts, clock: Clock) -> None:
+    login(accounts, clock)
+    clock.now += IDLE_S + 1
+    login(accounts, clock, address="b")
+    with accounts._settings.read() as db:  # pyright: ignore[reportPrivateUsage]
+        count = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    assert count == 1
