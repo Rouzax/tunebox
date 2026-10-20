@@ -8,12 +8,12 @@ import {render as renderHistory} from './history.js';
 import {qrMatrix, qrSvg} from './qr.js';
 import {render as renderSettings} from './settings.js';
 import {render as renderStations} from './stations.js';
+import {decodeHashPart, saveMessage} from './state.js';
 
 const ERRORS = {
     login_failed: 'Login failed.',
     slow_down: 'Too many attempts. Wait a little and try again.',
     setup_refused: 'This setup link is no longer valid.',
-    password_too_short: 'The password needs at least 12 characters.',
     code_wrong: 'That code does not match. Type the one the app shows now.',
     read_only: 'tunebox cannot write its database right now. Try again later.',
     bad_origin: 'Open the admin panel at the address set as public_origin.',
@@ -39,6 +39,10 @@ function message(text) {
 }
 
 function fail(data) {
+    if (data.error === 'password_too_short') {
+        message(`The password needs at least ${ctx.limits.password_min} characters.`);
+        return;
+    }
     message(ERRORS[data.error] || 'Something went wrong.');
 }
 
@@ -58,6 +62,9 @@ let shown = '';
 
 const ctx = {
     config: null,
+    // The server's limits, from GET state; these are what it enforces
+    // before it has answered.
+    limits: {password_min: 12, pin_min: 6, pin_max: 8},
     // A page with edits of its own sets {dirty(), ask(proceed)}: ask shows
     // its question and calls proceed when the edits may go.
     unsaved: null,
@@ -90,9 +97,11 @@ const ctx = {
     },
     // Saves a whole state. Returns {ok} or {ok: false, message} with the
     // server's reason; a stale version reloads and asks to try again.
-    save(state, target, done) {
-        const body = {based_on: ctx.config.version, state, target};
-        return once(() => call('POST', 'config', body), state, done);
+    // basedOn is the version the state was built on; a change kept across a
+    // login passes the one it started from, so the stale check still holds.
+    save(state, target, done, basedOn) {
+        const body = {based_on: basedOn === undefined ? ctx.config.version : basedOn, state, target};
+        return once(() => call('POST', 'config', body), state, done, {state, target, done, basedOn: body.based_on});
     },
     // Any other admin call: a refused session goes to the login form, as
     // it does for saves.
@@ -103,9 +112,11 @@ const ctx = {
         }
         return answer;
     },
-    restore(entryId) {
+    // restoredState is the state the entry brings back, so a refusal names
+    // that state's stations.
+    restore(entryId, restoredState) {
         const body = {based_on: ctx.config.version};
-        return once(() => call('POST', `history/${entryId}/restore`, body), ctx.config.state, 'Restored.');
+        return once(() => call('POST', `history/${entryId}/restore`, body), restoredState, 'Restored.');
     },
 };
 
@@ -115,7 +126,7 @@ let saving = false;
 // the same version again and be refused as stale. The page is inert
 // meanwhile. A request that got no answer may still have been stored, so
 // the page asks what is stored before it draws anything.
-async function once(send, state, done) {
+async function once(send, state, done, retry) {
     if (saving) {
         return {ok: false};
     }
@@ -123,7 +134,7 @@ async function once(send, state, done) {
     view.inert = true;
     message('');
     try {
-        return await commit(await send(), state, done);
+        return await commit(await send(), state, done, retry);
     } catch (error) {
         try {
             await ctx.reload();
@@ -148,7 +159,7 @@ function onForm() {
 // The form stays as typed after a refusal, also a stale one (its next Save
 // applies the edit to the reloaded state); the other pages are drawn again
 // from the stored state after any refusal, so a refused switch flips back.
-async function commit(answer, state, done) {
+async function commit(answer, state, done, retry) {
     const {ok, status, data} = answer;
     if (ok) {
         try {
@@ -164,7 +175,7 @@ async function commit(answer, state, done) {
         if (!onForm()) {
             route();
         }
-        message(done || 'Saved.');
+        message(saveMessage(data, done || 'Saved.'));
         return {ok: true};
     }
     if (status === 409) {
@@ -185,16 +196,24 @@ async function commit(answer, state, done) {
         message(text);
         return {ok: false, message: text};
     }
-    await answered(status, data);
+    await answered(status, data, retry);
     if (status !== 401 && !onForm()) {
         route();
     }
     return {ok: false};
 }
 
+// The save a form lost to an ended session, offered again after login. One
+// at a time: a newer one replaces it.
+let pending = null;
+
 // A refused session goes back to the login form; anything else is a message.
-async function answered(status, data) {
+// A form's save that the session ended is kept for the next login.
+async function answered(status, data, retry) {
     if (status === 401) {
+        if (retry && onForm()) {
+            pending = retry;
+        }
         setCsrf(null);
         message('Your session ended. Log in again.');
         show('login');
@@ -217,6 +236,39 @@ function mayLeave(proceed) {
     return false;
 }
 
+function showPending() {
+    const box = document.querySelector('#shell .pending');
+    if (!pending) {
+        box.hidden = true;
+        box.replaceChildren();
+        return;
+    }
+    const change = pending;
+    const text = document.createElement('span');
+    text.textContent = 'A change was not saved because your session ended.';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.textContent = 'Save it now';
+    save.addEventListener('click', guarded(async () => {
+        const result = await ctx.save(change.state, change.target, change.done, change.basedOn);
+        if (result.ok) {
+            pending = null;
+            showPending();
+            ctx.go('#stations', true);
+        }
+    }));
+    const discard = document.createElement('button');
+    discard.type = 'button';
+    discard.className = 'quiet';
+    discard.textContent = 'Discard';
+    discard.addEventListener('click', () => {
+        pending = null;
+        showPending();
+    });
+    box.replaceChildren(text, save, discard);
+    box.hidden = false;
+}
+
 function route() {
     ctx.unsaved = null;
     if (!ctx.config) {
@@ -229,7 +281,9 @@ function route() {
     }
     const [name, arg] = hash.slice(1).split('/');
     if (name === 'edit' || name === 'new') {
-        renderEdit(view, ctx, name === 'edit' ? decodeURIComponent(arg || '') : null);
+        // A malformed id is shown as typed, as a station that does not exist.
+        const id = decodeHashPart(arg || '');
+        renderEdit(view, ctx, name === 'edit' ? (id === null ? arg : id) : null);
     } else if (name === 'settings') {
         renderSettings(view, ctx);
     } else if (name === 'account') {
@@ -284,6 +338,7 @@ async function refresh() {
         fail(data);
         return;
     }
+    ctx.limits = data.limits || ctx.limits;
     if (data.session) {
         setCsrf(data.session.csrf);
         document.querySelector('.client').textContent = data.session.client;
@@ -291,6 +346,7 @@ async function refresh() {
         show('shell');
         await ctx.reload();
         route();
+        showPending();
     } else if (data.account) {
         show('login');
     } else if (data.setup && setupToken()) {
@@ -362,6 +418,8 @@ document.querySelector('#setup').addEventListener('submit', guarded(async (event
         return;
     }
     form.password.value = '';
+    // The token is spent; do not leave it in the address bar.
+    window.history.replaceState(null, '', '/admin/');
     const items = data.recovery_codes.map((code) => {
         const item = document.createElement('li');
         item.textContent = code;
@@ -372,10 +430,7 @@ document.querySelector('#setup').addEventListener('submit', guarded(async (event
     show('codes');
 }));
 
-document.querySelector('.to-login').addEventListener('click', () => {
-    window.history.replaceState(null, '', '/admin/');
-    show('login');
-});
+document.querySelector('.to-login').addEventListener('click', () => show('login'));
 
 const logout = guarded(async () => {
     const {ok, data} = await call('POST', 'logout');
@@ -387,6 +442,8 @@ const logout = guarded(async () => {
     setCsrf(null);
     ctx.config = null;
     ctx.unsaved = null;
+    pending = null;
+    showPending();
     view.replaceChildren();
     message('');
     show('login');

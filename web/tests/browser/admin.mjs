@@ -236,10 +236,16 @@ async function run() {
         };
         const adminCall = (method, path, body) => evaluate(`(async () => {
             const state = await (await fetch('/admin/api/state')).json();
+            let body = ${body === undefined ? 'undefined' : JSON.stringify(JSON.stringify(body))};
+            if (${JSON.stringify(path)} === 'pin' && body !== undefined) {
+                // A PIN change names the revision it is based on.
+                const current = await (await fetch('/admin/api/pin')).json();
+                body = JSON.stringify({...JSON.parse(body), based_on: current.revision});
+            }
             const response = await fetch('/admin/api/' + ${JSON.stringify(path)}, {
                 method: ${JSON.stringify(method)},
                 headers: {'Content-Type': 'application/json', 'X-Tunebox-CSRF': state.session.csrf},
-                body: ${body === undefined ? 'undefined' : JSON.stringify(JSON.stringify(body))},
+                body,
             });
             return response.status;
         })()`);
@@ -531,7 +537,11 @@ async function run() {
                 await fetch('/admin/api/config', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json', 'X-Tunebox-CSRF': csrf},
-                    body: JSON.stringify({based_on: config.version, state: config.state}),
+                    body: JSON.stringify({
+                        based_on: config.version,
+                        // A state equal to the stored one stores nothing, so change it.
+                        state: {...config.state, defaults: {...config.state.defaults, delay_s: 8}},
+                    }),
                 });
             })()`);
             await evaluate(`(() => {
@@ -872,6 +882,170 @@ async function run() {
                 form.requestSubmit();
             })()`);
             return (await until(`!document.querySelector('#shell').hidden`)) ? null : `not logged in (message: ${await message()})`;
+        });
+
+        // A second browser: its own session, driven through the API, that
+        // ends the page's session the way "Sign out" in the list would.
+        const NEW_PASSWORD = 'a new browser check password';
+        let other = null;
+        const otherCall = async (method, path, body) => {
+            const headers = {'Content-Type': 'application/json', Origin: base, Cookie: other.cookie};
+            if (other.csrf) {
+                headers['X-Tunebox-CSRF'] = other.csrf;
+            }
+            const response = await fetch(`${base}/admin/api/${path}`, {
+                method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+            });
+            return {status: response.status, data: response.status === 204 ? {} : await response.json()};
+        };
+        const otherLogin = async () => {
+            await sleep(1100);
+            const response = await fetch(`${base}/admin/api/login`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', Origin: base},
+                body: JSON.stringify({password: NEW_PASSWORD, code: await freshCode()}),
+            });
+            if (response.status !== 200 && response.status !== 204) {
+                throw new Error(`the second login answered ${response.status}`);
+            }
+            other = {cookie: response.headers.getSetCookie().map((c) => c.split(';')[0]).join('; '), csrf: null};
+            other.csrf = (await otherCall('GET', 'state')).data.session.csrf;
+        };
+        const endPageSession = async () => {
+            const {data} = await otherCall('GET', 'account');
+            for (const session of data.sessions.filter((item) => !item.current)) {
+                await otherCall('POST', `account/sessions/${session.id}/end`);
+            }
+        };
+        const pageLogin = async (password = NEW_PASSWORD) => {
+            await sleep(1100);
+            // The view keeps the page of the ended session until the next
+            // one is drawn.
+            await evaluate(`[...document.querySelectorAll('#shell .view > *')].forEach((node) => { node.dataset.old = '1'; })`);
+            const problem = await toCode(password);
+            if (problem) {
+                return problem;
+            }
+            const code = await freshCode();
+            await evaluate(`(() => {
+                const form = document.querySelector('#code');
+                form.code.value = ${JSON.stringify(code)};
+                form.requestSubmit();
+            })()`);
+            return (await until(`!document.querySelector('#shell').hidden && [...document.querySelectorAll('#shell .view > *')].some((node) => !node.dataset.old)`))
+                ? null : `not logged in (message: ${await message()})`;
+        };
+
+        await step('history after the session ended shows the login', async () => {
+            await otherLogin();
+            await endPageSession();
+            await evaluate(`window.location.hash = '#history'`);
+            if (!(await until(`!document.querySelector('#login').hidden`))) {
+                return `the login form did not show (message: ${await message()})`;
+            }
+            const said = await message();
+            if (said.indexOf('session ended') < 0) {
+                return `message: ${said}`;
+            }
+            return pageLogin();
+        });
+
+        await step('an ended session mid-change shows the login', async () => {
+            await evaluate(`window.location.hash = '#account'`);
+            if (!(await until(`document.querySelector('[name="new-password"]')`))) {
+                return 'account page not shown';
+            }
+            await endPageSession();
+            await evaluate(`(() => {
+                const inputs = document.querySelectorAll('[name="new-password"], [name="new-password-again"]');
+                for (const input of inputs) {
+                    input.value = 'yet another browser check password';
+                }
+                inputs[0].form.requestSubmit();
+            })()`);
+            if (!(await until(`!document.querySelector('#login').hidden || document.querySelector('form.confirm-code')`))) {
+                return `neither the login nor a code form showed (message: ${await message()})`;
+            }
+            if (await evaluate(`Boolean(document.querySelector('form.confirm-code'))`)) {
+                const code = await freshCode();
+                await evaluate(`(() => {
+                    const form = document.querySelector('form.confirm-code');
+                    form.code.value = ${JSON.stringify(code)};
+                    form.requestSubmit();
+                })()`);
+                if (!(await until(`!document.querySelector('#login').hidden`))) {
+                    return 'the login form did not show after the code';
+                }
+            }
+            // The password did not change: the old one still logs in.
+            return pageLogin(NEW_PASSWORD);
+        });
+
+        await step('an edit whose session ended is offered again', async () => {
+            await evaluate(`window.location.hash = '#edit/first'`);
+            if (!(await until(`document.querySelector('form.edit')`))) {
+                return 'no form';
+            }
+            await evaluate(`document.querySelector('form.edit').elements.name.value = 'Kept Across Login'`);
+            await endPageSession();
+            await evaluate(`document.querySelector('form.edit').requestSubmit()`);
+            if (!(await until(`!document.querySelector('#login').hidden`))) {
+                return `the login form did not show (message: ${await message()})`;
+            }
+            const problem = await pageLogin();
+            if (problem) {
+                return problem;
+            }
+            if (!(await until(`document.querySelector('#shell .pending') && !document.querySelector('#shell .pending').hidden`))) {
+                return 'no box offering the change';
+            }
+            const text = await evaluate(`document.querySelector('#shell .pending').textContent`);
+            if (text.indexOf('A change was not saved because your session ended.') < 0) {
+                return `box says: ${text}`;
+            }
+            await buttonNamed('Save it now');
+            const deadline = Date.now() + 3000;
+            while (Date.now() < deadline) {
+                if ((await channels(base)).some((c) => c.id === 'first' && c.name === 'Kept Across Login')) {
+                    return null;
+                }
+                await sleep(100);
+            }
+            return `name not stored (message: ${await message()})`;
+        });
+
+        await step('a stale PIN form is refused', async () => {
+            await send('Page.navigate', {url: `${base}/admin/#settings`});
+            if (!(await until(`document.querySelector('form.pin [name=pin_mode]')`))) {
+                return 'PIN form not shown';
+            }
+            // Another page sets the mode meanwhile.
+            const status = await adminCall('POST', 'pin', {mode: 'stations'});
+            if (status !== 200) {
+                return `the other page's change answered ${status}`;
+            }
+            await evaluate(`document.querySelector('form.pin').pin_mode.value = 'off'`);
+            const said = await saveBy('form.pin button[type=submit]');
+            // The form is redrawn from a fresh read after the message.
+            const shown = await until(`document.querySelector('form.pin').pin_mode.value === 'stations'`);
+            if (said.indexOf('changed elsewhere') < 0 || !shown) {
+                return `${said} / form shows ${await evaluate(`document.querySelector('form.pin').pin_mode.value`)}`;
+            }
+            const back = await savePin('off');
+            return back === 'PIN saved. The player is open to everyone.' ? null : back;
+        });
+
+        await step('a PIN form with typed digits asks before leaving', async () => {
+            await evaluate(`document.querySelector('form.pin').pin.value = '1234'`);
+            await click('#shell nav a[href="#stations"]');
+            if (!(await until(`document.querySelector('.confirm') && document.querySelector('.confirm').textContent.indexOf('not saved') >= 0`))) {
+                return 'no question';
+            }
+            if ((await evaluate(`location.hash`)) !== '#settings') {
+                return 'the page left without an answer';
+            }
+            await buttonNamed('Leave without saving');
+            return (await until(`location.hash === '#stations'`)) ? null : 'did not leave after the answer';
         });
     } finally {
         if (browser) {

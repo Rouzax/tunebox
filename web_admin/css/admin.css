@@ -310,7 +310,8 @@ select {
     gap: 0.4rem;
 }
 
-.confirm {
+.confirm,
+.pending:not([hidden]) {
     flex-basis: 100%;
     display: flex;
     flex-wrap: wrap;

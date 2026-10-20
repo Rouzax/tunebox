@@ -40,11 +40,12 @@ async function confirmed(ctx, area, send) {
 
 function passwordPart(ctx) {
     const area = el('div');
-    const first = el('input', {type: 'password', name: 'new-password', autocomplete: 'new-password', minlength: '12', required: true});
-    const again = el('input', {type: 'password', name: 'new-password-again', autocomplete: 'new-password', minlength: '12', required: true});
+    const min = ctx.limits.password_min;
+    const first = el('input', {type: 'password', name: 'new-password', autocomplete: 'new-password', minlength: String(min), required: true});
+    const again = el('input', {type: 'password', name: 'new-password-again', autocomplete: 'new-password', minlength: String(min), required: true});
     const form = el('form', {class: 'settings'},
         el('h2', null, icon('key'), ' Password'),
-        field('New password (at least 12 characters)', first),
+        field(`New password (at least ${min} characters)`, first),
         field('The same again', again),
         el('div', {class: 'actions'}, el('button', {type: 'submit'}, icon('check_circle'), ' Change the password')),
         area);

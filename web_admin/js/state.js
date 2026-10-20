@@ -231,3 +231,28 @@ export function setSettings(state, values) {
     }
     return {defaults, player, groups: state.groups, channels: state.channels};
 }
+
+// A hash part as text; null when it is not valid percent-encoding, so a
+// hand-typed address cannot throw out of the router.
+export function decodeHashPart(text) {
+    try {
+        return decodeURIComponent(text);
+    } catch (error) {
+        if (error instanceof URIError) {
+            return null;
+        }
+        throw error;
+    }
+}
+
+// What a successful save tells the user: nothing stored when the state
+// equalled the stored one, and a stored change that could not go live.
+export function saveMessage(data, done) {
+    if (data.changed === false) {
+        return 'No changes to save.';
+    }
+    if (data.applied === false) {
+        return 'Saved, but not live yet: tunebox could not start the change. The log says why.';
+    }
+    return done;
+}

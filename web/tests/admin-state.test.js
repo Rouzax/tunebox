@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
-    addGroup, addStation, deleteGroup, deleteStation, diffStates, duplicateStation, moveGroup,
-    moveStation, newStation, renameGroup, replaceStation, setEnabled, setSettings, stationsByGroup, validId,
+    addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, moveGroup,
+    moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setSettings, stationsByGroup, validId,
 } from '../../web_admin/js/state.js';
 
 function base() {
@@ -138,4 +138,17 @@ test('setSettings takes the location only as a pair, and the default station', (
     assert.deepEqual(next.player, {latitude: 52.1, longitude: 5.1, default_channel: 'c'});
     const half = setSettings(base(), {defaults: {}, latitude: 52.1, longitude: undefined, defaultChannel: ''});
     assert.deepEqual(half.player, {});
+});
+
+test('a malformed hash part is not a station id', () => {
+    assert.equal(decodeHashPart('owr'), 'owr');
+    assert.equal(decodeHashPart('a%20b'), 'a b');
+    assert.equal(decodeHashPart('%'), null);
+});
+
+test('the save message says what happened', () => {
+    assert.equal(saveMessage({changed: true, applied: true}, 'Saved.'), 'Saved.');
+    assert.equal(saveMessage({changed: false, applied: true}, 'Saved.'), 'No changes to save.');
+    assert.equal(saveMessage({changed: true, applied: false}, 'Saved.'),
+        'Saved, but not live yet: tunebox could not start the change. The log says why.');
 });

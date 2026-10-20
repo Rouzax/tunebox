@@ -1,5 +1,4 @@
 // Every change, newest first, with what it changed and a way back.
-import {call} from './api.js';
 import {button, el, when} from './dom.js';
 import {diffStates} from './state.js';
 
@@ -26,14 +25,26 @@ function diffTable(changes) {
             el('td', null, show(change.after)))))));
 }
 
+// A click handler whose network failure becomes a message, not nothing.
+// A refused reload (ctx.reload throws 'config') has already said why.
+function guarded(ctx, handler) {
+    return () => handler().catch((error) => {
+        if (error.message !== 'config') {
+            ctx.message('Could not reach tunebox.');
+        }
+    });
+}
+
 async function list(root, ctx) {
     const items = el('ul', {class: 'history'});
     const more = button('history', 'Older', null, {class: 'quiet', hidden: true});
     let last = null;
     async function page() {
-        const {ok, data} = await call('GET', last === null ? 'history' : `history?before=${last}`);
+        const {ok, status, data} = await ctx.request('GET', last === null ? 'history' : `history?before=${last}`);
         if (!ok) {
-            ctx.fail(data);
+            if (status !== 401) {
+                ctx.fail(data);
+            }
             return;
         }
         for (const entry of data.entries) {
@@ -54,14 +65,21 @@ async function list(root, ctx) {
 }
 
 async function detail(root, ctx, id) {
-    const {ok, data} = await call('GET', `history/${id}`);
-    if (!ok) {
+    const {ok, status, data} = await ctx.request('GET', `history/${id}`);
+    if (status === 401) {
+        return;
+    }
+    if (status === 404) {
         root.replaceChildren(el('p', null, 'That change is not in the history.'),
             button('history', 'All changes', () => ctx.go('#history'), {class: 'quiet'}));
         return;
     }
+    if (!ok) {
+        ctx.fail(data);
+        return;
+    }
     const confirmBox = el('div', {class: 'restore'});
-    const offer = button('undo', 'Restore the version before this change', async () => {
+    const offer = button('undo', 'Restore the version before this change', guarded(ctx, async () => {
         // Compared with what is stored now, not with this entry: other
         // changes since then are undone too, and the page says which.
         await ctx.reload();
@@ -70,14 +88,14 @@ async function detail(root, ctx, id) {
             el('p', null, changes.length ? 'Restoring changes this:' : 'The stations are already like this.'),
             diffTable(changes),
             changes.length ? el('div', {class: 'actions'},
-                button('undo', 'Restore', async () => {
-                    const result = await ctx.restore(data.entry.id);
+                button('undo', 'Restore', guarded(ctx, async () => {
+                    const result = await ctx.restore(data.entry.id, data.before);
                     if (result.ok) {
                         ctx.go('#history', true);
                     }
-                }, {class: 'danger'}),
+                }), {class: 'danger'}),
                 button('close', 'Cancel', () => confirmBox.replaceChildren(), {class: 'quiet'})) : null);
-    });
+    }));
     root.replaceChildren(
         el('h2', null, KINDS[data.entry.kind] || data.entry.kind),
         el('p', {class: 'hint'}, when(data.entry.at), data.entry.target ? ` · ${data.entry.target}` : ''),

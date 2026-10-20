@@ -42,7 +42,6 @@ function settingsForm(ctx) {
     const latitude = coordinate('latitude', 90);
     const longitude = coordinate('longitude', 180);
     const error = el('p', {class: 'error', role: 'alert', hidden: true});
-    const question = el('div', {class: 'confirm'});
 
     function collect() {
         const defaults = {};
@@ -67,18 +66,6 @@ function settingsForm(ctx) {
         error,
         el('div', {class: 'actions'}, el('button', {type: 'submit'}, icon('check_circle'), ' Save')));
     const opened = JSON.stringify(collect());
-    ctx.unsaved = {
-        dirty: () => JSON.stringify(collect()) !== opened,
-        ask(proceed) {
-            const stay = button('edit', 'Keep editing', () => question.remove());
-            question.replaceChildren(
-                el('span', null, 'The settings have changes that are not saved.'),
-                button('close', 'Leave without saving', proceed, {class: 'danger'}),
-                stay);
-            form.querySelector('h2').after(question);
-            stay.focus();
-        },
-    };
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
         const values = collect();
@@ -88,12 +75,9 @@ function settingsForm(ctx) {
             return;
         }
         error.hidden = true;
-        const result = await ctx.save(setSettings(state, values), 'settings', 'Settings saved.');
-        if (result.ok) {
-            ctx.unsaved = null;
-        }
+        await ctx.save(setSettings(state, values), 'settings', 'Settings saved.');
     });
-    return form;
+    return {form, dirty: () => JSON.stringify(collect()) !== opened};
 }
 
 const MODES = [
@@ -102,13 +86,15 @@ const MODES = [
     ['stations', 'Chosen stations: the ones marked "Needs the PIN" stay hidden until it is typed'],
 ];
 
-async function pinForm(ctx) {
+// The form for the PIN. page.pinDirty follows the form currently on screen.
+async function pinForm(ctx, page) {
     const box = el('form', {class: 'settings pin'},
         el('h2', null, icon('pin'), ' Listening PIN'),
         el('p', {class: 'hint'},
             'Keeps strangers who find the player\'s address out of tunebox. Each device types it once. ',
             'A new PIN, or switching it on, asks every device again. ',
             'It cannot protect the audio itself: the streams are the stations\' own public addresses.'));
+    page.pinDirty = () => false;
     const {ok, data} = await ctx.request('GET', 'pin');
     if (!ok) {
         if (data.error !== undefined) {
@@ -116,20 +102,22 @@ async function pinForm(ctx) {
         }
         return box;
     }
+    const {pin_min: min, pin_max: max} = ctx.limits;
     const mode = el('select', {name: 'pin_mode'}, MODES.map(([value, label]) => el('option', {value}, label)));
     mode.value = data.mode;
     const code = el('input', {
         type: 'password', name: 'pin', inputmode: 'numeric', autocomplete: 'new-password',
-        pattern: '[0-9]{6,8}', minlength: '6', maxlength: '8',
-        placeholder: data.set ? 'Unchanged' : '6 to 8 digits',
+        pattern: `[0-9]{${min},${max}}`, minlength: String(min), maxlength: String(max),
+        placeholder: data.set ? 'Unchanged' : `${min} to ${max} digits`,
     });
+    page.pinDirty = () => mode.value !== data.mode || code.value !== '';
     box.append(
         field('Ask for the PIN on', mode, 'With the whole player locked, embeds on other sites stop working.'),
         field(data.set ? 'New PIN' : 'PIN', code, data.set ? 'Leave empty to keep the current PIN.' : null),
         el('div', {class: 'actions'}, el('button', {type: 'submit'}, icon('check_circle'), ' Save the PIN')));
     box.addEventListener('submit', async (event) => {
         event.preventDefault();
-        const body = {mode: mode.value};
+        const body = {mode: mode.value, based_on: data.revision};
         if (code.value) {
             body.pin = code.value;
         }
@@ -142,7 +130,10 @@ async function pinForm(ctx) {
                 stations: 'PIN saved. Stations marked "Needs the PIN" are hidden until it is typed.',
             };
             ctx.message(said[answer.data.mode]);
-            box.replaceWith(await pinForm(ctx));
+            box.replaceWith(await pinForm(ctx, page));
+        } else if (answer.status === 409) {
+            ctx.message('The PIN settings changed elsewhere; the form now shows them.');
+            box.replaceWith(await pinForm(ctx, page));
         } else if (answer.status === 400 && answer.data.message) {
             ctx.message(`The PIN was not saved: ${answer.data.message}.`);
         } else if (answer.status !== 401) {
@@ -153,11 +144,25 @@ async function pinForm(ctx) {
 }
 
 export async function render(root, ctx) {
-    const form = settingsForm(ctx);
-    root.replaceChildren(form);
-    const pin = await pinForm(ctx);
+    const page = {pinDirty: () => false};
+    const settings = settingsForm(ctx);
+    const question = el('div', {class: 'confirm'});
+    ctx.unsaved = {
+        dirty: () => settings.dirty() || page.pinDirty(),
+        ask(proceed) {
+            const stay = button('edit', 'Keep editing', () => question.remove());
+            question.replaceChildren(
+                el('span', null, 'This page has changes that are not saved.'),
+                button('close', 'Leave without saving', proceed, {class: 'danger'}),
+                stay);
+            settings.form.querySelector('h2').after(question);
+            stay.focus();
+        },
+    };
+    root.replaceChildren(settings.form);
+    const pin = await pinForm(ctx, page);
     // The page may have been left while the PIN status loaded.
-    if (form.isConnected) {
+    if (settings.form.isConnected) {
         root.append(pin);
     }
 }
