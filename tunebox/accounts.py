@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Literal, cast
 
 from tunebox import crypto
-from tunebox.settings import Settings, SettingsWriteError
+from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
 
 IDLE_S = 1800
 # last_seen is written at most this often, so most session checks only read.
@@ -184,14 +184,21 @@ class Accounts:
         self, admin: _Admin, code: str, then: Callable[[sqlite3.Connection, float], None]
     ) -> Reason | None:
         """Checks a TOTP or recovery code and, in the transaction that claims
-        it, runs then. Wrong codes are counted for the whole account."""
+        it, runs then. Wrong codes are counted for the whole account.
+        "unavailable" only when the code was right: after a right password,
+        a database fault must not answer a wrong code differently from a
+        wrong password."""
         now = self._clock()
         recovery = crypto.is_recovery_code(code)
         # A recovery code is checked before the backoff: it is the owner's way in.
         if not recovery and self._backing_off(admin, now):
             return "backoff"
         step = None
-        if not recovery:
+        if recovery:
+            if not self._recovery_unused(code):
+                self._count_failure(now)
+                return "recovery"
+        else:
             step = crypto.matching_step(admin.secret, code.strip(), now, admin.last_step)
             if step is None:
                 self._count_failure(now)
@@ -348,7 +355,12 @@ class Accounts:
             db.execute("DELETE FROM sessions WHERE token_hash = ?", (crypto.token_hash(token),))
 
     def totp_suspected(self) -> bool:
-        admin = self._admin()
+        """False when the account cannot be read: it is asked after a
+        password check, where a database fault must not change the answer."""
+        try:
+            admin = self._admin()
+        except SettingsUnavailable:
+            return False
         return admin is not None and self._suspect(admin, self._clock())
 
     def _admin(self) -> _Admin | None:
@@ -371,17 +383,30 @@ class Accounts:
         wait = min(MAX_BACKOFF_S, 60 * 2 ** (admin.fail_count - TOTP_SUSPECT))
         return now < admin.fail_last + wait
 
+    def _recovery_unused(self, code: str) -> bool:
+        """A read, so a wrong recovery code is refused without a write that
+        could fail; a database that cannot be read refuses it too."""
+        try:
+            with self._settings.read() as db:
+                row = db.execute(
+                    "SELECT 1 FROM recovery_codes WHERE hash = ? AND used_at IS NULL",
+                    (crypto.code_hash(code),),
+                ).fetchone()
+        except SettingsUnavailable:
+            return False
+        return row is not None
+
     def _count_failure(self, now: float) -> None:
-        """Counted in SQL, so two wrong codes at once both count."""
+        """Counted in SQL, so two wrong codes at once both count. Best-effort:
+        while the database cannot be written the code is still refused."""
         fresh = "totp_fail_since IS NULL OR ? - totp_fail_since > ?"
-        with self._settings.transaction() as db:
-            db.execute(
-                f"UPDATE admin SET"
-                f" totp_fail_count = CASE WHEN {fresh} THEN 1 ELSE totp_fail_count + 1 END,"
-                f" totp_fail_since = CASE WHEN {fresh} THEN ? ELSE totp_fail_since END,"
-                " totp_fail_last = ?",
-                (now, TOTP_WINDOW_S, now, TOTP_WINDOW_S, now, now),
-            )
+        self._try_write(
+            f"UPDATE admin SET"
+            f" totp_fail_count = CASE WHEN {fresh} THEN 1 ELSE totp_fail_count + 1 END,"
+            f" totp_fail_since = CASE WHEN {fresh} THEN ? ELSE totp_fail_since END,"
+            " totp_fail_last = ?",
+            (now, TOTP_WINDOW_S, now, TOTP_WINDOW_S, now, now),
+        )
 
     def _open(
         self, db: sqlite3.Connection, now: float, address: str, user_agent: str

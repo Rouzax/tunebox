@@ -371,21 +371,37 @@ class Admin:
         release = self.gate.reserve(request.client)
         if release is None:
             return self._limited(request, "address")
-        if not self.gate.pace(self._known(request)):
+        try:
+            known = self._known(request)
+        except SettingsUnavailable:
+            release()
+            raise
+        if not self.gate.pace(known):
             release()
             return self._limited(request, "pace")
         started = self._monotonic()
-        with self.gate.hashing() as took:
-            if not took:
-                release()
-                return self._limited(request, "busy")
-            user_agent = request.header("User-Agent") or ""
-            outcome = self._accounts.login(
-                body["password"], body["code"], request.client, user_agent
-            )
-        answer = self._login_answer(request, outcome, release)
-        self.gate.floor(started)
-        return answer
+        took = False
+        try:
+            with self.gate.hashing() as took:
+                if not took:
+                    release()
+                    return self._limited(request, "busy")
+                user_agent = request.header("User-Agent") or ""
+                try:
+                    outcome = self._accounts.login(
+                        body["password"], body["code"], request.client, user_agent
+                    )
+                except SettingsUnavailable:
+                    # Only the account read ahead of the password check
+                    # raises this: it says nothing about the credentials, so
+                    # it is not a failure of this address. Any other error
+                    # keeps the reservation.
+                    release()
+                    raise
+            return self._login_answer(request, outcome, release)
+        finally:
+            if took:
+                self.gate.floor(started)
 
     def _login_answer(
         self, request: Request, outcome: Outcome, release: Callable[[], None]
@@ -638,7 +654,12 @@ class Admin:
             # Not why=address, which the CrowdSec ban scenario counts: this
             # is someone with a session typing codes wrong.
             return self._limited(request, "reauth")
-        reason = self._accounts.reauth(session, body["code"])
+        try:
+            reason = self._accounts.reauth(session, body["code"])
+        except SettingsUnavailable:
+            # The account read ahead of the code check; no code was judged.
+            release()
+            raise
         if reason == "unavailable":
             release()
             return _error(503, "read_only")

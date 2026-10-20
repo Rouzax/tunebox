@@ -1254,3 +1254,82 @@ def test_a_pin_change_needs_the_revision_it_was_based_on(world: World) -> None:
     assert json_of(answer) == {"error": "stale", "revision": "stations.1"}
     assert world.pin.mode == "stations"
     assert world.call("POST", "/admin/api/pin", {"mode": "off"}, csrf=csrf).status == 400
+
+
+def _unwritable(*_args: object) -> object:
+    raise SettingsWriteError("read-only")
+
+
+def test_an_unwritable_database_does_not_tell_a_right_password(
+    world: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(world.settings, "transaction", _unwritable)
+    tries = [
+        ("wrong password!", "000000", "password"),
+        (PASSWORD, "000000", "totp"),
+        (PASSWORD, "zzzz-zzzz-zzzz", "recovery"),
+    ]
+    with caplog.at_level(logging.WARNING):
+        for number, (password, code, _reason) in enumerate(tries):
+            world.clock.now += 2  # past the shared pace
+            body = {"password": password, "code": code}
+            answer = world.call("POST", "/admin/api/login", body, client=f"198.51.100.{number}")
+            assert (answer.status, json_of(answer)) == (401, {"error": "login_failed"})
+    failed = [r for r in caplog.records if r.getMessage() == "admin_login_failed"]
+    assert [r.__dict__["fields"]["reason"] for r in failed] == [t[2] for t in tries]
+
+
+def test_an_unreadable_account_does_not_lock_the_owner_out(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable() -> None:
+        raise SettingsUnavailable("down")
+
+    monkeypatch.setattr(world.accounts, "_admin", unreadable)
+    for _ in range(6):
+        world.clock.now += 2
+        good = {"password": PASSWORD, "code": world.code()}
+        assert world.call("POST", "/admin/api/login", good).status == 503
+    monkeypatch.undo()
+    world.clock.now += 2
+    good = {"password": PASSWORD, "code": world.code()}
+    assert world.call("POST", "/admin/api/login", good).status == 200
+
+
+def test_an_unreadable_account_gives_the_reauth_slot_back(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
+
+    def unreadable() -> None:
+        raise SettingsUnavailable("down")
+
+    monkeypatch.setattr(world.accounts, "_admin", unreadable)
+    for _ in range(6):
+        answer = world.call("POST", "/admin/api/account/reauth", {"code": "000000"}, csrf=csrf)
+        assert answer.status == 503
+    monkeypatch.undo()
+    answer = world.call("POST", "/admin/api/account/reauth", {"code": world.code(1)}, csrf=csrf)
+    assert answer.status == 204
+
+
+def test_a_login_that_cannot_be_answered_still_takes_the_floor(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    floors: list[float] = []
+    monkeypatch.setattr(world.admin.gate, "floor", floors.append)
+
+    def unreadable() -> None:
+        raise SettingsUnavailable("down")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(world.accounts, "_admin", unreadable)
+        good = {"password": PASSWORD, "code": world.code()}
+        assert world.call("POST", "/admin/api/login", good).status == 503
+    assert len(floors) == 1
+    with monkeypatch.context() as patch:
+        patch.setattr(Accounts, "_open", _unwritable)
+        world.clock.now += 2
+        good = {"password": PASSWORD, "code": world.code()}
+        assert world.call("POST", "/admin/api/login", good).status == 503
+    assert len(floors) == 2
