@@ -775,14 +775,32 @@ async function run() {
             if (!(await until(pinShown, 15000))) {
                 return 'no keypad after the PIN changed';
             }
+            // The station list fetched right after the PIN fails once (a
+            // network blip in the car); the player must try again.
+            let failed = 0;
+            on('Fetch.requestPaused', async (paused) => {
+                if (failed === 0 && paused.request.url.endsWith('/api/channels')) {
+                    failed += 1;
+                    await send('Fetch.failRequest', {requestId: paused.requestId, errorReason: 'ConnectionReset'});
+                } else {
+                    await send('Fetch.continueRequest', {requestId: paused.requestId});
+                }
+            });
+            await send('Fetch.enable', {patterns: [{urlPattern: '*/api/channels*'}]});
             await typePin('24682468');
             if (!(await until(`!(${pinShown})`))) {
                 return 'the new PIN did not close the keypad';
             }
             const polls = `performance.getEntriesByType('resource').filter((e) => e.name.includes('/api/channels/second/now')).length`;
             const before = await evaluate(polls);
-            // Titles resume: the station is polled again within one interval.
-            return (await until(`${polls} > ${before}`, 15000)) ? null : 'the hidden station is no longer polled after the PIN';
+            // Titles resume: the station is polled again within two intervals.
+            const resumed = await until(`${polls} > ${before}`, 25000);
+            await send('Fetch.disable');
+            on('Fetch.requestPaused', null);
+            if (!failed) {
+                return 'the station list was never fetched after the PIN';
+            }
+            return resumed ? null : 'the hidden station is no longer polled after the PIN';
         });
 
         await step('switch the PIN off in the panel', async () => {

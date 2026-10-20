@@ -1,4 +1,4 @@
-import {createApi, createPoller} from './api.js';
+import {POLL_MS, createApi, createPoller} from './api.js';
 import {canPlay, keepSelection, nextChannel, pickChannel, pickStream} from './channels.js';
 import {bindControls} from './controls.js';
 import {bindDayNight} from './daynight.js';
@@ -162,6 +162,7 @@ async function start(root) {
     // The station on air left the list, so its titles stopped; they start
     // again if it comes back (a PIN typed for hidden stations).
     let lostChannel = false;
+    let retry = null;
     async function refreshChannels() {
         if (refreshing) {
             return;
@@ -196,7 +197,14 @@ async function start(root) {
             events.emit('channels', {channels: app.channels});
             events.emit('stream', {channel: app.channel, stream: app.stream});
         } catch (error) {
-            // The next poll tries again.
+            // The next poll tries again; with the station on air gone from
+            // the list there is no poll, so try again here.
+            if (lostChannel && retry === null) {
+                retry = later(() => {
+                    retry = null;
+                    refreshChannels();
+                }, POLL_MS);
+            }
         } finally {
             refreshing = false;
         }
@@ -206,6 +214,12 @@ async function start(root) {
     const playable = (stream) => canPlay(stream, (type) => probe.canPlayType(type));
 
     app.selectChannel = (id) => {
+        // A station picked by hand has titles of its own again.
+        lostChannel = false;
+        if (retry !== null) {
+            cancel(retry);
+            retry = null;
+        }
         app.channel = app.channels.find((channel) => channel.id === id);
         app.stream = pickStream(app.channel, storage.get(`stream.${id}`), playable);
         storage.set('channel', id);
