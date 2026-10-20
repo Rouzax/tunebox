@@ -90,7 +90,7 @@ def resolve(host: str, port: int) -> list[str]:
     return found
 
 
-def _trusted(address: str, trusted: tuple[Network, ...]) -> bool:
+def trusted_peer(address: str, trusted: tuple[Network, ...]) -> bool:
     try:
         ip = ipaddress.ip_address(address)
     except ValueError:
@@ -104,14 +104,14 @@ def client_address(peer: str, forwarded: str | None, trusted: tuple[Network, ...
     itself a trusted proxy (entries to its left are the client's own word).
     An entry that is not an address stops the walk: skipping it would reach
     an entry the client wrote."""
-    if not forwarded or not _trusted(peer, trusted):
+    if not forwarded or not trusted_peer(peer, trusted):
         return peer
     for entry in reversed([part.strip() for part in forwarded.split(",")]):
         try:
             ipaddress.ip_address(entry)
         except ValueError:
             return peer
-        if not _trusted(entry, trusted):
+        if not trusted_peer(entry, trusted):
             return entry
     return peer
 
@@ -125,7 +125,7 @@ def nearby(
     connects from loopback while relaying the internet), nor does one from
     a trusted proxy that names no readable client. other_forwarding is any
     OTHER_FORWARDING header, which tunebox does not read."""
-    if not _trusted(peer, trusted):
+    if not trusted_peer(peer, trusted):
         return not forwarded and not other_forwarding and _on_network(peer)
     if not forwarded:
         return False
@@ -134,7 +134,7 @@ def nearby(
             ipaddress.ip_address(entry)
         except ValueError:
             return False
-        if not _trusted(entry, trusted):
+        if not trusted_peer(entry, trusted):
             return _on_network(entry)
     return False
 

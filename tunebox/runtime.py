@@ -34,6 +34,7 @@ LIVE_FIELDS = frozenset(
         "group",
         "logo",
         "always",
+        "needs_pin",
     }
 )
 # A field added to ChannelConfig must be put in one of the two sets.

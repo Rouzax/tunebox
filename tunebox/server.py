@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import time
@@ -19,12 +20,17 @@ from tunebox.limits import Once
 from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
 from tunebox.logos import Logos
 from tunebox.logs import bound, event
-from tunebox.netguard import OTHER_FORWARDING, client_address, nearby
+from tunebox.netguard import OTHER_FORWARDING, client_address, nearby, trusted_peer
+from tunebox.pin import Pin
 from tunebox.runtime import Snapshot
 
 log = logging.getLogger(__name__)
 
 MAX_BUFFER_S = 120.0
+# A PIN and its JSON wrapper; anything longer is not a PIN.
+PIN_BODY = 256
+NO_STORE = {"Cache-Control": "no-store"}
+PIN_PAGE = "/pin.html"
 # A request to an idle channel waits this long for its first poll, so the
 # answer carries what is on now rather than nothing.
 FRESH_WAIT_S = 2.5
@@ -79,6 +85,39 @@ def _query(target: str, name: str) -> list[str] | None:
     )
 
 
+def _is_page(path: str) -> bool:
+    return path == "/" or path.endswith(".html")
+
+
+def _locked_route(path: str, parts: list[str]) -> bool:
+    """What the PIN covers: the pages, the API except the PIN itself and
+    PawTunes (which knows nothing of a PIN), and the logos. Scripts, styles
+    and fonts are the player's public code and stay open, so the PIN page
+    can load."""
+    if parts[:1] == ["logos"]:
+        return True
+    if parts[:1] == ["api"]:
+        return parts[1:2] not in (["pin"], ["pawtunes"])
+    return _is_page(path) and path != PIN_PAGE
+
+
+def _private(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """While a PIN is on, a shared cache must not hand one device's answer
+    to another that has no grant."""
+    out: list[tuple[str, str]] = []
+    cached = False
+    for name, value in pairs:
+        if name.lower() == "cache-control":
+            cached = True
+            if not value.startswith(("private", "no-store")):
+                value = f"private, {value}"
+        out.append((name, value))
+    if not cached:
+        out.append(("Cache-Control", "private"))
+    out.append(("Vary", "Cookie"))
+    return out
+
+
 def _buffer_s(target: str) -> float | None:
     """The player's buffer from ?buffer_s=, 0 when absent, None when unusable."""
     values = _query(target, "buffer_s")
@@ -120,9 +159,11 @@ class TuneboxServer(ThreadingHTTPServer):
         bursts: Bursts | None = None,
         admin: Admin | None = None,
         trusted: tuple[Network, ...] = (),
+        pin: Pin | None = None,
     ) -> None:
         self.current = snapshot
         self.admin = admin
+        self.pin = pin
         self.trusted = trusted
         self.warned_proxies = False
         self.refusals = Once(600)
@@ -139,6 +180,10 @@ class Handler(BaseHTTPRequestHandler):
     # Idle keep-alive connections from the reverse proxy are closed after this.
     timeout = 30
     _status = 0
+    # Set per request by _route: the answer depends on the PIN cookie, and
+    # stations that need the PIN are hidden from this device.
+    _private = False
+    _hidden = False
 
     @property
     def app(self) -> TuneboxServer:
@@ -159,19 +204,22 @@ class Handler(BaseHTTPRequestHandler):
     def _handle(self, head: bool) -> None:
         started = time.monotonic()
         self._status = 0
+        self._private = False
+        self._hidden = False
         target = urllib.parse.urlsplit(self.path)
         path = target.path
         is_admin = path == "/admin" or path.startswith("/admin/")
+        is_pin = path == "/api/pin"
         body = b""
-        if self.command == "POST" and not is_admin:
-            # Only /admin takes a POST: answer before reading a body nobody
+        if self.command == "POST" and not (is_admin or is_pin):
+            # Only /admin and /api/pin take a POST: answer before reading a body nobody
             # asked for, and hang up so it is not parsed as a request.
             self.close_connection = True
             with bound("req"):
                 self._send_json(405, {"error": "method_not_allowed"}, False)
             return
         if self.command == "POST":
-            read = self._read_body(body_limit(path))
+            read = self._read_body(body_limit(path) if is_admin else PIN_BODY)
             if read is None:
                 return
             body = read
@@ -181,12 +229,14 @@ class Handler(BaseHTTPRequestHandler):
             # GET and HEAD bodies are never read, so on a kept-alive connection
             # the body would be parsed as the next request. Answer, then hang up.
             self.close_connection = True
-        # The admin- context also tells the log formatter to withhold
-        # exception text, which can carry what was typed.
-        with bound("admin" if is_admin else "req"):
+        # The admin- and pin- contexts also tell the log formatter to
+        # withhold exception text, which can carry what was typed.
+        with bound("admin" if is_admin else "pin" if is_pin else "req"):
             try:
                 if is_admin:
                     self._admin(path, target.query, head, body)
+                elif is_pin:
+                    self._pin(head, body)
                 else:
                     self._route(path, head)
             except BrokenPipeError, ConnectionResetError:
@@ -225,16 +275,14 @@ class Handler(BaseHTTPRequestHandler):
         admin = self.app.admin
         if admin is None:
             return self._send_json(404, {"error": "not_found"}, head)
-        # Every line: a proxy may add its own line after the client's, and
-        # the first line alone would be the client's word.
-        forwarded = ", ".join(self.headers.get_all("X-Forwarded-For") or []) or None
+        forwarded = self._forwarded()
         peer = self.client_address[0]
         if forwarded and not self.app.trusted and not self.app.warned_proxies:
             self.app.warned_proxies = True
             # Every client would share the proxy's address: limits and
             # CrowdSec would then punish everyone at once.
             event(log, logging.WARNING, "trusted_proxies_unset", peer=peer)
-        client = client_address(peer, forwarded, self.app.trusted)
+        client = self._client()
         if admin.plain_http:
             other = any(self.headers.get(name) for name in OTHER_FORWARDING)
             if not nearby(peer, forwarded, other, self.app.trusted):
@@ -248,14 +296,80 @@ class Handler(BaseHTTPRequestHandler):
         response = admin.handle(Request(method, path, headers, body, client, query))
         self._send(response.status, response.body, response.content_type, head, response.headers)
 
+    def _forwarded(self) -> str | None:
+        # Every line: a proxy may add its own line after the client's, and
+        # the first line alone would be the client's word.
+        return ", ".join(self.headers.get_all("X-Forwarded-For") or []) or None
+
+    def _client(self) -> str:
+        return client_address(self.client_address[0], self._forwarded(), self.app.trusted)
+
+    def _https(self) -> bool:
+        """Whether the browser reached the proxy over https, as a trusted
+        proxy says. tunebox itself speaks plain http, so without a proxy's
+        word the cookie must work over http (a player on the home network)."""
+        proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+        return proto == "https" and trusted_peer(self.client_address[0], self.app.trusted)
+
+    def _local(self) -> bool:
+        """A caller on this host itself: the Docker healthcheck. A reverse
+        proxy on the same host connects from loopback too, and says so in
+        its headers."""
+        try:
+            loopback = ipaddress.ip_address(self.client_address[0]).is_loopback
+        except ValueError:
+            return False
+        proxied = self._forwarded() or any(self.headers.get(n) for n in OTHER_FORWARDING)
+        return loopback and not proxied
+
+    def _pin(self, head: bool, body: bytes) -> None:
+        pin = self.app.pin
+        if self.command != "POST":
+            return self._send_json(405, {"error": "method_not_allowed"}, head, NO_STORE)
+        try:
+            payload: object = json.loads(body or b"null")
+        except ValueError:
+            payload = None
+        given = cast("dict[str, object]", payload).get("pin") if isinstance(payload, dict) else None
+        if pin is None or not isinstance(given, str):
+            return self._send_json(400, {"error": "bad_request"}, head, NO_STORE)
+        client = self._client()
+        result = pin.attempt(given, client, secure=self._https())
+        if result.ok and result.cookie:
+            event(log, logging.INFO, "listener_pin_granted", client=client)
+            cookie = ("Set-Cookie", result.cookie)
+            return self._send(204, b"", "text/plain", head, [*NO_STORE.items(), cookie])
+        if result.reason == "off":
+            return self._send(204, b"", "text/plain", head, NO_STORE)
+        event(log, logging.WARNING, "listener_pin_failed", client=client, reason=result.reason)
+        if result.reason == "locked":
+            return self._send_json(429, {"error": "slow_down"}, head, NO_STORE)
+        return self._send_json(401, {"error": "pin_wrong"}, head, NO_STORE)
+
     def _route(self, path: str, head: bool) -> None:
         parts = [p for p in path.split("/") if p]
         # One snapshot per request: a reload in the meantime cannot mix two.
         snapshot = self.app.current()
         channels = snapshot.channels
         if path == "/healthz":
+            if not self._local():
+                return self._send_json(200, {"status": "ok"}, head)
             status = {cid: channel.status() for cid, channel in channels.items()}
             return self._send_json(200, {"status": "ok", "channels": status}, head)
+        pin = self.app.pin
+        if pin is not None and pin.mode != "off" and _locked_route(path, parts):
+            cookie = self.headers.get("Cookie")
+            if pin.locks_site(cookie):
+                if _is_page(path):
+                    return self._static(PIN_PAGE, head, locked=True)
+                return self._send_json(401, {"error": "pin_required"}, head, NO_STORE)
+            self._private = True
+            self._hidden = pin.hides_stations(cookie)
+        visible = {
+            cid: channel
+            for cid, channel in channels.items()
+            if not (self._hidden and channel.config.needs_pin)
+        }
         if parts == ["api", "channels"]:
             logos = self.app.logos
             listing = [
@@ -264,20 +378,25 @@ class Handler(BaseHTTPRequestHandler):
                     "logo": logos.path_for(cid) if logos else None,
                     "logo_small": logos.path_for(cid, small=True) if logos else None,
                 }
-                for cid, channel in channels.items()
+                for cid, channel in visible.items()
             ]
             headers = {"Cache-Control": "no-cache", "X-Tunebox-Version": str(snapshot.version)}
+            if len(visible) < len(channels):
+                # The player offers "More stations" for these.
+                headers["X-Tunebox-Pin"] = "more"
             return self._send_json(200, listing, head, headers)
         if parts == ["api", "player"]:
             player = snapshot.player
+            default = player.default_channel or next(iter(channels), None)
             body = {
                 "latitude": player.latitude,
                 "longitude": player.longitude,
-                "default_channel": player.default_channel or next(iter(channels), None),
+                # A hidden default would name a station the device cannot see.
+                "default_channel": default if default in visible else None,
             }
             return self._send_json(200, body, head, {"Cache-Control": "max-age=300"})
         if len(parts) == 4 and parts[:2] == ["api", "channels"] and parts[3] == "now":
-            channel = channels.get(parts[2])
+            channel = visible.get(parts[2])
             if channel is None:
                 return self._send_json(404, {"error": "unknown_channel"}, head)
             if channel.touch():
@@ -311,10 +430,13 @@ class Handler(BaseHTTPRequestHandler):
         if parts and parts[0] == "api":
             return self._send_json(404, {"error": "not_found"}, head)
         if parts and parts[0] == "logos":
-            return self._logo(parts, head)
+            return self._logo(parts, head, hidden=set(channels) - set(visible))
         return self._static(path, head)
 
-    def _logo(self, parts: list[str], head: bool) -> None:
+    def _logo(self, parts: list[str], head: bool, hidden: set[str]) -> None:
+        if urllib.parse.unquote(parts[-1]).split(".")[0] in hidden:
+            # A station hidden behind the PIN has no logo either.
+            return self._send_json(404, {"error": "not_found"}, head)
         logos = self.app.logos
         small = len(parts) == 3 and parts[1] == "small"
         target = None
@@ -331,7 +453,10 @@ class Handler(BaseHTTPRequestHandler):
         }
         self._send(200, target.read_bytes(), LOGO_TYPES[kind], head, headers)
 
-    def _static(self, path: str, head: bool) -> None:
+    def _static(self, path: str, head: bool, locked: bool = False) -> None:
+        """locked: the PIN page in place of a page the PIN keeps; never
+        cached, and without an ETag a browser could revalidate the real
+        page against."""
         relative = urllib.parse.unquote(path).lstrip("/") or "index.html"
         web_dir = self.app.web_dir
         target: Path | None
@@ -344,16 +469,18 @@ class Handler(BaseHTTPRequestHandler):
         content_type = CONTENT_TYPES.get(target.suffix) if target else None
         if target is None or content_type is None:
             return self._send_json(404, {"error": "not_found"}, head)
-        stat = target.stat()
-        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
-        if etag_matches(self.headers.get("If-None-Match"), etag):
-            return self._not_modified(etag)
-        # Judged on the resolved path: /vendor/../app.js is not a vendor file.
-        immutable = target.relative_to(web_dir).as_posix().startswith(IMMUTABLE_DIRS)
-        headers = {
-            "ETag": etag,
-            "Cache-Control": "max-age=31536000, immutable" if immutable else "no-cache",
-        }
+        headers: dict[str, str] = dict(NO_STORE)
+        if not locked:
+            stat = target.stat()
+            etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+            if etag_matches(self.headers.get("If-None-Match"), etag):
+                return self._not_modified(etag)
+            # Judged on the resolved path: /vendor/../app.js is not a vendor file.
+            immutable = target.relative_to(web_dir).as_posix().startswith(IMMUTABLE_DIRS)
+            headers = {
+                "ETag": etag,
+                "Cache-Control": "max-age=31536000, immutable" if immutable else "no-cache",
+            }
         if target.suffix == ".html":
             headers["Content-Security-Policy"] = CSP
             headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -384,6 +511,8 @@ class Handler(BaseHTTPRequestHandler):
             pairs = cast("Mapping[str, str]", headers).items()
         else:
             pairs = headers or ()
+        if self._private:
+            pairs = _private(pairs)
         for name, value in pairs:
             self.send_header(name, value)
         if self.close_connection:

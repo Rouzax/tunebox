@@ -64,3 +64,17 @@ def test_admin_crash_logs_no_input() -> None:
     assert "secret-pin-1234" not in out
     assert "ValueError (details withheld" in out
     assert "visible-value" in out
+
+
+def test_pin_requests_withhold_exception_text() -> None:
+    buffer = io.StringIO()
+    configure("info", buffer)
+    log = logging.getLogger("tunebox.test")
+    with bound("pin"):
+        try:
+            int("secret-pin-1234")
+        except ValueError:
+            log.error("request_crashed", exc_info=True)
+    out = buffer.getvalue()
+    assert "secret-pin-1234" not in out
+    assert "ValueError (details withheld" in out

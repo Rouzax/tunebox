@@ -15,9 +15,10 @@ from tunebox.accounts import Accounts
 from tunebox.admin import MAX_BODY, MAX_STATE_BODY, Admin, Request, Response
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
-from tunebox.config import AdminConfig, PlayerConfig, StreamConfig
+from tunebox.config import AdminConfig, ChannelConfig, PlayerConfig, StreamConfig
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
+from tunebox.pin import Pin
 from tunebox.runtime import EMPTY, Snapshot
 from tunebox.server import CSP, TuneboxServer, etag_matches
 from tunebox.settings import Settings
@@ -37,11 +38,21 @@ class FakeBursts(Bursts):
         return 30.0
 
 
-@pytest.fixture
-def server(tmp_path: Path) -> Generator[TuneboxServer]:
+def serve(httpd: TuneboxServer) -> None:
+    thread = threading.Thread(
+        target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
+    thread.start()
+
+
+def make_server(
+    tmp_path: Path, pin: Pin | None = None, extra: tuple[ChannelConfig, ...] = ()
+) -> TuneboxServer:
     web = tmp_path / "web"
     web.mkdir()
     (web / "index.html").write_text("<!doctype html><title>t</title>", encoding="utf-8")
+    (web / "pin.html").write_text("<!doctype html><title>PIN</title>", encoding="utf-8")
+    (web / "status.html").write_text("<!doctype html><title>status</title>", encoding="utf-8")
     (tmp_path / "secret.txt").write_text("secret", encoding="utf-8")
     (web / "app.js").write_text("export {};", encoding="utf-8")
     (web / "vendor").mkdir()
@@ -52,13 +63,9 @@ def server(tmp_path: Path) -> Generator[TuneboxServer]:
     source = FakeSource()
     source.responses = [[RawEntry("FISHER", "Stay", 1_000_000)]]
     store = Store(None)
+    covers = CoverService(store, lambda _track: None)
     channel = Channel(
-        channel_config(),
-        source,
-        CoverService(store, lambda _track: None),
-        store,
-        clock_ms=lambda: 2_000_000,
-        rng=NoJitter(),
+        channel_config(), source, covers, store, clock_ms=lambda: 2_000_000, rng=NoJitter()
     )
     channel.poll_once()
     logo_dir = tmp_path / "logos"
@@ -68,27 +75,41 @@ def server(tmp_path: Path) -> Generator[TuneboxServer]:
     (logo_dir / "small").mkdir()
     (logo_dir / "small" / "owr.png").write_bytes(b"\x89PNG\r\n\x1a\nsmall")
     logos = Logos(logo_dir, lambda _url: b"")
-    snapshot = Snapshot(1, {"owr": channel}, PlayerConfig(52.0, 5.0, None))
-    httpd = TuneboxServer(("127.0.0.1", 0), lambda: snapshot, web, logos=logos, bursts=FakeBursts())
-    # A short poll interval makes shutdown() quick.
-    thread = threading.Thread(
-        target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    channels: dict[str, Channel] = {"owr": channel}
+    for config in extra:
+        channels[config.id] = Channel(
+            config, FakeSource(), covers, store, clock_ms=lambda: 2_000_000, rng=NoJitter()
+        )
+        (logo_dir / f"{config.id}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    snapshot = Snapshot(1, channels, PlayerConfig(52.0, 5.0, extra[0].id if extra else None))
+    httpd = TuneboxServer(
+        ("127.0.0.1", 0), lambda: snapshot, web, logos=logos, bursts=FakeBursts(), pin=pin
     )
-    thread.start()
+    serve(httpd)
+    return httpd
+
+
+@pytest.fixture
+def server(tmp_path: Path) -> Generator[TuneboxServer]:
+    httpd = make_server(tmp_path)
     yield httpd
     httpd.shutdown()
     httpd.server_close()
 
 
 def request(
-    httpd: TuneboxServer, path: str, method: str = "GET", headers: dict[str, str] | None = None
+    httpd: TuneboxServer,
+    path: str,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    body: bytes | None = None,
 ) -> tuple[int, dict[str, str], bytes]:
     connection = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=5)
-    connection.request(method, path, headers=headers or {})
+    connection.request(method, path, body=body, headers=headers or {})
     response = connection.getresponse()
-    body = response.read()
+    data = response.read()
     connection.close()
-    return response.status, {k.lower(): v for k, v in response.getheaders()}, body
+    return response.status, {k.lower(): v for k, v in response.getheaders()}, data
 
 
 def test_channels_list(server: TuneboxServer) -> None:
@@ -372,13 +393,6 @@ def test_player_settings_without_channels(server: TuneboxServer) -> None:
 
 
 ORIGIN = "https://radio.example"
-
-
-def serve(httpd: TuneboxServer) -> None:
-    thread = threading.Thread(
-        target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
-    )
-    thread.start()
 
 
 @pytest.fixture
@@ -671,3 +685,185 @@ def test_the_admin_gets_the_path_and_the_query_apart(tmp_path: Path) -> None:
     httpd.server_close()
     settings.close()
     assert [(r.path, r.query) for r in admin.seen] == [("/admin/api/history", "before=12")]
+
+
+SECRET_STATION = dataclasses.replace(channel_config(), id="secret", name="Secret", needs_pin=True)
+LOCKED = [
+    "/api/channels",
+    "/api/player",
+    "/api/channels/owr/now",
+    "/logos/owr.png",
+    "/logos/small/owr.png",
+]
+
+
+class PinWorld:
+    def __init__(self, tmp_path: Path, mode: str) -> None:
+        self.settings = Settings(tmp_path / "pin.db")
+        self.pin = Pin(self.settings, lambda: b"k" * 32)
+        self.pin.change(mode, "123456")
+        self.httpd = make_server(tmp_path, pin=self.pin, extra=(SECRET_STATION,))
+
+    def close(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.settings.close()
+
+
+@pytest.fixture
+def site(tmp_path: Path) -> Generator[PinWorld]:
+    made = PinWorld(tmp_path, "site")
+    yield made
+    made.close()
+
+
+@pytest.fixture
+def stations(tmp_path: Path) -> Generator[PinWorld]:
+    made = PinWorld(tmp_path, "stations")
+    yield made
+    made.close()
+
+
+def give_pin(httpd: TuneboxServer, pin: str = "123456") -> tuple[int, dict[str, str], bytes]:
+    body = json.dumps({"pin": pin}).encode()
+    return request(httpd, "/api/pin", "POST", {"Content-Type": "application/json"}, body)
+
+
+def grant_of(httpd: TuneboxServer) -> str:
+    status, headers, _ = give_pin(httpd)
+    assert status == 204
+    return headers["set-cookie"].split(";")[0]
+
+
+def test_a_locked_site_shows_the_pin_page_for_every_page(site: PinWorld) -> None:
+    for path in ["/", "/index.html", "/status.html"]:
+        status, headers, body = request(site.httpd, path)
+        assert status == 200, path
+        assert b"<title>PIN</title>" in body, path
+        assert headers["cache-control"] == "no-store", path
+        assert "content-security-policy" in headers, path
+
+
+def test_a_locked_site_refuses_the_api_and_the_logos(site: PinWorld) -> None:
+    for path in LOCKED:
+        status, headers, body = request(site.httpd, path)
+        assert (status, json.loads(body)) == (401, {"error": "pin_required"}), path
+        assert headers["cache-control"] == "no-store", path
+
+
+def test_a_locked_site_keeps_the_code_and_pawtunes_open(site: PinWorld) -> None:
+    for path in ["/app.js", "/pin.html", "/api/pawtunes/owr", "/healthz"]:
+        assert request(site.httpd, path)[0] == 200, path
+
+
+def test_the_right_pin_opens_the_site_privately(site: PinWorld) -> None:
+    status, headers, _ = give_pin(site.httpd)
+    assert status == 204
+    assert headers["cache-control"] == "no-store"
+    cookie = headers["set-cookie"].split(";")[0]
+    assert cookie.startswith("tunebox_grant=")
+    status, headers, body = request(site.httpd, "/", headers={"Cookie": cookie})
+    assert status == 200 and b"<title>t</title>" in body
+    for path in ["/", *LOCKED]:
+        status, headers, _ = request(site.httpd, path, headers={"Cookie": cookie})
+        assert status == 200, path
+        assert headers["cache-control"].startswith("private"), path
+        assert headers["vary"] == "Cookie", path
+
+
+def test_a_wrong_pin_is_refused_and_logged(
+    site: PinWorld, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO):
+        status, headers, body = give_pin(site.httpd, "654321")
+    assert (status, json.loads(body)) == (401, {"error": "pin_wrong"})
+    assert headers["cache-control"] == "no-store"
+    failed = [r for r in caplog.records if r.getMessage() == "listener_pin_failed"]
+    assert failed[0].__dict__["fields"] == {"client": "127.0.0.1", "reason": "wrong"}
+    assert "654321" not in caplog.text
+
+
+def test_ten_wrong_pins_lock_the_address(site: PinWorld) -> None:
+    for _ in range(10):
+        assert give_pin(site.httpd, "000000")[0] == 401
+    status, _, body = give_pin(site.httpd)
+    assert (status, json.loads(body)) == (429, {"error": "slow_down"})
+
+
+def test_an_old_grant_is_refused_everywhere(site: PinWorld) -> None:
+    cookie = grant_of(site.httpd)
+    site.pin.change("site", "7654321")
+    for path in LOCKED:
+        assert request(site.httpd, path, headers={"Cookie": cookie})[0] == 401, path
+    _, _, body = request(site.httpd, "/", headers={"Cookie": cookie})
+    assert b"<title>PIN</title>" in body
+
+
+@pytest.mark.parametrize(
+    ("method", "body", "status"),
+    [
+        ("GET", None, 405),
+        ("POST", b"{", 400),
+        ("POST", b'{"pin": 123456}', 400),
+        ("POST", b"x" * 300, 413),
+    ],
+)
+def test_pin_requests_that_are_not_a_pin(
+    site: PinWorld, method: str, body: bytes | None, status: int
+) -> None:
+    headers = {"Content-Type": "application/json"}
+    assert request(site.httpd, "/api/pin", method, headers, body)[0] == status
+
+
+def test_hidden_stations_are_left_out_until_the_pin(stations: PinWorld) -> None:
+    status, headers, body = request(stations.httpd, "/api/channels")
+    assert status == 200
+    assert [c["id"] for c in json.loads(body)] == ["owr"]
+    assert headers["x-tunebox-pin"] == "more"
+    assert headers["cache-control"].startswith("private")
+    for path in ["/api/channels/secret/now", "/logos/secret.png"]:
+        assert request(stations.httpd, path)[0] == 404, path
+    assert json.loads(request(stations.httpd, "/api/player")[2])["default_channel"] is None
+    assert request(stations.httpd, "/")[0] == 200
+    cookie = grant_of(stations.httpd)
+    status, headers, body = request(stations.httpd, "/api/channels", headers={"Cookie": cookie})
+    assert [c["id"] for c in json.loads(body)] == ["owr", "secret"]
+    assert "x-tunebox-pin" not in headers
+    for path in ["/api/channels/secret/now", "/logos/secret.png"]:
+        assert request(stations.httpd, path, headers={"Cookie": cookie})[0] == 200, path
+    player = json.loads(request(stations.httpd, "/api/player", headers={"Cookie": cookie})[2])
+    assert player["default_channel"] == "secret"
+
+
+def test_with_the_pin_off_nothing_is_hidden_or_private(stations: PinWorld) -> None:
+    stations.pin.change("off", None)
+    status, headers, body = request(stations.httpd, "/api/channels")
+    assert [c["id"] for c in json.loads(body)] == ["owr", "secret"]
+    assert headers["cache-control"] == "no-cache"
+    assert "vary" not in headers and "x-tunebox-pin" not in headers
+    status, headers, _ = give_pin(stations.httpd)
+    assert status == 204
+    assert "set-cookie" not in headers
+
+
+def test_the_grant_is_secure_only_when_the_proxy_says_https(site: PinWorld) -> None:
+    site.httpd.trusted = (ipaddress.ip_network("127.0.0.0/8"),)
+    body = json.dumps({"pin": "123456"}).encode()
+    for proto, secure in [("https", True), ("http", False), (None, False)]:
+        headers = {"Content-Type": "application/json"}
+        if proto:
+            headers["X-Forwarded-Proto"] = proto
+        _, answer, _ = request(site.httpd, "/api/pin", "POST", headers, body)
+        assert ("Secure" in answer["set-cookie"]) is secure, proto
+    site.httpd.trusted = ()
+    https = {"Content-Type": "application/json", "X-Forwarded-Proto": "https"}
+    _, answer, _ = request(site.httpd, "/api/pin", "POST", https, body)
+    assert "Secure" not in answer["set-cookie"]
+
+
+@pytest.mark.parametrize("header", ["X-Forwarded-For", "X-Real-IP", "Forwarded"])
+def test_healthz_detail_only_for_a_direct_local_caller(server: TuneboxServer, header: str) -> None:
+    _, _, body = request(server, "/healthz")
+    assert "channels" in json.loads(body)
+    _, _, body = request(server, "/healthz", headers={header: "for=203.0.113.9"})
+    assert json.loads(body) == {"status": "ok"}

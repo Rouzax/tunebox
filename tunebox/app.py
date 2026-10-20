@@ -23,6 +23,7 @@ from tunebox.covers import CoverService
 from tunebox.logos import Logos
 from tunebox.logs import configure, event
 from tunebox.netguard import Guard
+from tunebox.pin import Pin
 from tunebox.runtime import Runtime
 from tunebox.server import TuneboxServer
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError, StaleVersion
@@ -67,11 +68,14 @@ def main() -> int:
         return Channel(channel, build_source(channel.source, http.get), covers, store, carry=carry)
 
     runtime = Runtime(settings, make_channel, logos)
+    # Both exist with the panel off too: a PIN switched on stays on.
+    accounts = Accounts(settings)
+    pin = Pin(settings, accounts.server_key)
     admin = None
     if config.admin.enabled:
         admin_dir = Path(os.environ.get("TUNEBOX_WEB_ADMIN", str(WEB_ADMIN_DIR)))
         admin = Admin(
-            Accounts(settings),
+            accounts,
             config.admin,
             admin_dir,
             settings=settings,
@@ -93,6 +97,7 @@ def main() -> int:
             bursts=bursts,
             admin=admin,
             trusted=config.server.trusted_proxies,
+            pin=pin,
         )
     except OSError as error:
         print(f"tunebox: cannot listen on {address[0]}:{address[1]}: {error}", file=sys.stderr)

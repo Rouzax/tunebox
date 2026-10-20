@@ -347,3 +347,10 @@ def test_a_group_inside_the_document_is_refused_not_a_crash() -> None:
     doc = {**minimal()["channels"][0], "group": "Pop"}
     with pytest.raises(ConfigError, match=re.escape("channels[0].group")):
         validate_state(ConfigState(channels=(ChannelRow("owr", None, True, doc),)))
+
+
+def test_a_station_can_need_the_pin(tmp_path: Path) -> None:
+    assert parse(minimal(needs_pin=True), tmp_path).channels[0].needs_pin is True
+    assert parse(minimal(), tmp_path).channels[0].needs_pin is False
+    with pytest.raises(ConfigError, match=r"channels\[0\]\.needs_pin"):
+        parse(minimal(needs_pin="yes"), tmp_path)

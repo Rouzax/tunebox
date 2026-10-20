@@ -40,6 +40,7 @@ _CHANNEL_KEYS = {
     "group",
     "logo",
     "always",
+    "needs_pin",
     *DEFAULTS,
 }
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -79,6 +80,8 @@ class ChannelConfig:
     logo: str | None = None
     # A pinned channel is polled even while nobody listens.
     always: bool = False
+    # Hidden from devices without the PIN while the PIN is in "stations" mode.
+    needs_pin: bool = False
 
     @property
     def stream_url(self) -> str:
@@ -315,6 +318,7 @@ def _channel(table: dict[str, Any], where: str, defaults: dict[str, float]) -> C
         group=group,
         logo=logo,
         always=_bool(table, "always", f"{where}.always", False),
+        needs_pin=_bool(table, "needs_pin", f"{where}.needs_pin", False),
     )
 
 

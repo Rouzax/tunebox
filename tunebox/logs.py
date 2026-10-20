@@ -31,9 +31,9 @@ class JsonFormatter(logging.Formatter):
         if isinstance(fields, dict):
             entry.update(cast("dict[str, Any]", fields))
         if record.exc_info:
-            if ctx and ctx.startswith("admin-"):
+            if ctx and ctx.startswith(("admin-", "pin-")):
                 # Exception text can carry what was typed: a password, a
-                # code, a PIN. Admin requests log the kind of error only.
+                # code, a PIN. Admin and PIN requests log the kind of error only.
                 kind = record.exc_info[0].__name__ if record.exc_info[0] else "Exception"
                 entry["exc"] = f"{kind} (details withheld on admin requests)"
             else:
