@@ -13,6 +13,7 @@ import {createPlayer, resumesAfterPause} from './player.js';
 import {createSwitcher} from './schedule.js';
 import {createStorage} from './storage.js';
 import {bindTicker} from './ticker.js';
+import {bindPinScreen, onceAsked} from './pin.js';
 import {createToast} from './toast.js';
 import {clockOffsetMs, coverFor, displayLines, trackKey} from './tracks.js';
 import {bindVisualizer} from './visualizer.js';
@@ -40,25 +41,42 @@ async function start(root) {
         now: () => Date.now(),
         resumeAfterPause: resumesAfterPause(navigator.userAgent),
     });
+    const pin = bindPinScreen(root, api);
+    const askToListen = () => pin.ask({title: 'Enter the PIN to listen', cancellable: false});
     let listing;
     let settings;
-    try {
-        [listing, settings] = await Promise.all([api.channels(), api.player()]);
-    } catch (error) {
-        toast.show('Could not reach tunebox. Reload the page to try again.', 0);
-        return;
+    for (;;) {
+        try {
+            [listing, settings] = await Promise.all([api.channels(), api.player()]);
+            break;
+        } catch (error) {
+            if (error.status !== 401) {
+                toast.show('Could not reach tunebox. Reload the page to try again.', 0);
+                return;
+            }
+            // The site was locked after this page loaded: ask, then load again.
+            await askToListen();
+        }
     }
     const params = new URLSearchParams(window.location.search);
     const app = {
         root, events, storage, player, toast, settings,
         channels: listing.channels,
         version: listing.version,
+        morePin: listing.more,
         embed: params.get('embed') === '1',
         channel: null,
         stream: null,
         history: [],
         clockOffset: 0,
     };
+    if (!app.channels.length && listing.more) {
+        // Every station waits behind the PIN: there is nothing to show
+        // without it, so ask straight away.
+        await pin.ask({title: 'Enter the PIN for the stations', cancellable: false});
+        window.location.reload();
+        return;
+    }
     if (!app.channels.length) {
         toast.show('No stations yet.', 0);
         return;
@@ -95,7 +113,14 @@ async function start(root) {
     }
 
     const switcher = createSwitcher({show, now: () => Date.now(), setTimer: later, clearTimer: cancel});
-    const poller = createPoller({
+    // The site was locked, or its PIN changed, while listening. The audio
+    // plays on (it does not pass through tunebox); the titles follow the PIN.
+    let poller = null;
+    const locked = onceAsked(askToListen, () => {
+        refreshChannels();
+        poller.refresh();
+    });
+    poller = createPoller({
         api,
         getBufferS: () => player.bufferS(),
         getStream: () => {
@@ -119,7 +144,11 @@ async function start(root) {
             events.emit('history', {history: body.history, channel: app.channel});
         },
         onMissing: () => refreshChannels(),
-        onError: () => {
+        onError: (error) => {
+            if (error.status === 401) {
+                locked();
+                return;
+            }
             if (!unreachable) {
                 unreachable = true;
                 toast.show('Lost contact with tunebox, still trying.');
@@ -139,6 +168,7 @@ async function start(root) {
             const fresh = await api.channels();
             app.channels = fresh.channels;
             app.version = fresh.version;
+            app.morePin = fresh.more;
             const kept = keepSelection(app.channels, app.channel.id, app.stream && app.stream.name, playable);
             if (kept) {
                 app.channel = kept.channel;
@@ -186,6 +216,14 @@ async function start(root) {
             app.play();
         }
     };
+    // Stations behind the PIN ("chosen stations" mode): the channel page
+    // offers them; cancelling leaves the list as it is.
+    app.unlock = () => pin.ask({title: 'Enter the PIN for more stations', cancellable: true})
+        .then((accepted) => {
+            if (accepted) {
+                refreshChannels();
+            }
+        });
     app.step = (delta) => app.selectChannel(nextChannel(app.channels, app.channel.id, delta));
     app.play = () => {
         if (!playable(app.stream)) {

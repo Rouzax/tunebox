@@ -117,7 +117,7 @@ test('the API client asks the right paths and reads the headers', async () => {
         };
     };
     const api = createApi(fetchFn);
-    assert.deepEqual(await api.channels(), {channels: {ok: true}, version: 0});
+    assert.deepEqual(await api.channels(), {channels: {ok: true}, version: 0, more: false});
     const first = await api.now('radio-538', 31, null);
     assert.deepEqual(first, {status: 200, body: {ok: true}, etag: '"e"', date: 'Sat, 17 Oct 2026 13:00:00 GMT'});
     const second = await api.now('radio-538', 31, '"e"');
@@ -156,7 +156,7 @@ test('channels() returns the list with the configuration version', async () => {
         headers: {get: (name) => (name === 'X-Tunebox-Version' ? '3' : null)},
         json: async () => [{id: 'owr'}],
     }));
-    assert.deepEqual(await api.channels(), {channels: [{id: 'owr'}], version: 3});
+    assert.deepEqual(await api.channels(), {channels: [{id: 'owr'}], version: 3, more: false});
 });
 
 test('now() sends the stream by name, encoded', async () => {
@@ -172,4 +172,33 @@ test('now() sends the stream by name, encoded', async () => {
 test('a failed request carries its status', async () => {
     const api = createApi(async () => ({ok: false, status: 400, headers: {get: () => null}}));
     await assert.rejects(api.now('owr', 0, null, null), (error) => error.status === 400);
+});
+
+test('pin posts the PIN as JSON and gives the status back', async () => {
+    const sent = [];
+    const api = createApi(async (path, init) => {
+        sent.push({path, init});
+        return {ok: false, status: 401, headers: new Map()};
+    });
+    assert.equal(await api.pin('123456'), 401);
+    assert.equal(sent[0].path, '/api/pin');
+    assert.equal(sent[0].init.method, 'POST');
+    assert.equal(sent[0].init.headers['Content-Type'], 'application/json');
+    assert.deepEqual(JSON.parse(sent[0].init.body), {pin: '123456'});
+});
+
+test('a 401 on the channel list is an error that says 401', async () => {
+    const api = createApi(async () => ({ok: false, status: 401, headers: new Map()}));
+    await assert.rejects(api.channels(), (error) => error.status === 401);
+});
+
+test('the channel list says when stations wait behind the PIN', async () => {
+    const answer = (more) => async () => ({
+        ok: true,
+        status: 200,
+        headers: new Map([['X-Tunebox-Version', '3'], ...(more ? [['X-Tunebox-Pin', 'more']] : [])]),
+        json: async () => [],
+    });
+    assert.equal((await createApi(answer(true)).channels()).more, true);
+    assert.equal((await createApi(answer(false)).channels()).more, false);
 });

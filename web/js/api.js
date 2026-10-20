@@ -19,9 +19,25 @@ export function createApi(fetchFn) {
     return {
         // version: the configuration version; /now reports it too, and a
         // different one there means this list is out of date.
+        // more: stations wait behind the listening PIN ("chosen stations").
         async channels() {
             const response = await get('/api/channels');
-            return {channels: await response.json(), version: Number(response.headers.get('X-Tunebox-Version')) || 0};
+            return {
+                channels: await response.json(),
+                version: Number(response.headers.get('X-Tunebox-Version')) || 0,
+                more: response.headers.get('X-Tunebox-Pin') === 'more',
+            };
+        },
+        // The listening PIN: 204 when accepted (the answer sets the grant
+        // cookie), 401 when wrong, 429 when this address must wait.
+        async pin(code) {
+            const response = await fetchFn('/api/pin', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({pin: code}),
+                cache: 'no-store',
+            });
+            return response.status;
         },
         player: async () => (await get('/api/player')).json(),
         // stream: the name of the stream playing, so tunebox can add the

@@ -18,7 +18,7 @@ def test_pages_work_under_the_content_security_policy(page: Path) -> None:
 
 
 def test_there_are_pages() -> None:
-    assert {p.name for p in PAGES} >= {"index.html", "status.html", "check.html"}
+    assert {p.name for p in PAGES} >= {"index.html", "status.html", "check.html", "pin.html"}
 
 
 def test_player_page_has_the_elements_the_scripts_bind_to() -> None:
@@ -26,6 +26,7 @@ def test_player_page_has_the_elements_the_scripts_bind_to() -> None:
     classes = {name for value in re.findall(r'class="([^"]*)"', html) for name in value.split()}
     for name in [
         "tunebox",
+        "pin-screen",
         "car-daynight",
         "container-inner",
         "artwork",
@@ -64,3 +65,9 @@ def test_scripts_do_not_evaluate_strings() -> None:
     for script in scripts:
         source = script.read_text(encoding="utf-8")
         assert not re.search(r"\bnew Function\(|\beval\(", source), script.name
+
+
+def test_the_pin_page_loads_only_its_own_script() -> None:
+    html = (WEB / "pin.html").read_text(encoding="utf-8")
+    assert re.findall(r'<script[^>]*src="([^"]+)"', html) == ["/js/pinpage.js"]
+    assert 'class="pin-screen"' in html

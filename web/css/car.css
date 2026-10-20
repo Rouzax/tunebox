@@ -615,3 +615,22 @@
     font-size: 1.1rem;
     font-size: clamp(1.1rem, 1.4vw, 1.4rem);
 }
+
+/* Day: the keypad on the light theme's ground. */
+.tunebox.car-day .pin-screen {
+    color:      #1f2a37;
+    background: linear-gradient(160deg, #f6f8fb 0%, #e4eaf1 100%);
+}
+
+.tunebox.car-day .pin-keys button {
+    background: rgba(31, 42, 55, .08);
+}
+
+.tunebox.car-day .pin-keys .pin-ok {
+    color:      #fff;
+    background: var(--accent-color);
+}
+
+.tunebox.car-day .pin-error {
+    color: #b42318;
+}

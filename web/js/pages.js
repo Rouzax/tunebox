@@ -123,6 +123,11 @@ export function bindPages(app) {
             section.append(list);
             return section;
         });
+        if (app.morePin) {
+            const more = element('button', 'btn more-stations', 'More stations with the PIN');
+            more.type = 'button';
+            sections.push(more);
+        }
         replaceContent(groups, sections);
     }
 
@@ -172,6 +177,10 @@ export function bindPages(app) {
     }
 
     groups.addEventListener('click', (event) => {
+        if (event.target.closest('.more-stations')) {
+            app.unlock();
+            return;
+        }
         const choice = event.target.closest('.streams button');
         if (choice) {
             app.selectStream(choice.dataset.stream);
