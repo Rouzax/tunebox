@@ -203,7 +203,8 @@ class Admin:
         try:
             response = self._dispatch(request)
         except Exception:
-            # Logged here, inside the admin context, so the formatter
+            # Caught here so the 500 carries ADMIN_HEADERS like every other
+            # admin answer; logged inside the admin context, so the formatter
             # withholds the exception text.
             log.error("request_crashed", exc_info=True, extra={"fields": {"path": request.path}})
             response = _error(500, "internal")
@@ -249,15 +250,22 @@ class Admin:
             refused = self._refusal(request, needs_session=True, log_refusals=False)
         except SettingsUnavailable:
             return MAX_BODY
-        return MAX_BODY if refused is not None else large
+        if refused is None:
+            return large
+        declared = request.header("Content-Length") or ""
+        if declared.isdigit() and int(declared) > MAX_BODY:
+            # The server answers 413 without reading the body, so no handler
+            # will run to log this refusal.
+            self._refusal(request, needs_session=True)
+        return MAX_BODY
 
     def _refusal(
         self, request: Request, needs_session: bool, log_refusals: bool = True
     ) -> Response | None:
         """The origin, content type, session and token checks a request must
         pass before its handler runs: the refusal, or None to go on. A
-        caller that answers the refusal itself later passes log_refusals
-        False so the rejection is logged once."""
+        caller that checks ahead of the handler passes log_refusals False,
+        so the rejection is logged once, by whichever answers it."""
         if request.method == "POST":
             if not self._origin or request.header("Origin") != self._origin:
                 if log_refusals:
@@ -517,10 +525,16 @@ class Admin:
         if isinstance(target, str) and len(target) > MAX_TARGET:
             return _error(400, "bad_request")
         return self._commit(
-            payload.get("state"), based_on, "edit", target if isinstance(target, str) else None
+            payload.get("state"),
+            based_on,
+            "edit",
+            target if isinstance(target, str) else None,
+            request.client,
         )
 
-    def _commit(self, raw: object, based_on: int, kind: str, target: str | None) -> Response:
+    def _commit(
+        self, raw: object, based_on: int, kind: str, target: str | None, client: str
+    ) -> Response:
         try:
             state = state_from_dict(raw)
             validate_state(state)
@@ -535,12 +549,22 @@ class Admin:
             return _json(400, {"error": "invalid", "message": str(error)})
         except StaleVersion as error:
             return _json(409, {"error": "stale", "version": error.current})
-        if not changed:
-            return _json(200, {"version": version, "changed": False, "applied": True})
+        # An unchanged save still asks for the apply: after a failed one the
+        # stored version is ahead of the live one, and this is the retry.
         applied = self._apply() >= version
+        if not changed:
+            return _json(200, {"version": version, "changed": False, "applied": applied})
         if not applied:
-            event(log, logging.WARNING, "admin_change_not_live", version=version)
-        event(log, logging.INFO, "admin_change", kind=kind, target=target, version=version)
+            event(log, logging.WARNING, "admin_change_not_live", client=client, version=version)
+        event(
+            log,
+            logging.INFO,
+            "admin_change",
+            client=client,
+            kind=kind,
+            target=target,
+            version=version,
+        )
         return _json(200, {"version": version, "changed": True, "applied": applied})
 
     def _history(self, request: Request) -> Response:
@@ -575,7 +599,7 @@ class Admin:
             return _error(404, "not_found")
         _, before, _ = found
         raw = json.loads(state_to_json(before))
-        return self._commit(raw, based_on, "restore", f"history {entry_id}")
+        return self._commit(raw, based_on, "restore", f"history {entry_id}", request.client)
 
     def _live(self, request: Request) -> Session | None:
         """The caller's session, or None when it ended after _api checked it."""

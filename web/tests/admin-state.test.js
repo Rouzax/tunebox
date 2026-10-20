@@ -151,4 +151,6 @@ test('the save message says what happened', () => {
     assert.equal(saveMessage({changed: false, applied: true}, 'Saved.'), 'No changes to save.');
     assert.equal(saveMessage({changed: true, applied: false}, 'Saved.'),
         'Saved, but not live yet: tunebox could not start the change. The log says why.');
+    assert.equal(saveMessage({changed: false, applied: false}, 'Saved.'),
+        'Nothing new to save, but the stored change is still not live. The log says why.');
 });

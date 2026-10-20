@@ -191,3 +191,15 @@ def test_a_failed_apply_keeps_the_running_channels(harness: Harness) -> None:
     assert dict(harness.runtime.snapshot.channels) == before
     assert [made for made, _carry in harness.made] == ["owr", "new"]
     assert harness.runtime.apply() == 1
+
+
+def test_apply_recovers_once_the_bad_source_is_fixed(harness: Harness) -> None:
+    harness.commit(rows(doc("owr")))
+    assert harness.runtime.apply() == 1
+    harness.unbuildable.add("bad")
+    harness.commit(rows(doc("owr"), doc("bad")))
+    assert harness.runtime.apply() == 1
+    harness.unbuildable.clear()
+    assert harness.runtime.apply() == 2
+    assert set(harness.runtime.snapshot.channels) == {"owr", "bad"}
+    assert harness.runtime.snapshot.version == 2

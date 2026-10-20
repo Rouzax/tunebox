@@ -245,14 +245,17 @@ export function decodeHashPart(text) {
     }
 }
 
-// What a successful save tells the user: nothing stored when the state
-// equalled the stored one, and a stored change that could not go live.
+// What a successful save tells the user. A stored change that is not live
+// says so also when this save added nothing (a re-save retries the apply);
+// otherwise nothing stored when the state equalled the stored one.
 export function saveMessage(data, done) {
+    if (data.applied === false) {
+        return data.changed === false
+            ? 'Nothing new to save, but the stored change is still not live. The log says why.'
+            : 'Saved, but not live yet: tunebox could not start the change. The log says why.';
+    }
     if (data.changed === false) {
         return 'No changes to save.';
-    }
-    if (data.applied === false) {
-        return 'Saved, but not live yet: tunebox could not start the change. The log says why.';
     }
     return done;
 }

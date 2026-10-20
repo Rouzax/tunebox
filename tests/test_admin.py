@@ -1069,13 +1069,37 @@ def test_the_limit_check_logs_nothing_and_survives_an_unreadable_database(
     assert world.admin.body_limit(get) == MAX_BODY
 
 
+def test_a_refused_oversize_save_is_logged_once(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    world.login()
+    announced = ("Content-Length", str(MAX_BODY + 1))
+    head = head_only(world, "/admin/api/config", "wrong")
+    oversize = Request(head.method, head.path, (*head.headers, announced), b"", head.client)
+    with caplog.at_level(logging.WARNING):
+        assert world.admin.body_limit(oversize) == MAX_BODY
+    rejected = [r for r in caplog.records if r.getMessage() == "admin_csrf_rejected"]
+    assert len(rejected) == 1
+
+
+def test_saves_and_restores_log_the_client(world: World, caplog: pytest.LogCaptureFixture) -> None:
+    csrf = world.login()
+    world.apply_result = 0
+    with caplog.at_level(logging.INFO):
+        save(world, csrf, 0, state_of(station("owr")))
+    for name in ("admin_change_not_live", "admin_change"):
+        record = next(r for r in caplog.records if r.getMessage() == name)
+        assert record.__dict__["fields"]["client"] == "198.51.100.7"
+
+
 def test_saving_the_stored_state_again_changes_nothing(world: World) -> None:
     csrf = world.login()
     first = save(world, csrf, 0, state_of(station("owr")))
     assert json_of(first) == {"version": 1, "changed": True, "applied": True}
     again = save(world, csrf, 1, state_of(station("owr")))
     assert json_of(again) == {"version": 1, "changed": False, "applied": True}
-    assert world.applied == [1]
+    # The unchanged save asks for the apply again; apply itself is a no-op when live.
+    assert world.applied == [1, 1]
 
 
 def test_a_long_target_is_refused(world: World) -> None:
@@ -1198,6 +1222,24 @@ def test_a_save_that_cannot_go_live_says_so(world: World) -> None:
     answer = save(world, csrf, 0, state_of(station("owr")))
     assert answer.status == 200
     assert json_of(answer) == {"version": 1, "changed": True, "applied": False}
+
+
+def test_saving_again_retries_a_change_that_is_not_live(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    csrf = world.login()
+    world.apply_result = 0
+    first = save(world, csrf, 0, state_of(station("owr")))
+    assert json_of(first) == {"version": 1, "changed": True, "applied": False}
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        again = save(world, csrf, 1, state_of(station("owr")))
+        assert json_of(again) == {"version": 1, "changed": False, "applied": False}
+        world.apply_result = None
+        live = save(world, csrf, 1, state_of(station("owr")))
+    assert json_of(live) == {"version": 1, "changed": False, "applied": True}
+    assert world.applied == [1, 1, 1]
+    assert "admin_change" not in caplog.text
 
 
 def test_a_pin_change_needs_the_revision_it_was_based_on(world: World) -> None:
