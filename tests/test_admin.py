@@ -9,10 +9,10 @@ import pytest
 
 from tunebox import crypto
 from tunebox.accounts import Accounts
-from tunebox.admin import ADMIN_HEADERS, Admin, Request, Response
+from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Request, Response
 from tunebox.config import AdminConfig
 from tunebox.pin import Pin
-from tunebox.settings import Settings, SettingsWriteError
+from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
 
 ORIGIN = "https://radio.example"
 PASSWORD = "a long enough password"
@@ -938,3 +938,42 @@ def test_a_crashing_route_answers_500_with_the_admin_headers(
     assert answer.status == 500
     assert json_of(answer) == {"error": "internal"}
     assert dict(answer.headers)["Cache-Control"] == "no-store"
+
+
+def head_only(world: World, path: str, csrf: str | None, origin: str = ORIGIN) -> Request:
+    headers: list[tuple[str, str]] = [("Origin", origin), ("Content-Type", "application/json")]
+    if csrf:
+        headers.append(("X-Tunebox-CSRF", csrf))
+    if world.cookies:
+        headers.append(("Cookie", "; ".join(f"{k}={v}" for k, v in world.cookies.items())))
+    return Request("POST", path, tuple(headers), b"", "198.51.100.7")
+
+
+def test_a_large_body_needs_a_live_session_and_token(world: World) -> None:
+    path = "/admin/api/config"
+    assert world.admin.body_limit(head_only(world, path, None)) == MAX_BODY
+    csrf = world.login()
+    assert world.admin.body_limit(head_only(world, path, None)) == MAX_BODY
+    assert world.admin.body_limit(head_only(world, path, "wrong")) == MAX_BODY
+    assert world.admin.body_limit(head_only(world, path, csrf, "https://evil.example")) == MAX_BODY
+    assert world.admin.body_limit(head_only(world, path, csrf)) == MAX_STATE_BODY
+    # Only the routes that need it.
+    assert world.admin.body_limit(head_only(world, "/admin/api/pin", csrf)) == MAX_BODY
+
+
+def test_the_limit_check_logs_nothing_and_survives_an_unreadable_database(
+    world: World, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
+    with caplog.at_level(logging.DEBUG):
+        assert world.admin.body_limit(head_only(world, "/admin/api/config", "wrong")) == MAX_BODY
+        assert world.admin.body_limit(head_only(world, "/admin/api/config", csrf, "x")) == MAX_BODY
+    assert "admin_csrf_rejected" not in caplog.text
+
+    def unreadable(_token: str) -> None:
+        raise SettingsUnavailable("down")
+
+    monkeypatch.setattr(world.accounts, "session", unreadable)
+    assert world.admin.body_limit(head_only(world, "/admin/api/config", csrf)) == MAX_BODY
+    get = Request("GET", "/admin/api/config", (), b"", "198.51.100.7")
+    assert world.admin.body_limit(get) == MAX_BODY

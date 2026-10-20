@@ -47,10 +47,11 @@ log = logging.getLogger(__name__)
 
 JSON = "application/json; charset=utf-8"
 MAX_BODY = 65_536
-# A save sends the whole station list: about 40 kB for 50 stations. The
-# limit is chosen by path before any session check, so anyone may send this
-# much to that one route; the proxy's body limit bounds it in front.
+# A save sends the whole station list: about 40 kB for 50 stations. Granted
+# only to a request whose headers already pass the session checks, before
+# its body is read.
 MAX_STATE_BODY = 524_288
+LARGE_ROUTES = {"config": MAX_STATE_BODY}
 SESSION_COOKIE = "tunebox_admin"
 KNOWN_COOKIE = "tunebox_known"
 KNOWN_S = 365 * 86_400
@@ -118,11 +119,6 @@ _UINT = re.compile(r"[0-9]{1,18}")
 def _uint(text: str) -> int | None:
     """A history id: ASCII digits that fit SQLite's integer."""
     return int(text) if _UINT.fullmatch(text) else None
-
-
-def body_limit(path: str) -> int:
-    """The largest body a POST to path may send."""
-    return MAX_STATE_BODY if path == "/admin/api/config" else MAX_BODY
 
 
 def _same(given: str, expected: str) -> bool:
@@ -233,11 +229,43 @@ class Admin:
         if route is None:
             return _error(404, "not_found")
         handler, needs_session = route
+        refused = self._refusal(request, needs_session)
+        if refused is not None:
+            return refused
+        return handler(request)
+
+    def body_limit(self, request: Request) -> int:
+        """The largest body this POST may send, judged on its headers alone
+        (the body is not read yet): a large one only on a route that takes
+        one, for a live session with its token and the right origin."""
+        if request.method != "POST" or not request.path.startswith("/admin/api/"):
+            return MAX_BODY
+        large = LARGE_ROUTES.get(request.path.removeprefix("/admin/api/"))
+        if large is None:
+            return MAX_BODY
+        try:
+            refused = self._refusal(request, needs_session=True, log_refusals=False)
+        except SettingsUnavailable:
+            return MAX_BODY
+        return MAX_BODY if refused is not None else large
+
+    def _refusal(
+        self, request: Request, needs_session: bool, log_refusals: bool = True
+    ) -> Response | None:
+        """The origin, content type, session and token checks a request must
+        pass before its handler runs: the refusal, or None to go on. A
+        caller that answers the refusal itself later passes log_refusals
+        False so the rejection is logged once."""
         if request.method == "POST":
             if not self._origin or request.header("Origin") != self._origin:
-                event(
-                    log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="origin"
-                )
+                if log_refusals:
+                    event(
+                        log,
+                        logging.WARNING,
+                        "admin_csrf_rejected",
+                        client=request.client,
+                        why="origin",
+                    )
                 return _error(403, "bad_origin")
             content_type = (request.header("Content-Type") or "").split(";")[0].strip()
             if content_type != "application/json":
@@ -248,11 +276,16 @@ class Admin:
                 return _error(401, "login_required")
             given = request.header("X-Tunebox-CSRF") or ""
             if request.method == "POST" and not _same(given, session.csrf):
-                event(
-                    log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="token"
-                )
+                if log_refusals:
+                    event(
+                        log,
+                        logging.WARNING,
+                        "admin_csrf_rejected",
+                        client=request.client,
+                        why="token",
+                    )
                 return _error(403, "bad_csrf")
-        return handler(request)
+        return None
 
     def _route(self, method: str, name: str) -> tuple[Callable[[Request], Response], bool] | None:
         """The handler and whether it needs a session."""

@@ -5,12 +5,16 @@ import json
 import logging
 import socket
 import threading
+import time
 from collections.abc import Generator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from tests.fakes import FakeSource, NoJitter, channel_config
+from tests.test_admin import PASSWORD, SECRET
+from tunebox import crypto
 from tunebox.accounts import Accounts
 from tunebox.admin import MAX_BODY, MAX_STATE_BODY, Admin, Request, Response
 from tunebox.bursts import Bursts
@@ -396,14 +400,13 @@ ORIGIN = "https://radio.example"
 
 
 @pytest.fixture
-def admin_server(tmp_path: Path) -> Generator[TuneboxServer]:
+def admin_parts(tmp_path: Path) -> Generator[tuple[TuneboxServer, Accounts]]:
     settings = Settings(tmp_path / "t.db")
     web_admin = tmp_path / "web_admin"
     web_admin.mkdir()
     (web_admin / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
-    admin = Admin(
-        Accounts(settings), AdminConfig(True, False, ORIGIN), web_admin, settings=settings
-    )
+    accounts = Accounts(settings)
+    admin = Admin(accounts, AdminConfig(True, False, ORIGIN), web_admin, settings=settings)
     web = tmp_path / "web"
     web.mkdir()
     (web / "index.html").write_text("<!doctype html>", encoding="utf-8")
@@ -415,10 +418,15 @@ def admin_server(tmp_path: Path) -> Generator[TuneboxServer]:
         trusted=(ipaddress.ip_network("127.0.0.0/8"),),
     )
     serve(httpd)
-    yield httpd
+    yield httpd, accounts
     httpd.shutdown()
     httpd.server_close()
     settings.close()
+
+
+@pytest.fixture
+def admin_server(admin_parts: tuple[TuneboxServer, Accounts]) -> TuneboxServer:
+    return admin_parts[0]
 
 
 def post(
@@ -578,9 +586,8 @@ def test_the_login_log_names_the_client_behind_a_trusted_proxy(
 def test_a_body_too_large_or_without_length_is_refused(admin_server: TuneboxServer) -> None:
     headers = {"Content-Type": "application/json", "Origin": ORIGIN}
     assert post(admin_server, "/admin/api/login", b"x" * (MAX_BODY + 1), headers)[0] == 413
-    # Only a save carries the whole station list; it is still read, then
-    # refused for want of a session.
-    assert post(admin_server, "/admin/api/config", b"x" * 100_000, headers)[0] == 401
+    # Only a live session may send a save's size.
+    assert post(admin_server, "/admin/api/config", b"x" * (MAX_BODY + 1), headers)[0] == 413
     # Refused on the announced length, before any of the body is read;
     # sending it all would race the server's hang-up.
     connection = http.client.HTTPConnection("127.0.0.1", admin_server.server_address[1], timeout=5)
@@ -596,6 +603,44 @@ def test_a_body_too_large_or_without_length_is_refused(admin_server: TuneboxServ
     connection.send(b"0\r\n\r\n")
     assert connection.getresponse().status == 411
     connection.close()
+
+
+def log_in(httpd: TuneboxServer, accounts: Accounts) -> tuple[str, str]:
+    """Creates the account and logs in; the Cookie header value and the CSRF token."""
+    accounts.create(PASSWORD, SECRET, ["aaaa-bbbb-cccc"], step=0)
+    code = crypto.totp(SECRET, int(time.time() // 30))
+    connection = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=5)
+    body = json.dumps({"password": PASSWORD, "code": code}).encode()
+    connection.request(
+        "POST", "/admin/api/login", body, {"Origin": ORIGIN, "Content-Type": "application/json"}
+    )
+    response = connection.getresponse()
+    csrf = json.loads(response.read())["csrf"]
+    cookies = cast(list[str], response.headers.get_all("Set-Cookie"))
+    cookie = next(c for c in cookies if c.startswith("__Secure-tunebox_admin=")).split(";")[0]
+    connection.close()
+    return cookie, csrf
+
+
+def test_a_refused_large_body_is_not_read(admin_parts: tuple[TuneboxServer, Accounts]) -> None:
+    big = b"{" + b" " * (MAX_BODY + 10) + b"}"
+    headers = {"Origin": ORIGIN, "Content-Type": "application/json"}
+    status, _ = post(admin_parts[0], "/admin/api/config", big, headers)
+    assert status == 413
+
+
+def test_a_large_body_from_a_session_is_read(admin_parts: tuple[TuneboxServer, Accounts]) -> None:
+    httpd, accounts = admin_parts
+    cookie, csrf = log_in(httpd, accounts)
+    big = json.dumps({"pad": " " * MAX_BODY}).encode()
+    headers = {
+        "Origin": ORIGIN,
+        "Content-Type": "application/json",
+        "Cookie": cookie,
+        "X-Tunebox-CSRF": csrf,
+    }
+    status, _ = post(httpd, "/admin/api/config", big, headers)
+    assert status == 400  # read and judged, not refused for its size
 
 
 def test_post_outside_admin_is_not_allowed(server: TuneboxServer) -> None:

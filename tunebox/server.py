@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
-from tunebox.admin import ADMIN_HEADERS, Admin, Request, body_limit
+from tunebox.admin import ADMIN_HEADERS, MAX_BODY, Admin, Request
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import Network, StreamConfig
@@ -225,7 +225,14 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self._note_forwarding()
                 if self.command == "POST":
-                    read = self._read_body(body_limit(path) if is_admin else PIN_BODY, is_admin)
+                    if is_admin and self.app.admin is not None:
+                        # The headers decide how much may be read.
+                        limit = self.app.admin.body_limit(
+                            self._admin_request(path, target.query, b"")
+                        )
+                    else:
+                        limit = MAX_BODY if is_admin else PIN_BODY
+                    read = self._read_body(limit, is_admin)
                     if read is None:
                         return
                     body = read
@@ -303,9 +310,20 @@ class Handler(BaseHTTPRequestHandler):
                 event(log, level, "admin_not_nearby", client=client, peer=peer)
                 return self._send_json(404, {"error": "not_found"}, head)
         method = "GET" if head else self.command
-        headers = tuple(self.headers.items())
-        response = admin.handle(Request(method, path, headers, body, client, query))
+        response = admin.handle(self._admin_request(path, query, body, method))
         self._send(response.status, response.body, response.content_type, head, response.headers)
+
+    def _admin_request(
+        self, path: str, query: str, body: bytes, method: str | None = None
+    ) -> Request:
+        return Request(
+            method or self.command,
+            path,
+            tuple(self.headers.items()),
+            body,
+            self._client(),
+            query,
+        )
 
     def _note_forwarding(self) -> None:
         """Forwarding headers from a peer that is not a trusted proxy: either
