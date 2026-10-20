@@ -30,6 +30,8 @@ test('a busy answer retries once', () => {
     assert.equal(shouldRetry({status: 429, error: 'busy'}), true);
     assert.equal(shouldRetry({status: 429, error: 'slow_down'}), false);
     assert.equal(messageFor({status: 429, error: 'busy'}), 'Busy, trying again...');
+    assert.equal(messageFor({status: 429, error: 'busy'}, true), 'Busy. Try again in a moment.');
+    assert.equal(messageFor({status: 401, error: 'pin_wrong'}, true), 'Wrong PIN. Try again.');
     assert.equal(messageFor({status: 429, error: 'slow_down'}), 'Too many tries. Wait a few minutes and try again.');
     assert.equal(messageFor({status: 401, error: 'pin_wrong'}), 'Wrong PIN. Try again.');
     assert.equal(messageFor({status: 0, error: null}), 'Could not reach tunebox. Try again.');

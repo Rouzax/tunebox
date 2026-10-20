@@ -11,6 +11,7 @@ const MESSAGES = {
     429: 'Too many tries. Wait a few minutes and try again.',
 };
 const BUSY = 'Busy, trying again...';
+const BUSY_AGAIN = 'Busy. Try again in a moment.';
 const RETRY_MS = 2000;
 
 // The digits after a key: a digit adds one, back removes one, the rest
@@ -25,9 +26,11 @@ export function press(entry, key) {
     return entry;
 }
 
-export function messageFor(answer) {
+// retried: the answer is already the second try's, so busy is no longer
+// "trying again".
+export function messageFor(answer, retried) {
     if (shouldRetry(answer)) {
-        return BUSY;
+        return retried ? BUSY_AGAIN : BUSY;
     }
     return MESSAGES[answer.status] || 'Could not reach tunebox. Try again.';
 }
@@ -175,9 +178,9 @@ export function bindPinScreen(root, api, options) {
         }
     }
 
-    async function send() {
+    async function send(digits) {
         try {
-            return await api.pin(entry);
+            return await api.pin(digits);
         } catch (failure) {
             return {status: 0, error: null};
         }
@@ -189,17 +192,23 @@ export function bindPinScreen(root, api, options) {
         }
         sending = true;
         draw();
-        let answer = await send();
+        // The retry sends what was asked, and only to the same asking: a
+        // keypad cancelled and opened again meanwhile holds another entry,
+        // and sending that would count as a wrong PIN.
+        const asked = waiting;
+        const sent = entry;
+        let answer = await send(sent);
+        let retried = false;
         if (shouldRetry(answer)) {
             say(messageFor(answer));
             await new Promise((done) => setTimeout(done, RETRY_MS));
-            // Cancelled during the wait: the keypad is gone, send nothing.
-            if (!waiting) {
+            if (waiting !== asked) {
                 sending = false;
                 draw();
                 return;
             }
-            answer = await send();
+            answer = await send(sent);
+            retried = true;
         }
         sending = false;
         if (answer.status === 204 && waiting) {
@@ -207,7 +216,7 @@ export function bindPinScreen(root, api, options) {
             return;
         }
         entry = '';
-        say(messageFor(answer));
+        say(messageFor(answer, retried));
         draw();
     }
 
