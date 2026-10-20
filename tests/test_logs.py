@@ -1,11 +1,12 @@
 import io
 import json
 import logging
+import sys
 from pathlib import Path
 
 import pytest
 
-from tunebox.logs import add_file, bound, configure, event
+from tunebox.logs import JsonFormatter, add_file, bound, configure, event
 
 
 def lines(buffer: io.StringIO) -> list[dict[str, object]]:
@@ -51,7 +52,7 @@ def test_admin_crash_logs_no_input() -> None:
     buffer = io.StringIO()
     configure("info", buffer)
     log = logging.getLogger("tunebox.test")
-    with bound("admin"):
+    with bound("admin", sensitive=True):
         try:
             int("secret-pin-1234")
         except ValueError:
@@ -71,7 +72,7 @@ def test_pin_requests_withhold_exception_text() -> None:
     buffer = io.StringIO()
     configure("info", buffer)
     log = logging.getLogger("tunebox.test")
-    with bound("pin"):
+    with bound("pin", sensitive=True):
         try:
             int("secret-pin-1234")
         except ValueError:
@@ -97,3 +98,20 @@ def test_a_log_file_gets_the_same_lines_and_rotates(tmp_path: Path) -> None:
         "tunebox.log.2",
     ]
     configure("info", io.StringIO())
+
+
+def test_sensitive_blocks_withhold_exception_text_whatever_their_name() -> None:
+    formatter = JsonFormatter()
+    with bound("job", sensitive=True):
+        try:
+            raise ValueError("the password was hunter2")
+        except ValueError:
+            record = logging.LogRecord("t", logging.ERROR, "", 0, "x", None, sys.exc_info())
+            line = formatter.format(record)
+    assert "hunter2" not in line
+    with bound("admin"):
+        try:
+            raise ValueError("visible")
+        except ValueError:
+            record = logging.LogRecord("t", logging.ERROR, "", 0, "x", None, sys.exc_info())
+            assert "visible" in formatter.format(record)

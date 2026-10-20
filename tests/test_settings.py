@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import sqlite3
 from collections.abc import Generator
@@ -61,7 +62,7 @@ def test_commit_round_trips_and_bumps_the_version(settings: Settings) -> None:
     wanted = ConfigState(wanted.defaults, {"default_channel": "a"}, wanted.groups, wanted.channels)
     assert settings.commit(wanted, 0, "test") == 1
     assert settings.load() == (wanted, 1)
-    assert settings.history_count() == 1
+    assert len(settings.history(None)[0]) == 1
 
 
 def test_a_stale_version_is_refused_and_changes_nothing(settings: Settings) -> None:
@@ -87,7 +88,7 @@ def test_adopt_file_commits_only_a_difference(settings: Settings) -> None:
     assert settings.adopt_file(state("a", group="G")) == 1
     assert settings.adopt_file(state("a", group="G")) is None
     assert settings.adopt_file(state("a", "b", group="G")) == 2
-    assert settings.history_count() == 2
+    assert len(settings.history(None)[0]) == 2
 
 
 def test_data_survives_reopening(tmp_path: Path) -> None:
@@ -224,3 +225,22 @@ def test_schema_3_adds_the_pin_table_and_the_reauth_column(settings: Settings) -
     assert "listener_pin" in tables
     assert "reauth_at" in columns
     assert version == len(MIGRATIONS) == 3
+
+
+def test_an_unchanged_state_is_not_stored_again(settings: Settings) -> None:
+    first = settings.commit(state("a"), 0, "edit")
+    again = settings.commit(state("a"), first, "edit")
+    assert again == first
+    assert settings.commit_changed(state("a"), first, "edit") == (first, False)
+    assert len(settings.history(None)[0]) == 1
+
+
+def test_each_migration_is_logged(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+    Settings(tmp_path / "new.db").close()
+    versions = [
+        r.__dict__["fields"]["version"]
+        for r in caplog.records
+        if r.getMessage() == "migration_applied"
+    ]
+    assert versions == list(range(1, len(MIGRATIONS) + 1))

@@ -51,6 +51,8 @@ MAX_BODY = 65_536
 # only to a request whose headers already pass the session checks, before
 # its body is read.
 MAX_STATE_BODY = 524_288
+# Longest history target a save may carry.
+MAX_TARGET = 200
 LARGE_ROUTES = {"config": MAX_STATE_BODY}
 SESSION_COOKIE = "tunebox_admin"
 KNOWN_COOKIE = "tunebox_known"
@@ -511,6 +513,8 @@ class Admin:
         if payload is None or based_on is None:
             return _error(400, "bad_request")
         target = payload.get("target")
+        if isinstance(target, str) and len(target) > MAX_TARGET:
+            return _error(400, "bad_request")
         return self._commit(
             payload.get("state"), based_on, "edit", target if isinstance(target, str) else None
         )
@@ -521,14 +525,16 @@ class Admin:
             refused = self._refused_rule(state)
             if refused:
                 return _json(400, {"error": "invalid", "message": refused})
-            version = self._settings.commit(state, based_on, kind, target)
+            version, changed = self._settings.commit_changed(state, based_on, kind, target)
         except ConfigError as error:
             return _json(400, {"error": "invalid", "message": str(error)})
         except StaleVersion as error:
             return _json(409, {"error": "stale", "version": error.current})
+        if not changed:
+            return _json(200, {"version": version, "changed": False})
         self._apply()
         event(log, logging.INFO, "admin_change", kind=kind, target=target, version=version)
-        return _json(200, {"version": version})
+        return _json(200, {"version": version, "changed": True})
 
     def _refused_rule(self, state: ConfigState) -> str | None:
         """Lints every rule, and runs the ones not stored yet in a child

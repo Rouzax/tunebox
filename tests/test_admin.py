@@ -535,7 +535,7 @@ def test_config_round_trip_applies_and_records(world: World) -> None:
         {"based_on": 0, "state": state_of(station("a"), station("b")), "target": "a"},
         csrf=csrf,
     )
-    assert json_of(answer) == {"version": 1}
+    assert json_of(answer) == {"version": 1, "changed": True}
     assert world.applied == [1]
     loaded = json_of(world.call("GET", "/admin/api/config"))
     assert [c["id"] for c in loaded["state"]["channels"]] == ["a", "b"]
@@ -659,7 +659,7 @@ def test_restore_applies_the_old_state(world: World) -> None:
     restore = f"/admin/api/history/{entries[0]['id']}/restore"
     assert world.call("POST", restore, {"based_on": 1}, csrf=csrf).status == 409
     answer = world.call("POST", restore, {"based_on": 2}, csrf=csrf)
-    assert json_of(answer) == {"version": 3}
+    assert json_of(answer) == {"version": 3, "changed": True}
     stored = json_of(world.call("GET", "/admin/api/config"))["state"]
     assert [c["id"] for c in stored["channels"]] == ["a"]
     assert world.applied == [1, 1, 1]
@@ -977,3 +977,18 @@ def test_the_limit_check_logs_nothing_and_survives_an_unreadable_database(
     assert world.admin.body_limit(head_only(world, "/admin/api/config", csrf)) == MAX_BODY
     get = Request("GET", "/admin/api/config", (), b"", "198.51.100.7")
     assert world.admin.body_limit(get) == MAX_BODY
+
+
+def test_saving_the_stored_state_again_changes_nothing(world: World) -> None:
+    csrf = world.login()
+    first = save(world, csrf, 0, state_of(station("owr")))
+    assert json_of(first) == {"version": 1, "changed": True}
+    again = save(world, csrf, 1, state_of(station("owr")))
+    assert json_of(again) == {"version": 1, "changed": False}
+    assert world.applied == [1]
+
+
+def test_a_long_target_is_refused(world: World) -> None:
+    csrf = world.login()
+    body = {"based_on": 0, "state": state_of(station("owr")), "target": "x" * 201}
+    assert world.call("POST", "/admin/api/config", body, csrf=csrf).status == 400

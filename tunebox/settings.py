@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -20,6 +21,9 @@ from pathlib import Path
 from typing import Any, cast
 
 from tunebox.config import ChannelRow, ConfigError, ConfigState, validate_state
+from tunebox.logs import event
+
+log = logging.getLogger(__name__)
 
 # Each entry upgrades the schema by one version; never edit a released one.
 # Statements are separated by ";" and contain none themselves.
@@ -211,11 +215,6 @@ class Settings:
             except sqlite3.Error as error:
                 raise SettingsUnavailable(str(error)) from error
 
-    def history_count(self) -> int:
-        with self._lock:
-            row = self._db.execute("SELECT COUNT(*) FROM history").fetchone()
-        return cast(int, row[0])
-
     def adopt_file(self, state: ConfigState) -> int | None:
         """Takes the stations from tunebox.toml when they differ from the
         stored ones; returns the new version, or None when nothing changed.
@@ -272,9 +271,16 @@ class Settings:
     def commit(
         self, state: ConfigState, based_on: int, kind: str, target: str | None = None
     ) -> int:
+        return self.commit_changed(state, based_on, kind, target)[0]
+
+    def commit_changed(
+        self, state: ConfigState, based_on: int, kind: str, target: str | None = None
+    ) -> tuple[int, bool]:
         """Stores a whole new state if the stored one is still version
-        based_on, and returns the new version. The change, its history entry
-        and the version bump commit together or not at all."""
+        based_on; returns the version now stored and whether this changed
+        it. The change, its history entry and the version bump commit
+        together or not at all. A state equal to the stored one stores
+        nothing, so the history holds changes only."""
         validate_state(state)
         after = state_to_json(state)
         with self.transaction() as db:
@@ -282,6 +288,8 @@ class Settings:
             if version != based_on:
                 raise StaleVersion(version)
             before = self._read_state()
+            if state_to_json(before) == after:
+                return version, False
             if any(c.enabled for c in before.channels) and not any(
                 c.enabled for c in state.channels
             ):
@@ -293,7 +301,7 @@ class Settings:
                 (self._clock(), kind, target, state_to_json(before), after),
             )
             db.execute("UPDATE config_version SET version = ?", (version + 1,))
-        return version + 1
+        return version + 1, True
 
     @contextlib.contextmanager
     def transaction(self) -> Generator[sqlite3.Connection]:
@@ -399,3 +407,4 @@ def _migrate(db: sqlite3.Connection) -> None:
             if db.in_transaction:
                 db.execute("ROLLBACK")
             raise
+        event(log, logging.INFO, "migration_applied", version=number + 1)

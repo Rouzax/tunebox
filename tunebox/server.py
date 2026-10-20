@@ -219,9 +219,11 @@ class Handler(BaseHTTPRequestHandler):
             # GET and HEAD bodies are never read, so on a kept-alive connection
             # the body would be parsed as the next request. Answer, then hang up.
             self.close_connection = True
-        # The admin- and pin- contexts also tell the log formatter to
-        # withhold exception text, which can carry what was typed.
-        with bound("admin" if is_admin else "pin" if is_pin else "req"):
+        # Admin and PIN requests are sensitive: the log formatter withholds
+        # exception text, which can carry what was typed.
+        with bound(
+            "admin" if is_admin else "pin" if is_pin else "req", sensitive=is_admin or is_pin
+        ):
             try:
                 self._note_forwarding()
                 if self.command == "POST":

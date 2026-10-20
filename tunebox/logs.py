@@ -21,6 +21,11 @@ LOG_FILE_BACKUPS = 5
 
 context_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("context_id", default=None)
 
+# Set inside a block whose exceptions can carry what someone typed.
+sensitive: contextvars.ContextVar[bool] = contextvars.ContextVar("sensitive", default=False)
+# bound() has a parameter of the same name.
+_sensitive = sensitive
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -38,11 +43,11 @@ class JsonFormatter(logging.Formatter):
         if isinstance(fields, dict):
             entry.update(cast("dict[str, Any]", fields))
         if record.exc_info:
-            if ctx and ctx.startswith(("admin-", "pin-")):
+            if sensitive.get():
                 # Exception text can carry what was typed: a password, a
-                # code, a PIN. Admin and PIN requests log the kind of error only.
+                # code, a PIN. Such blocks log the kind of error only.
                 kind = record.exc_info[0].__name__ if record.exc_info[0] else "Exception"
-                entry["exc"] = f"{kind} (details withheld on admin requests)"
+                entry["exc"] = f"{kind} (details withheld)"
             else:
                 entry["exc"] = self.formatException(record.exc_info)
         # json.dumps escapes control characters, so source data cannot forge a line.
@@ -55,13 +60,16 @@ def event(logger: logging.Logger, level: int, name: str, **fields: object) -> No
 
 
 @contextlib.contextmanager
-def bound(prefix: str) -> Generator[str]:
-    """Tags every line logged inside the block with one id (a request, a poll)."""
+def bound(prefix: str, sensitive: bool = False) -> Generator[str]:
+    """Tags every line logged inside the block with one id (a request, a
+    poll). A sensitive block logs the kind of an exception, not its text."""
     ctx = f"{prefix}-{secrets.token_hex(4)}"
     token = context_id.set(ctx)
+    flag = _sensitive.set(sensitive)
     try:
         yield ctx
     finally:
+        _sensitive.reset(flag)
         context_id.reset(token)
 
 
