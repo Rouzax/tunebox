@@ -18,7 +18,16 @@ from pathlib import Path
 from typing import Any, cast
 
 from tunebox import crypto
-from tunebox.accounts import ABSOLUTE_S, AccountError, Accounts, Outcome, Session, session_id
+from tunebox.accounts import (
+    ABSOLUTE_S,
+    AccountError,
+    Accounts,
+    Outcome,
+    PasswordTooShort,
+    Session,
+    SessionEnded,
+    session_id,
+)
 from tunebox.config import (
     CODECS,
     DEFAULTS,
@@ -30,7 +39,7 @@ from tunebox.config import (
 )
 from tunebox.logs import event
 from tunebox.paths import inside
-from tunebox.pin import Pin, PinError, read_cookie
+from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, read_cookie
 from tunebox.rulecheck import check, lint
 from tunebox.sessions import KNOWN_S, Gate
 from tunebox.settings import (
@@ -331,7 +340,16 @@ class Admin:
             }
         return _json(
             200,
-            {"account": self._accounts.exists(), "setup": self._setup_open(), "session": detail},
+            {
+                "account": self._accounts.exists(),
+                "setup": self._setup_open(),
+                "session": detail,
+                "limits": {
+                    "password_min": crypto.MIN_PASSWORD,
+                    "pin_min": PIN_MIN,
+                    "pin_max": PIN_MAX,
+                },
+            },
         )
 
     def _login(self, request: Request) -> Response:
@@ -452,8 +470,6 @@ class Admin:
         secret = self._setup_secret
         if not self._setup_allowed(request, body["token"]) or secret is None:
             return _error(401, "setup_refused")
-        if len(body["password"]) < crypto.MIN_PASSWORD:
-            return _error(400, "password_too_short")
         try:
             body["password"].encode()
         except UnicodeEncodeError:  # a lone surrogate from a JSON escape
@@ -467,6 +483,8 @@ class Admin:
                 return self._limited(request, "busy")
             try:
                 self._accounts.create(body["password"], secret, codes, step)
+            except PasswordTooShort:
+                return _error(400, "password_too_short")
             except AccountError:
                 return _error(401, "setup_refused")
         self._setup_token = None
@@ -572,19 +590,24 @@ class Admin:
         raw = json.loads(state_to_json(before))
         return self._commit(raw, based_on, "restore", f"history {entry_id}")
 
-    def _live(self, request: Request) -> Session:
-        """The caller's session; _api has checked that there is one."""
-        session = self._session(request)
-        if session is None:
-            raise SettingsUnavailable("the session ended during the request")
-        return session
+    def _live(self, request: Request) -> Session | None:
+        """The caller's session, or None when it ended after _api checked it."""
+        return self._session(request)
 
-    def _fresh(self, request: Request) -> Session | None:
+    def _fresh(self, request: Request) -> Session | Response:
+        """The caller's session when it typed a code recently; else the
+        answer to give (401 when it has ended, 403 when it is not fresh)."""
         session = self._live(request)
-        return session if self._accounts.fresh(session) else None
+        if session is None:
+            return _error(401, "login_required")
+        if not self._accounts.fresh(session):
+            return _error(403, "reauth_required")
+        return session
 
     def _account(self, request: Request) -> Response:
         session = self._live(request)
+        if session is None:
+            return _error(401, "login_required")
         mine = session_id(session.token_hash)
         listed = [
             {**dataclasses.asdict(s), "current": s.id == mine} for s in self._accounts.sessions()
@@ -595,12 +618,16 @@ class Admin:
         body = _body(request, ("code",))
         if body is None:
             return _error(400, "bad_request")
+        # Read before reserving: a session that is gone spends no slot.
+        session = self._live(request)
+        if session is None:
+            return _error(401, "login_required")
         release = self.gate.reserve(request.client)
         if release is None:
             # Not why=address, which the CrowdSec ban scenario counts: this
             # is someone with a session typing codes wrong.
             return self._limited(request, "reauth")
-        reason = self._accounts.reauth(self._live(request), body["code"])
+        reason = self._accounts.reauth(session, body["code"])
         if reason == "unavailable":
             release()
             return _error(503, "read_only")
@@ -617,11 +644,9 @@ class Admin:
         if body is None:
             return _error(400, "bad_request")
         session = self._fresh(request)
-        if session is None:
-            return _error(403, "reauth_required")
+        if isinstance(session, Response):
+            return session
         password = body["password"]
-        if len(password) < crypto.MIN_PASSWORD:
-            return _error(400, "password_too_short")
         try:
             password.encode()
         except UnicodeEncodeError:  # a lone surrogate from a JSON escape
@@ -629,14 +654,21 @@ class Admin:
         with self.gate.hashing() as took:
             if not took:
                 return self._limited(request, "busy")
-            self._accounts.change_password(session, password)
+            try:
+                generation = self._accounts.change_password(session, password)
+            except PasswordTooShort:
+                return _error(400, "password_too_short")
+            except SessionEnded:
+                return _error(401, "login_required")
+            except AccountError as error:
+                return _json(400, {"error": "invalid", "message": str(error)})
         event(log, logging.INFO, "admin_change", kind="password", client=request.client)
-        return Response(204, headers=(self._known_grant(self._accounts.generation()),))
+        return Response(204, headers=(self._known_grant(generation),))
 
     def _totp_start(self, request: Request) -> Response:
         session = self._fresh(request)
-        if session is None:
-            return _error(403, "reauth_required")
+        if isinstance(session, Response):
+            return session
         secret = crypto.new_totp_secret()
         self.gate.hold_totp(session.token_hash, secret)
         return _json(200, {"secret": crypto.secret_text(secret), "uri": crypto.otpauth_uri(secret)})
@@ -646,31 +678,40 @@ class Admin:
         if body is None:
             return _error(400, "bad_request")
         session = self._fresh(request)
-        if session is None:
-            return _error(403, "reauth_required")
+        if isinstance(session, Response):
+            return session
         secret = self.gate.take_totp(session.token_hash)
         if secret is None:
             return _error(400, "no_new_secret")
         step = crypto.matching_step(secret, body["code"].strip(), self._clock(), -1)
         if step is None:
             return _error(400, "code_wrong")
-        self._accounts.replace_totp(session, secret, step)
+        try:
+            generation = self._accounts.replace_totp(session, secret, step)
+        except SessionEnded:
+            return _error(401, "login_required")
         # Every session but this one has ended; their waiting secrets too.
         self.gate.drop_totp(keep=())
         event(log, logging.INFO, "admin_change", kind="totp", client=request.client)
-        return Response(204, headers=(self._known_grant(self._accounts.generation()),))
+        return Response(204, headers=(self._known_grant(generation),))
 
     def _recovery(self, request: Request) -> Response:
         session = self._fresh(request)
-        if session is None:
-            return _error(403, "reauth_required")
-        codes = self._accounts.replace_recovery_codes(session)
+        if isinstance(session, Response):
+            return session
+        try:
+            codes, generation = self._accounts.replace_recovery_codes(session)
+        except SessionEnded:
+            return _error(401, "login_required")
         event(log, logging.INFO, "admin_change", kind="recovery_codes", client=request.client)
-        return _json(200, {"recovery_codes": codes}, self._known_grant(self._accounts.generation()))
+        return _json(200, {"recovery_codes": codes}, self._known_grant(generation))
 
     def _end_session(self, request: Request) -> Response:
         wanted = request.path.removeprefix("/admin/api/account/sessions/").split("/")[0]
-        if wanted == session_id(self._live(request).token_hash):
+        session = self._live(request)
+        if session is None:
+            return _error(401, "login_required")
+        if wanted == session_id(session.token_hash):
             return _error(400, "this_session")
         ended = self._accounts.end_session(wanted)
         if ended is None:

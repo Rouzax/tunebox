@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from tunebox import crypto
-from tunebox.accounts import Accounts
+from tunebox.accounts import AccountError, Accounts, SessionEnded
 from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Request, Response
 from tunebox.config import AdminConfig
 from tunebox.pin import Pin
@@ -1027,3 +1027,77 @@ def test_the_floor_follows_every_other_work_of_a_failed_login(
     monkeypatch.setattr(world.accounts, "totp_suspected", suspected)
     world.call("POST", "/admin/api/login", {"password": PASSWORD, "code": "000000"})
     assert order == ["read", "floor"]
+
+
+def test_a_password_change_whose_session_ended_asks_to_log_in(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+
+    def ended(_session: object, _password: str) -> int:
+        raise SessionEnded("the session ended")
+
+    monkeypatch.setattr(world.accounts, "change_password", ended)
+    answer = world.call(
+        "POST", "/admin/api/account/password", {"password": "another long password"}, csrf=csrf
+    )
+    assert answer.status == 401
+    assert json_of(answer) == {"error": "login_required"}
+
+
+def test_recovery_codes_are_shown_even_when_the_generation_cannot_be_read_again(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+
+    def unreadable() -> int:
+        raise SettingsUnavailable("locked")
+
+    monkeypatch.setattr(world.accounts, "generation", unreadable)
+    answer = world.call("POST", "/admin/api/account/recovery", {}, csrf=csrf)
+    assert answer.status == 200
+    assert json_of(answer)["recovery_codes"]
+
+
+def test_an_account_rule_is_a_400_not_a_500(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+
+    def refuse(_session: object, _password: str) -> int:
+        raise AccountError("some future rule")
+
+    monkeypatch.setattr(world.accounts, "change_password", refuse)
+    answer = world.call(
+        "POST", "/admin/api/account/password", {"password": "another long password"}, csrf=csrf
+    )
+    assert answer.status == 400
+    assert json_of(answer) == {"error": "invalid", "message": "some future rule"}
+
+
+def test_a_reauth_whose_session_ended_gives_its_slot_back(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
+
+    def gone(_request: Request) -> None:
+        return None
+
+    monkeypatch.setattr(world.admin, "_live", gone)
+    for _ in range(6):
+        answer = world.call("POST", "/admin/api/account/reauth", {"code": "000000"}, csrf=csrf)
+        assert answer.status == 401
+    monkeypatch.undo()
+    assert (
+        world.call("POST", "/admin/api/account/reauth", {"code": world.code(1)}, csrf=csrf).status
+        == 204
+    )
+
+
+def test_state_names_the_limits(world: World) -> None:
+    assert json_of(world.call("GET", "/admin/api/state"))["limits"] == {
+        "password_min": 12,
+        "pin_min": 6,
+        "pin_max": 8,
+    }

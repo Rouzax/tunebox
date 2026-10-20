@@ -10,7 +10,9 @@ from tunebox.accounts import (
     REAUTH_S,
     AccountError,
     Accounts,
+    PasswordTooShort,
     Session,
+    SessionEnded,
     session_id,
 )
 from tunebox.settings import Settings
@@ -312,7 +314,7 @@ def test_the_code_that_confirmed_a_new_secret_cannot_log_in(
 def test_new_recovery_codes_replace_the_old_ones(accounts: Accounts, clock: Clock) -> None:
     mine = login(accounts, clock)
     other = login(accounts, clock, offset=1, address="b")
-    codes = accounts.replace_recovery_codes(live(accounts, mine))
+    codes, _ = accounts.replace_recovery_codes(live(accounts, mine))
     assert len(codes) == 10 and len(set(codes)) == 10
     assert accounts.session(other) is None
     assert accounts.login(PASSWORD, "aaaa-bbbb-cccc", "a", "b").reason == "recovery"
@@ -326,3 +328,40 @@ def test_account_changes_clear_the_wrong_code_count(accounts: Accounts, clock: C
     assert accounts.totp_suspected()
     accounts.change_password(live(accounts, mine), "another long password")
     assert not accounts.totp_suspected()
+
+
+def test_a_change_whose_session_ended_changes_nothing(
+    accounts: Accounts, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mine = live(accounts, login(accounts, clock))
+    other = login(accounts, clock, offset=1, address="b")
+    real = crypto.hash_password
+
+    def hash_then_end(password: str) -> str:
+        # Another browser signs this session out while scrypt runs.
+        accounts.end_session(session_id(mine.token_hash))
+        return real(password)
+
+    monkeypatch.setattr(crypto, "hash_password", hash_then_end)
+    with pytest.raises(SessionEnded):
+        accounts.change_password(mine, "another long password")
+    assert accounts.session(other) is not None
+    assert accounts.login("another long password", code(clock, 2), "c", "ua").reason == "password"
+
+
+def test_changes_return_the_new_generation(accounts: Accounts, clock: Clock) -> None:
+    mine = live(accounts, login(accounts, clock))
+    before = accounts.generation()
+    assert accounts.change_password(mine, "another long password") == before + 1
+    codes, generation = accounts.replace_recovery_codes(mine)
+    assert len(codes) == 10 and generation == before + 2
+    step = int(clock.now // 30) + 1
+    assert accounts.replace_totp(mine, NEW_SECRET, step) == before + 3
+
+
+def test_a_short_password_is_its_own_error(accounts: Accounts, clock: Clock) -> None:
+    mine = live(accounts, login(accounts, clock))
+    with pytest.raises(PasswordTooShort):
+        accounts.change_password(mine, "short")
+    with pytest.raises(PasswordTooShort):
+        accounts.create("short", SECRET, [], step=0, replace=True)

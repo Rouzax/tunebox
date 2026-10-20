@@ -41,6 +41,14 @@ class AccountError(Exception):
     pass
 
 
+class PasswordTooShort(AccountError):
+    pass
+
+
+class SessionEnded(AccountError):
+    """The session asking for a change ended before the change committed."""
+
+
 @dataclass(frozen=True)
 class Session:
     token_hash: str
@@ -117,7 +125,7 @@ class Accounts:
         so that code cannot log in afterwards. Replacing ends every session
         and every known-browser grant."""
         if len(password) < crypto.MIN_PASSWORD:
-            raise AccountError(f"the password needs at least {crypto.MIN_PASSWORD} characters")
+            raise PasswordTooShort(f"the password needs at least {crypto.MIN_PASSWORD} characters")
         stored = crypto.hash_password(password)
         now = self._clock()
         with self._settings.transaction() as db:
@@ -250,19 +258,19 @@ class Accounts:
         except SettingsWriteError:
             pass
 
-    def change_password(self, session: Session, password: str) -> None:
+    def change_password(self, session: Session, password: str) -> int:
         if len(password) < crypto.MIN_PASSWORD:
-            raise AccountError(f"the password needs at least {crypto.MIN_PASSWORD} characters")
+            raise PasswordTooShort(f"the password needs at least {crypto.MIN_PASSWORD} characters")
         # Hashed before the transaction: scrypt takes 0.1 s and must not hold
         # the database lock.
         stored = crypto.hash_password(password)
-        self._replace(session, "password_hash = ?", (stored,))
+        return self._replace(session, "password_hash = ?", (stored,))
 
-    def replace_totp(self, session: Session, secret: bytes, step: int) -> None:
+    def replace_totp(self, session: Session, secret: bytes, step: int) -> int:
         """step is the one the confirming code used, so it cannot log in."""
-        self._replace(session, "totp_secret = ?, totp_last_step = ?", (secret, step))
+        return self._replace(session, "totp_secret = ?, totp_last_step = ?", (secret, step))
 
-    def replace_recovery_codes(self, session: Session) -> list[str]:
+    def replace_recovery_codes(self, session: Session) -> tuple[list[str], int]:
         codes = crypto.new_recovery_codes()
 
         def store(db: sqlite3.Connection) -> None:
@@ -272,8 +280,7 @@ class Accounts:
                 [(crypto.code_hash(code),) for code in codes],
             )
 
-        self._replace(session, "", (), store)
-        return codes
+        return codes, self._replace(session, "", (), store)
 
     def _replace(
         self,
@@ -281,13 +288,21 @@ class Accounts:
         assignments: str,
         params: tuple[object, ...],
         also: Callable[[sqlite3.Connection], None] | None = None,
-    ) -> None:
+    ) -> int:
         """Changes the account and, in the same transaction, ends every other
         session and raises the generation, which voids every known-browser
-        grant. Someone who had the old secret is out once this commits."""
+        grant; returns the new generation. Someone who had the old secret is
+        out once this commits. The caller's session is checked inside the
+        transaction: a session ended meanwhile (a sign-out from another
+        browser) must not get its change through."""
         # assignments is one of the constant strings above, never input.
         sets = f"{assignments}, " if assignments else ""
         with self._settings.transaction() as db:
+            alive = db.execute(
+                "SELECT 1 FROM sessions WHERE token_hash = ?", (session.token_hash,)
+            ).fetchone()
+            if alive is None:
+                raise SessionEnded("the session ended")
             db.execute(
                 f"UPDATE admin SET {sets}generation = generation + 1, updated_at = ?,"
                 " totp_fail_count = 0, totp_fail_since = NULL, totp_fail_last = NULL",
@@ -296,6 +311,8 @@ class Accounts:
             if also is not None:
                 also(db)
             db.execute("DELETE FROM sessions WHERE token_hash != ?", (session.token_hash,))
+            row = db.execute("SELECT generation FROM admin").fetchone()
+        return cast(int, row[0])
 
     def sessions(self) -> list[SessionInfo]:
         now = self._clock()
