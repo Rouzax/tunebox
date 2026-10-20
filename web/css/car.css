@@ -631,6 +631,10 @@
     background: var(--accent-color);
 }
 
+.tunebox.car-day .pin-stop {
+    color: #1f2a37;
+}
+
 .tunebox.car-day .pin-error {
     color: #b42318;
 }

@@ -117,7 +117,7 @@ test('the API client asks the right paths and reads the headers', async () => {
         };
     };
     const api = createApi(fetchFn);
-    assert.deepEqual(await api.channels(), {channels: {ok: true}, version: 0, more: false});
+    assert.deepEqual(await api.channels(), {channels: {ok: true}, version: 0, more: false, pin: ''});
     const first = await api.now('radio-538', 31, null);
     assert.deepEqual(first, {status: 200, body: {ok: true}, etag: '"e"', date: 'Sat, 17 Oct 2026 13:00:00 GMT'});
     const second = await api.now('radio-538', 31, '"e"');
@@ -156,7 +156,7 @@ test('channels() returns the list with the configuration version', async () => {
         headers: {get: (name) => (name === 'X-Tunebox-Version' ? '3' : null)},
         json: async () => [{id: 'owr'}],
     }));
-    assert.deepEqual(await api.channels(), {channels: [{id: 'owr'}], version: 3, more: false});
+    assert.deepEqual(await api.channels(), {channels: [{id: 'owr'}], version: 3, more: false, pin: ''});
 });
 
 test('now() sends the stream by name, encoded', async () => {
@@ -178,9 +178,9 @@ test('pin posts the PIN as JSON and gives the status back', async () => {
     const sent = [];
     const api = createApi(async (path, init) => {
         sent.push({path, init});
-        return {ok: false, status: 401, headers: new Map()};
+        return {ok: false, status: 401, headers: new Map(), json: async () => ({error: 'pin_wrong'})};
     });
-    assert.equal(await api.pin('123456'), 401);
+    assert.deepEqual(await api.pin('123456'), {status: 401, error: 'pin_wrong'});
     assert.equal(sent[0].path, '/api/pin');
     assert.equal(sent[0].init.method, 'POST');
     assert.equal(sent[0].init.headers['Content-Type'], 'application/json');
@@ -201,4 +201,14 @@ test('the channel list says when stations wait behind the PIN', async () => {
     });
     assert.equal((await createApi(answer(true)).channels()).more, true);
     assert.equal((await createApi(answer(false)).channels()).more, false);
+});
+
+test('channels carries the pin revision and pin() the error', async () => {
+    const api = createApi(async (path) => (path === '/api/pin'
+        ? {ok: false, status: 429, json: async () => ({error: 'busy'})}
+        : {ok: true, status: 200, json: async () => [], headers: new Map([
+            ['X-Tunebox-Version', '3'], ['X-Tunebox-Pin-Revision', 'stations.2']])}));
+    const listed = await api.channels();
+    assert.equal(listed.pin, 'stations.2');
+    assert.deepEqual(await api.pin('123456'), {status: 429, error: 'busy'});
 });

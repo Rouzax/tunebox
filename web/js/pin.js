@@ -10,6 +10,8 @@ const MESSAGES = {
     401: 'Wrong PIN. Try again.',
     429: 'Too many tries. Wait a few minutes and try again.',
 };
+const BUSY = 'Busy, trying again...';
+const RETRY_MS = 2000;
 
 // The digits after a key: a digit adds one, back removes one, the rest
 // changes nothing.
@@ -23,8 +25,38 @@ export function press(entry, key) {
     return entry;
 }
 
-export function messageFor(status) {
-    return MESSAGES[status] || 'Could not reach tunebox. Try again.';
+export function messageFor(answer) {
+    if (shouldRetry(answer)) {
+        return BUSY;
+    }
+    return MESSAGES[answer.status] || 'Could not reach tunebox. Try again.';
+}
+
+// A busy answer is someone else's flood, not this PIN: one more try after
+// the wait the server named, then the keypad waits for the driver again.
+export function shouldRetry(answer) {
+    return answer.status === 429 && answer.error === 'busy';
+}
+
+// Tab wraps around inside the keypad, so focus never reaches the player
+// underneath it.
+export function trapFocus(container, event) {
+    if (event.key !== 'Tab') {
+        return;
+    }
+    const items = container.querySelectorAll('button:not([disabled]):not([hidden]), input');
+    if (!items.length) {
+        return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!event.shiftKey && event.target === last) {
+        event.preventDefault();
+        first.focus();
+    } else if (event.shiftKey && event.target === first) {
+        event.preventDefault();
+        last.focus();
+    }
 }
 
 // While the keypad shows, every poll gets a 401 too: one question, and one
@@ -67,7 +99,9 @@ function backIcon() {
     return svg;
 }
 
-export function bindPinScreen(root, api) {
+// options.onStop: over the player, the keypad offers Stop so the music
+// does not have to play on while the PIN is typed.
+export function bindPinScreen(root, api, options) {
     const screen = root.querySelector('.pin-screen');
     const title = node('h2', 'pin-title');
     title.id = 'pin-title';
@@ -92,6 +126,12 @@ export function bindPinScreen(root, api) {
     cancel.type = 'button';
     screen.setAttribute('aria-labelledby', 'pin-title');
     screen.append(title, dots, error, keys, cancel);
+    if (options && options.onStop) {
+        const stop = node('button', 'pin-stop btn', 'Stop');
+        stop.type = 'button';
+        stop.addEventListener('click', options.onStop);
+        screen.append(stop);
+    }
     const ok = keys.querySelector('.pin-ok');
 
     let entry = '';
@@ -125,25 +165,33 @@ export function bindPinScreen(root, api) {
         }
     }
 
+    async function send() {
+        try {
+            return await api.pin(entry);
+        } catch (failure) {
+            return {status: 0, error: null};
+        }
+    }
+
     async function submit() {
         if (sending || entry.length < PIN_MIN) {
             return;
         }
         sending = true;
         draw();
-        let status = 0;
-        try {
-            status = await api.pin(entry);
-        } catch (failure) {
-            // No answer: status stays 0.
+        let answer = await send();
+        if (shouldRetry(answer)) {
+            say(messageFor(answer));
+            await new Promise((done) => setTimeout(done, RETRY_MS));
+            answer = await send();
         }
         sending = false;
-        if (status === 204 && waiting) {
+        if (answer.status === 204 && waiting) {
             finish(true);
             return;
         }
         entry = '';
-        say(messageFor(status));
+        say(messageFor(answer));
         draw();
     }
 
@@ -165,6 +213,11 @@ export function bindPinScreen(root, api) {
     });
     document.addEventListener('keydown', (event) => {
         if (!waiting) {
+            return;
+        }
+        trapFocus(screen, event);
+        if (event.key === 'Enter' && event.target.closest && event.target.closest('.pin-stop, .pin-cancel')) {
+            // Enter on Stop or Cancel presses that button, not OK.
             return;
         }
         if (event.key === 'Enter') {
@@ -196,6 +249,7 @@ export function bindPinScreen(root, api) {
                 say('');
                 draw();
                 screen.hidden = false;
+                keys.querySelector('button').focus();
             }
             return waiting.promise;
         },

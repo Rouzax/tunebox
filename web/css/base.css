@@ -468,6 +468,10 @@ button {
     background: var(--accent-color);
 }
 
+.tunebox .pin-stop {
+    color: inherit;
+}
+
 .tunebox .more-stations {
     margin: 1rem auto 0;
 }

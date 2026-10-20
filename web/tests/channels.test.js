@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {canPlay, groupChannels, keepSelection, nextChannel, pickChannel, pickStream, streamLabel} from '../js/channels.js';
+import {canPlay, groupChannels, keepSelection, listOutdated, nextChannel, pickChannel, pickStream, streamLabel} from '../js/channels.js';
 
 const HIGH = {name: 'High', url: 'https://example.invalid/h', codec: 'aac', kbps: 256};
 const MP3 = {name: 'Compatible', url: 'https://example.invalid/m', codec: 'mp3', kbps: null};
@@ -77,4 +77,12 @@ test('keepSelection says when the stream had to be replaced', () => {
     const channels = [{id: 'a', streams: [{name: 'High'}, {name: 'Low'}]}];
     assert.equal(keepSelection(channels, 'a', 'Low').replaced, false);
     assert.equal(keepSelection(channels, 'a', 'Gone').replaced, true);
+});
+
+test('a new pin revision refreshes the stations', () => {
+    const app = {version: 3, pinRevision: 'stations.1'};
+    assert.equal(listOutdated({version: 3, pin: 'stations.1'}, app), false);
+    assert.equal(listOutdated({version: 3, pin: 'off.1'}, app), true);
+    assert.equal(listOutdated({version: 4, pin: 'stations.1'}, app), true);
+    assert.equal(listOutdated({version: 3}, app), false);
 });

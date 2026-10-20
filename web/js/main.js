@@ -1,5 +1,5 @@
 import {POLL_MS, createApi, createPoller} from './api.js';
-import {canPlay, keepSelection, nextChannel, pickChannel, pickStream} from './channels.js';
+import {canPlay, keepSelection, listOutdated, nextChannel, pickChannel, pickStream} from './channels.js';
 import {bindControls} from './controls.js';
 import {bindDayNight} from './daynight.js';
 import {bindDebug} from './debug.js';
@@ -41,7 +41,7 @@ async function start(root) {
         now: () => Date.now(),
         resumeAfterPause: resumesAfterPause(navigator.userAgent),
     });
-    const pin = bindPinScreen(root, api);
+    const pin = bindPinScreen(root, api, {onStop: () => app.stop()});
     const askToListen = () => pin.ask({title: 'Enter the PIN to listen', cancellable: false});
     let listing;
     let settings;
@@ -63,6 +63,7 @@ async function start(root) {
         root, events, storage, player, toast, settings,
         channels: listing.channels,
         version: listing.version,
+        pinRevision: listing.pin,
         morePin: listing.more,
         embed: params.get('embed') === '1',
         channel: null,
@@ -136,7 +137,7 @@ async function start(root) {
             unreachable = false;
         },
         onBody: (body) => {
-            if (body.version !== undefined && body.version !== app.version) {
+            if (listOutdated(body, app)) {
                 refreshChannels();
             }
             switcher.update(body);
@@ -172,6 +173,7 @@ async function start(root) {
             const fresh = await api.channels();
             app.channels = fresh.channels;
             app.version = fresh.version;
+            app.pinRevision = fresh.pin;
             app.morePin = fresh.more;
             const kept = keepSelection(app.channels, app.channel.id, app.stream && app.stream.name, playable);
             if (kept) {

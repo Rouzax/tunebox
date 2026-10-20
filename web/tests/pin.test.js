@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {PIN_MAX, messageFor, onceAsked, press} from '../js/pin.js';
+import {PIN_MAX, messageFor, onceAsked, press, shouldRetry, trapFocus} from '../js/pin.js';
 
 test('press adds digits up to the longest PIN and deletes with back', () => {
     let entry = '';
@@ -20,10 +20,36 @@ test('press ignores everything that is not a digit', () => {
 });
 
 test('each refusal has its own message', () => {
-    assert.match(messageFor(401), /Wrong PIN/);
-    assert.match(messageFor(429), /Too many tries/);
-    assert.match(messageFor(0), /Could not reach tunebox/);
-    assert.match(messageFor(500), /Could not reach tunebox/);
+    assert.match(messageFor({status: 401, error: 'pin_wrong'}), /Wrong PIN/);
+    assert.match(messageFor({status: 429, error: 'slow_down'}), /Too many tries/);
+    assert.match(messageFor({status: 0, error: null}), /Could not reach tunebox/);
+    assert.match(messageFor({status: 500, error: null}), /Could not reach tunebox/);
+});
+
+test('a busy answer retries once', () => {
+    assert.equal(shouldRetry({status: 429, error: 'busy'}), true);
+    assert.equal(shouldRetry({status: 429, error: 'slow_down'}), false);
+    assert.equal(messageFor({status: 429, error: 'busy'}), 'Busy, trying again...');
+    assert.equal(messageFor({status: 429, error: 'slow_down'}), 'Too many tries. Wait a few minutes and try again.');
+    assert.equal(messageFor({status: 401, error: 'pin_wrong'}), 'Wrong PIN. Try again.');
+    assert.equal(messageFor({status: 0, error: null}), 'Could not reach tunebox. Try again.');
+});
+
+test('focus stays inside the keypad', () => {
+    const first = {focus() { this.focused = true; }};
+    const last = {focus() { this.focused = true; }};
+    const container = {querySelectorAll: () => [first, last]};
+    let prevented = false;
+    trapFocus(container, {key: 'Tab', shiftKey: false, target: last, preventDefault() { prevented = true; }});
+    assert.equal(prevented, true);
+    assert.equal(first.focused, true);
+    prevented = false;
+    trapFocus(container, {key: 'Tab', shiftKey: true, target: first, preventDefault() { prevented = true; }});
+    assert.equal(prevented, true);
+    assert.equal(last.focused, true);
+    prevented = false;
+    trapFocus(container, {key: 'Tab', shiftKey: false, target: first, preventDefault() { prevented = true; }});
+    assert.equal(prevented, false);
 });
 
 test('a 401 from now asks for the PIN and refreshes after it', async () => {
