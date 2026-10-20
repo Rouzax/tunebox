@@ -85,20 +85,14 @@ def _query(target: str, name: str) -> list[str] | None:
     )
 
 
-def _is_page(path: str) -> bool:
-    return path == "/" or path.endswith(".html")
-
-
-def _locked_route(path: str, parts: list[str]) -> bool:
-    """What the PIN covers: the pages, the API except the PIN itself and
-    PawTunes (which knows nothing of a PIN), and the logos. Scripts, styles
-    and fonts are the player's public code and stay open, so the PIN page
-    can load."""
+def _locked_route(parts: list[str]) -> bool:
+    """What the PIN covers besides the pages (which _static judges by the
+    file it would serve): the API except the PIN itself and PawTunes (which
+    knows nothing of a PIN), and the logos. Scripts, styles and fonts are
+    the player's public code and stay open, so the PIN page can load."""
     if parts[:1] == ["logos"]:
         return True
-    if parts[:1] == ["api"]:
-        return parts[1:2] not in (["pin"], ["pawtunes"])
-    return _is_page(path) and path != PIN_PAGE
+    return parts[:1] == ["api"] and parts[1:2] not in (["pin"], ["pawtunes"])
 
 
 def _private(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -361,11 +355,9 @@ class Handler(BaseHTTPRequestHandler):
             status = {cid: channel.status() for cid, channel in channels.items()}
             return self._send_json(200, {"status": "ok", "channels": status}, head)
         pin = self.app.pin
-        if pin is not None and pin.mode != "off" and _locked_route(path, parts):
+        if pin is not None and pin.mode != "off" and _locked_route(parts):
             cookie = self.headers.get("Cookie")
             if pin.locks_site(cookie):
-                if _is_page(path):
-                    return self._static(PIN_PAGE, head, locked=True)
                 return self._send_json(401, {"error": "pin_required"}, head, NO_STORE)
             self._private = True
             self._hidden = pin.hides_stations(cookie)
@@ -473,6 +465,14 @@ class Handler(BaseHTTPRequestHandler):
         content_type = CONTENT_TYPES.get(target.suffix) if target else None
         if target is None or content_type is None:
             return self._send_json(404, {"error": "not_found"}, head)
+        pin = self.app.pin
+        page = target.suffix == ".html" and target != web_dir / PIN_PAGE.lstrip("/")
+        if not locked and page and pin is not None and pin.mode != "off":
+            # Judged on the file about to be served, not the path as typed:
+            # /index%2ehtml is the player page too.
+            if pin.locks_site(self.headers.get("Cookie")):
+                return self._static(PIN_PAGE, head, locked=True)
+            self._private = True
         headers: dict[str, str] = dict(NO_STORE)
         if not locked:
             stat = target.stat()

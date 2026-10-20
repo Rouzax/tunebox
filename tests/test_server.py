@@ -881,3 +881,13 @@ def test_a_paced_pin_attempt_is_429_and_no_failure(
     assert (status, json.loads(body)) == (429, {"error": "slow_down"})
     assert headers["cache-control"] == "no-store"
     assert not [r for r in caplog.records if r.getMessage() == "listener_pin_failed"]
+
+
+@pytest.mark.parametrize(
+    "path", ["/index%2ehtml", "/%69ndex.html", "/status%2Ehtml", "/vendor/../index.html", "//"]
+)
+def test_a_locked_site_judges_the_file_it_would_serve(site: PinWorld, path: str) -> None:
+    status, headers, body = request(site.httpd, path)
+    assert status == 200, path
+    assert b"<title>PIN</title>" in body, path
+    assert headers["cache-control"] == "no-store", path
