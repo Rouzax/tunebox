@@ -250,6 +250,53 @@ class Accounts:
         except SettingsWriteError:
             pass
 
+    def change_password(self, session: Session, password: str) -> None:
+        if len(password) < crypto.MIN_PASSWORD:
+            raise AccountError(f"the password needs at least {crypto.MIN_PASSWORD} characters")
+        # Hashed before the transaction: scrypt takes 0.1 s and must not hold
+        # the database lock.
+        stored = crypto.hash_password(password)
+        self._replace(session, "password_hash = ?", (stored,))
+
+    def replace_totp(self, session: Session, secret: bytes, step: int) -> None:
+        """step is the one the confirming code used, so it cannot log in."""
+        self._replace(session, "totp_secret = ?, totp_last_step = ?", (secret, step))
+
+    def replace_recovery_codes(self, session: Session) -> list[str]:
+        codes = crypto.new_recovery_codes()
+
+        def store(db: sqlite3.Connection) -> None:
+            db.execute("DELETE FROM recovery_codes")
+            db.executemany(
+                "INSERT INTO recovery_codes (hash, used_at) VALUES (?, NULL)",
+                [(crypto.code_hash(code),) for code in codes],
+            )
+
+        self._replace(session, "", (), store)
+        return codes
+
+    def _replace(
+        self,
+        session: Session,
+        assignments: str,
+        params: tuple[object, ...],
+        also: Callable[[sqlite3.Connection], None] | None = None,
+    ) -> None:
+        """Changes the account and, in the same transaction, ends every other
+        session and raises the generation, which voids every known-browser
+        grant. Someone who had the old secret is out once this commits."""
+        # assignments is one of the constant strings above, never input.
+        sets = f"{assignments}, " if assignments else ""
+        with self._settings.transaction() as db:
+            db.execute(
+                f"UPDATE admin SET {sets}generation = generation + 1, updated_at = ?,"
+                " totp_fail_count = 0, totp_fail_since = NULL, totp_fail_last = NULL",
+                (*params, self._clock()),
+            )
+            if also is not None:
+                also(db)
+            db.execute("DELETE FROM sessions WHERE token_hash != ?", (session.token_hash,))
+
     def sessions(self) -> list[SessionInfo]:
         now = self._clock()
         with self._settings.read() as db:

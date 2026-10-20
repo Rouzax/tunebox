@@ -261,3 +261,67 @@ def test_expired_sessions_are_pruned_at_the_next_login(accounts: Accounts, clock
     with accounts._settings.read() as db:  # pyright: ignore[reportPrivateUsage]
         count = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     assert count == 1
+
+
+NEW_SECRET = b"abcdefghijabcdefghij"
+
+
+def test_a_new_password_ends_the_other_sessions(accounts: Accounts, clock: Clock) -> None:
+    mine = login(accounts, clock)
+    other = login(accounts, clock, offset=1, address="b")
+    before = accounts.generation()
+    accounts.change_password(live(accounts, mine), "another long password")
+    assert accounts.session(mine) is not None
+    assert accounts.session(other) is None
+    assert accounts.generation() == before + 1
+    clock.now += 90
+    assert accounts.login(PASSWORD, code(clock), "a", "b").reason == "password"
+    assert accounts.login("another long password", code(clock), "a", "b").ok
+
+
+def test_a_short_new_password_changes_nothing(accounts: Accounts, clock: Clock) -> None:
+    mine = login(accounts, clock)
+    other = login(accounts, clock, offset=1, address="b")
+    with pytest.raises(AccountError):
+        accounts.change_password(live(accounts, mine), "short")
+    assert accounts.session(other) is not None
+
+
+def test_a_new_totp_secret_replaces_the_old_one(accounts: Accounts, clock: Clock) -> None:
+    mine = login(accounts, clock)
+    other = login(accounts, clock, offset=1, address="b")
+    step = int(clock.now // 30) + 1
+    accounts.replace_totp(live(accounts, mine), NEW_SECRET, step)
+    assert accounts.session(other) is None
+    clock.now += 90
+    assert accounts.login(PASSWORD, code(clock), "a", "b").reason == "totp"
+    new_code = crypto.totp(NEW_SECRET, int(clock.now // 30))
+    assert accounts.login(PASSWORD, new_code, "a", "b").ok
+
+
+def test_the_code_that_confirmed_a_new_secret_cannot_log_in(
+    accounts: Accounts, clock: Clock
+) -> None:
+    mine = login(accounts, clock)
+    step = int(clock.now // 30) + 1
+    accounts.replace_totp(live(accounts, mine), NEW_SECRET, step)
+    assert accounts.login(PASSWORD, crypto.totp(NEW_SECRET, step), "a", "b").reason == "totp"
+
+
+def test_new_recovery_codes_replace_the_old_ones(accounts: Accounts, clock: Clock) -> None:
+    mine = login(accounts, clock)
+    other = login(accounts, clock, offset=1, address="b")
+    codes = accounts.replace_recovery_codes(live(accounts, mine))
+    assert len(codes) == 10 and len(set(codes)) == 10
+    assert accounts.session(other) is None
+    assert accounts.login(PASSWORD, "aaaa-bbbb-cccc", "a", "b").reason == "recovery"
+    assert accounts.login(PASSWORD, codes[0], "a", "b").ok
+
+
+def test_account_changes_clear_the_wrong_code_count(accounts: Accounts, clock: Clock) -> None:
+    mine = login(accounts, clock)
+    for _ in range(10):
+        accounts.login(PASSWORD, "000000", "a", "b")
+    assert accounts.totp_suspected()
+    accounts.change_password(live(accounts, mine), "another long password")
+    assert not accounts.totp_suspected()
