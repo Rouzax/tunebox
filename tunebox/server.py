@@ -254,7 +254,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
     def _read_body(self, limit: int, admin: bool) -> bytes | None:
-        """The request body, or None after answering 411 or 413. A body
+        """The request body, or None after answering 411 or 413, or after
+        the client stalled or hung up before sending all of it. A body
         that is not read would be parsed as the next request, so a refused
         one also ends the connection."""
         headers = ADMIN_HEADERS if admin else None
@@ -267,7 +268,24 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send_json(413, {"error": "too_large"}, False, headers)
             return None
-        return self.rfile.read(int(length))
+        try:
+            body = self.rfile.read(int(length))
+        except OSError:  # TimeoutError: the client stalled
+            body = None
+        if body is None or len(body) < int(length):
+            # A client that stalls or hangs up mid-body is not a server
+            # fault, and the stream is no longer usable: hang up silently.
+            self.close_connection = True
+            event(
+                log,
+                logging.DEBUG,
+                "request_body_incomplete",
+                path=urllib.parse.urlsplit(self.path).path,
+                expected=int(length),
+                received=None if body is None else len(body),
+            )
+            return None
+        return body
 
     def _admin(self, path: str, query: str, head: bool, body: bytes) -> None:
         admin = self.app.admin

@@ -20,7 +20,7 @@ from tunebox.covers import CoverService
 from tunebox.logos import Logos
 from tunebox.pin import Attempt, Pin
 from tunebox.runtime import EMPTY, Snapshot
-from tunebox.server import CSP, TuneboxServer, etag_matches
+from tunebox.server import CSP, Handler, TuneboxServer, etag_matches
 from tunebox.settings import Settings
 from tunebox.store import Store
 from tunebox.tracks import RawEntry
@@ -944,3 +944,18 @@ def test_a_crash_inside_an_admin_request_answers_500_with_the_admin_headers(
     status, headers, _ = request(admin_server, "/admin/api/state")
     assert status == 500
     assert headers["cache-control"] == "no-store"
+
+
+def test_a_stalled_body_closes_the_connection_without_a_crash(
+    server: TuneboxServer, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(Handler, "timeout", 0.5)
+    with caplog.at_level(logging.DEBUG):
+        with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5) as sock:
+            sock.sendall(
+                b"POST /api/pin HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                b'Content-Length: 50\r\n\r\n{"pin"'
+            )
+            assert sock.recv(4096) == b""  # closed with no answer, 500 or otherwise
+        assert any(r.getMessage() == "request_body_incomplete" for r in caplog.records)
+    assert not any(r.getMessage() == "request_crashed" for r in caplog.records)
