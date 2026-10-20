@@ -13,3 +13,9 @@ add
 history
 undo
 close
+key
+pin
+qr_code
+devices
+settings
+person

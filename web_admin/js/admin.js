@@ -1,10 +1,12 @@
 // The admin shell: log in or set up, then the pages by their #route. It owns
 // the loaded configuration and every save, so the pages only build states.
 import qrcode from '/vendor/qrcode-generator-2.0.4/qrcode.mjs';
+import {render as renderAccount} from './account.js';
 import {call, setCsrf} from './api.js';
 import {render as renderEdit} from './edit.js';
 import {render as renderHistory} from './history.js';
 import {qrMatrix, qrSvg} from './qr.js';
+import {render as renderSettings} from './settings.js';
 import {render as renderStations} from './stations.js';
 
 const ERRORS = {
@@ -17,6 +19,10 @@ const ERRORS = {
     bad_origin: 'Open the admin panel at the address set as public_origin.',
     bad_csrf: 'This page is out of date. Reload it and try again.',
     not_found: 'Not found.',
+    reauth_required: 'Type a code from your authenticator app to confirm this change.',
+    no_new_secret: 'Start setting up the new authenticator again.',
+    this_session: 'Use Log out to end this session.',
+    bad_request: 'tunebox did not understand that. Reload the page and try again.',
 };
 
 function show(id) {
@@ -87,6 +93,15 @@ const ctx = {
     save(state, target, done) {
         const body = {based_on: ctx.config.version, state, target};
         return once(() => call('POST', 'config', body), state, done);
+    },
+    // Any other admin call: a refused session goes to the login form, as
+    // it does for saves.
+    async request(method, path, body) {
+        const answer = await call(method, path, body);
+        if (answer.status === 401) {
+            await answered(401, answer.data);
+        }
+        return answer;
     },
     restore(entryId) {
         const body = {based_on: ctx.config.version};
@@ -215,6 +230,10 @@ function route() {
     const [name, arg] = hash.slice(1).split('/');
     if (name === 'edit' || name === 'new') {
         renderEdit(view, ctx, name === 'edit' ? decodeURIComponent(arg || '') : null);
+    } else if (name === 'settings') {
+        renderSettings(view, ctx);
+    } else if (name === 'account') {
+        renderAccount(view, ctx);
     } else if (name === 'history') {
         renderHistory(view, ctx, arg || null);
     } else {

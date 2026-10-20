@@ -210,3 +210,24 @@ export function diffStates(before, after) {
     }
     return rest.sort((x, y) => (x.path < y.path ? -1 : 1));
 }
+
+// The state with new defaults and player settings. An empty default falls
+// back to tunebox's own; the location goes in only as a pair (the page
+// refuses half of one before it gets here).
+export function setSettings(state, values) {
+    const defaults = {};
+    for (const [key, value] of Object.entries(values.defaults)) {
+        if (value !== undefined) {
+            defaults[key] = value;
+        }
+    }
+    const player = {};
+    if (values.latitude !== undefined && values.longitude !== undefined) {
+        player.latitude = values.latitude;
+        player.longitude = values.longitude;
+    }
+    if (values.defaultChannel) {
+        player.default_channel = values.defaultChannel;
+    }
+    return {defaults, player, groups: state.groups, channels: state.channels};
+}

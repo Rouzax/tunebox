@@ -49,7 +49,7 @@ function stationRow(ctx, row, peers, index, redraw) {
         el('label', {class: 'toggle'}, toggle),
         el('div', {class: 'who'},
             el('span', {class: 'name'}, name),
-            el('span', {class: 'id'}, row.id, isDefault ? ' · default' : '', row.enabled ? '' : ' · off')),
+            el('span', {class: 'id'}, row.id, isDefault ? ' · default' : '', row.doc.needs_pin ? ' · PIN' : '', row.enabled ? '' : ' · off')),
         actions);
     if (redraw.state.confirm === row.id) {
         item.append(confirmRow(`Delete ${name}?`, 'Delete', () => {

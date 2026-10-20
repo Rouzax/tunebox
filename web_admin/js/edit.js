@@ -140,6 +140,8 @@ export function render(root, ctx, id) {
         field('Default image URL', text('default_image', doc.default_image, {type: 'url'}), 'Shown when no cover is found.'),
         el('label', {class: 'check'}, el('input', {type: 'checkbox', name: 'always', checked: Boolean(doc.always)}),
             'Always poll the feed, also when nobody listens'),
+        el('label', {class: 'check'}, el('input', {type: 'checkbox', name: 'needs_pin', checked: Boolean(doc.needs_pin)}),
+            'Needs the PIN: hidden until a device types it, when the PIN asks on chosen stations'),
         el('h3', null, 'Now playing'),
         source.box,
         el('h3', null, 'Streams'),
@@ -170,6 +172,9 @@ export function render(root, ctx, id) {
         });
         if (values.always.checked) {
             out.always = true;
+        }
+        if (values.needs_pin.checked) {
+            out.needs_pin = true;
         }
         const outRules = {};
         Object.keys(RULES).forEach((key) => {

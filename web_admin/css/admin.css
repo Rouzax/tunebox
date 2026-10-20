@@ -430,3 +430,18 @@ legend {
     display: grid;
     gap: 0.75rem;
 }
+
+.settings h2 {
+    display:     flex;
+    align-items: center;
+    gap:         0.4rem;
+    margin:      1rem 0 0;
+    font-size:   1.1rem;
+    font-weight: 500;
+}
+
+.settings.pin {
+    margin-top:  2rem;
+    padding-top: 1rem;
+    border-top:  1px solid var(--line);
+}

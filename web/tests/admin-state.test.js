@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
     addGroup, addStation, deleteGroup, deleteStation, diffStates, duplicateStation, moveGroup,
-    moveStation, newStation, renameGroup, replaceStation, setEnabled, stationsByGroup, validId,
+    moveStation, newStation, renameGroup, replaceStation, setEnabled, setSettings, stationsByGroup, validId,
 } from '../../web_admin/js/state.js';
 
 function base() {
@@ -117,4 +117,25 @@ test('replaceStation keeps the place and the group order', () => {
     const moved = replaceStation(base(), 'c', newStation('c', 'C', 'H'));
     assert.deepEqual(stationsByGroup(moved).map((g) => g.name), ['G', 'H']);
     assert.deepEqual(stationsByGroup(moved)[1].rows.map((r) => r.id), ['d', 'c']);
+});
+
+test('setSettings keeps the numbers given and drops the empty ones', () => {
+    const state = base();
+    const next = setSettings(state, {
+        defaults: {delay_s: 9, pawtunes_delay_s: undefined, poll_interval_s: 12, history_size: undefined},
+        latitude: undefined,
+        longitude: undefined,
+        defaultChannel: '',
+    });
+    assert.deepEqual(next.defaults, {delay_s: 9, poll_interval_s: 12});
+    assert.deepEqual(next.player, {});
+    assert.equal(next.channels, state.channels);
+    assert.deepEqual(state.player, {default_channel: 'b'});
+});
+
+test('setSettings takes the location only as a pair, and the default station', () => {
+    const next = setSettings(base(), {defaults: {}, latitude: 52.1, longitude: 5.1, defaultChannel: 'c'});
+    assert.deepEqual(next.player, {latitude: 52.1, longitude: 5.1, default_channel: 'c'});
+    const half = setSettings(base(), {defaults: {}, latitude: 52.1, longitude: undefined, defaultChannel: ''});
+    assert.deepEqual(half.player, {});
 });
