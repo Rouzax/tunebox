@@ -74,11 +74,11 @@
     visibility: hidden;
 }
 
-/* A scrolling line reaches into the card's side padding, where its edge
-   fades sit, so at rest its first letter lines up with the still lines
-   and shows in full. */
+/* A scrolling line reaches into the card's left padding, where its left
+   fade sits, so at rest its first letter lines up with the still lines
+   and shows in full. The right fade stays inside the text column, so the
+   text fades out short of the card's edge, as wide an inset as the left. */
 .tunebox .onair .car-line.scrolling {
-    margin-right:       calc(-1 * var(--ticker-fade));
     margin-left:        calc(-1 * var(--ticker-fade));
     text-overflow:      clip;
     -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--ticker-fade), #000 calc(100% - var(--ticker-fade)), transparent);
