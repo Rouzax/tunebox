@@ -100,7 +100,8 @@ function backIcon() {
 }
 
 // options.onStop: over the player, the keypad offers Stop so the music
-// does not have to play on while the PIN is typed.
+// does not have to play on while the PIN is typed. options.canStop is asked
+// each time the keypad opens: Stop shows only while something plays.
 export function bindPinScreen(root, api, options) {
     const screen = root.querySelector('.pin-screen');
     const title = node('h2', 'pin-title');
@@ -126,10 +127,15 @@ export function bindPinScreen(root, api, options) {
     cancel.type = 'button';
     screen.setAttribute('aria-labelledby', 'pin-title');
     screen.append(title, dots, error, keys, cancel);
+    let stop = null;
     if (options && options.onStop) {
-        const stop = node('button', 'pin-stop btn', 'Stop');
+        stop = node('button', 'pin-stop btn', 'Stop');
         stop.type = 'button';
-        stop.addEventListener('click', options.onStop);
+        stop.hidden = true;
+        stop.addEventListener('click', () => {
+            stop.hidden = true;
+            options.onStop();
+        });
         screen.append(stop);
     }
     const ok = keys.querySelector('.pin-ok');
@@ -183,6 +189,12 @@ export function bindPinScreen(root, api, options) {
         if (shouldRetry(answer)) {
             say(messageFor(answer));
             await new Promise((done) => setTimeout(done, RETRY_MS));
+            // Cancelled during the wait: the keypad is gone, send nothing.
+            if (!waiting) {
+                sending = false;
+                draw();
+                return;
+            }
             answer = await send();
         }
         sending = false;
@@ -249,6 +261,9 @@ export function bindPinScreen(root, api, options) {
                 say('');
                 draw();
                 screen.hidden = false;
+                if (stop) {
+                    stop.hidden = !options.canStop();
+                }
                 keys.querySelector('button').focus();
             }
             return waiting.promise;

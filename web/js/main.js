@@ -41,7 +41,16 @@ async function start(root) {
         now: () => Date.now(),
         resumeAfterPause: resumesAfterPause(navigator.userAgent),
     });
-    const pin = bindPinScreen(root, api, {onStop: () => app.stop()});
+    // Set once the app's own stop exists; the keypad can open before that.
+    let stopPlayer = null;
+    const pin = bindPinScreen(root, api, {
+        canStop: () => stopPlayer !== null && player.state() !== 'stopped',
+        onStop: () => {
+            if (stopPlayer) {
+                stopPlayer();
+            }
+        },
+    });
     const askToListen = () => pin.ask({title: 'Enter the PIN to listen', cancellable: false});
     let listing;
     let settings;
@@ -269,6 +278,7 @@ async function start(root) {
         player.stop();
         toast.show('Player stopped.');
     };
+    stopPlayer = app.stop;
 
     events.on('state', (state) => {
         if (state === 'playing') {
