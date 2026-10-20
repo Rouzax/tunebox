@@ -1,5 +1,6 @@
 import dataclasses
 import http.client
+import io
 import ipaddress
 import json
 import logging
@@ -22,6 +23,7 @@ from tunebox.channel import Channel
 from tunebox.config import AdminConfig, ChannelConfig, PlayerConfig, StreamConfig
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
+from tunebox.logs import configure
 from tunebox.pin import Attempt, Pin
 from tunebox.runtime import EMPTY, Snapshot
 from tunebox.server import CSP, Handler, TuneboxServer, etag_matches
@@ -50,8 +52,7 @@ def serve(httpd: TuneboxServer) -> None:
 
 
 def make_pin(tmp_path: Path) -> Pin:
-    """A PIN in mode off on its own settings database; the caller leaves the
-    database to be removed with tmp_path."""
+    """A PIN in mode off on its own settings database (closed by conftest)."""
     return Pin(Settings(tmp_path / "pin.db"), lambda: b"k" * 32)
 
 
@@ -631,6 +632,42 @@ def test_a_body_too_large_or_without_length_is_refused(admin_server: TuneboxServ
     connection.send(b"0\r\n\r\n")
     assert connection.getresponse().status == 411
     connection.close()
+
+
+def test_a_crash_on_an_admin_request_withholds_the_exception_text(
+    admin_server: TuneboxServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = io.StringIO()
+    configure("info", out)
+
+    def crash(_self: Admin, _request: Request) -> Response:
+        raise RuntimeError("marker-admin-secret")
+
+    monkeypatch.setattr(Admin, "handle", crash)
+    assert request(admin_server, "/admin/api/state")[0] == 500
+    assert "request_crashed" in out.getvalue()
+    assert "RuntimeError (details withheld)" in out.getvalue()
+    assert "marker-admin-secret" not in out.getvalue()
+
+
+def test_a_crash_on_a_pin_request_withholds_the_exception_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = io.StringIO()
+    configure("info", out)
+
+    def crash(_self: Pin, _given: str, _client: str, secure: bool = False) -> Attempt:
+        raise RuntimeError("marker-pin-secret")
+
+    monkeypatch.setattr(Pin, "attempt", crash)
+    httpd = make_server(tmp_path)
+    headers = {"Content-Type": "application/json"}
+    status, _, _ = request(httpd, "/api/pin", "POST", headers, b'{"pin": "123456"}')
+    httpd.shutdown()
+    httpd.server_close()
+    assert status == 500
+    assert "RuntimeError (details withheld)" in out.getvalue()
+    assert "marker-pin-secret" not in out.getvalue()
 
 
 def log_in(httpd: TuneboxServer, accounts: Accounts) -> tuple[str, str]:

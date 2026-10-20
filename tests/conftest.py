@@ -1,9 +1,11 @@
 import logging
-from collections.abc import Generator
+import time
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 import pytest
 
+from tunebox.settings import Settings
 from tunebox.store import Store
 
 
@@ -34,3 +36,19 @@ def close_stores(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     yield
     for store in opened:
         store.close()
+
+
+@pytest.fixture(autouse=True)
+def close_settings(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    """Closes every Settings a test opens, so no SQLite connection outlives its test."""
+    opened: list[Settings] = []
+    original = Settings.__init__
+
+    def tracking(self: Settings, path: Path, clock: Callable[[], float] = time.time) -> None:
+        original(self, path, clock)
+        opened.append(self)
+
+    monkeypatch.setattr(Settings, "__init__", tracking)
+    yield
+    for settings in opened:
+        settings.close()

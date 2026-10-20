@@ -619,8 +619,9 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   tunebox may upgrade the database, and an older one then refuses to start
   on it (`settings_unavailable` in the log), so going back means putting
   the copy back. This release asks every browser for the PIN again (when
-  one is set) and makes the admin login ask for a code again on browsers
-  it knew; the PIN itself stays valid.
+  one is set); the PIN itself stays valid. Browsers the admin login
+  knew lose their shortcut in its pace limit until they next log in; the
+  login asks for a code as before.
 
   ```sh
   cp data/tunebox.db data/tunebox.db.before-update
