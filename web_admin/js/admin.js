@@ -23,6 +23,7 @@ const ERRORS = {
     no_new_secret: 'Start setting up the new authenticator again.',
     this_session: 'Use Log out to end this session.',
     bad_request: 'tunebox did not understand that. Reload the page and try again.',
+    too_large: 'This change is too large to save.',
 };
 
 function show(id) {

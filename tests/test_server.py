@@ -27,7 +27,7 @@ from tunebox.logs import configure
 from tunebox.pin import Attempt, Pin
 from tunebox.runtime import EMPTY, Snapshot
 from tunebox.server import CSP, Handler, TuneboxServer, etag_matches
-from tunebox.settings import Settings
+from tunebox.settings import Settings, SettingsUnavailable
 from tunebox.store import Store
 from tunebox.tracks import RawEntry
 
@@ -615,16 +615,12 @@ def test_the_login_log_names_the_client_behind_a_trusted_proxy(
 def test_a_body_too_large_or_without_length_is_refused(admin_server: TuneboxServer) -> None:
     headers = {"Content-Type": "application/json", "Origin": ORIGIN}
     assert post(admin_server, "/admin/api/login", b"x" * (MAX_BODY + 1), headers)[0] == 413
-    # Only a live session may send a save's size.
-    assert post(admin_server, "/admin/api/config", b"x" * (MAX_BODY + 1), headers)[0] == 413
-    # Refused on the announced length, before any of the body is read;
-    # sending it all would race the server's hang-up.
-    connection = http.client.HTTPConnection("127.0.0.1", admin_server.server_address[1], timeout=5)
-    connection.putrequest("POST", "/admin/api/config")
-    connection.putheader("Content-Length", str(MAX_STATE_BODY + 1))
-    connection.endheaders()
-    assert connection.getresponse().status == 413
-    connection.close()
+    # Only a live session may send a save's size; without one the answer is
+    # the refusal the save would have had. Refused on the announced length,
+    # before any of the body is read; sending it all would race the
+    # server's hang-up.
+    assert announce(admin_server, "/admin/api/config", MAX_BODY + 1, headers)[0] == 401
+    assert announce(admin_server, "/admin/api/config", MAX_STATE_BODY + 1, {})[0] == 403
     connection = http.client.HTTPConnection("127.0.0.1", admin_server.server_address[1], timeout=5)
     connection.putrequest("POST", "/admin/api/login")
     connection.putheader("Transfer-Encoding", "chunked")
@@ -691,7 +687,7 @@ def test_a_refused_large_body_is_not_read(admin_parts: tuple[TuneboxServer, Acco
     big = b"{" + b" " * (MAX_BODY + 10) + b"}"
     headers = {"Origin": ORIGIN, "Content-Type": "application/json"}
     status, _ = post(admin_parts[0], "/admin/api/config", big, headers)
-    assert status == 413
+    assert status == 401
 
 
 def test_a_large_body_from_a_session_is_read(admin_parts: tuple[TuneboxServer, Accounts]) -> None:
@@ -1158,3 +1154,103 @@ def test_a_repeated_cookie_line_counts_as_absent(tmp_path: Path) -> None:
     assert request(httpd, "/api/channels", headers={"Cookie": grant})[0] == 200
     httpd.shutdown()
     httpd.server_close()
+
+
+def announce(
+    httpd: TuneboxServer, path: str, length: int, headers: dict[str, str]
+) -> tuple[int, dict[str, str], dict[str, object]]:
+    """A POST that names its length and sends no body: a refusal must come
+    without the server reading one."""
+    connection = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=5)
+    connection.putrequest("POST", path)
+    connection.putheader("Content-Length", str(length))
+    for name, value in headers.items():
+        connection.putheader(name, value)
+    connection.endheaders()
+    response = connection.getresponse()
+    answer = json.loads(response.read() or b"null")
+    connection.close()
+    return response.status, {k.lower(): v for k, v in response.getheaders()}, answer
+
+
+OVERSIZE = MAX_BODY + 4096
+
+
+def test_a_large_save_from_an_ended_session_asks_to_log_in(
+    admin_parts: tuple[TuneboxServer, Accounts],
+) -> None:
+    httpd, accounts = admin_parts
+    cookie, csrf = log_in(httpd, accounts)
+    accounts.logout(cookie.partition("=")[2])
+    headers = {
+        "Origin": ORIGIN,
+        "Content-Type": "application/json",
+        "Cookie": cookie,
+        "X-Tunebox-CSRF": csrf,
+    }
+    status, answered, body = announce(httpd, "/admin/api/config", OVERSIZE, headers)
+    assert (status, body) == (401, {"error": "login_required"})
+    assert answered["connection"] == "close"
+    assert answered["cache-control"] == "no-store"
+
+
+def test_a_large_save_with_a_stale_token_is_refused_and_logged_once(
+    admin_parts: tuple[TuneboxServer, Accounts], caplog: pytest.LogCaptureFixture
+) -> None:
+    httpd, accounts = admin_parts
+    cookie, _csrf = log_in(httpd, accounts)
+    headers = {
+        "Origin": ORIGIN,
+        "Content-Type": "application/json",
+        "Cookie": cookie,
+        "X-Tunebox-CSRF": "stale",
+    }
+    with caplog.at_level(logging.WARNING):
+        status, answered, body = announce(httpd, "/admin/api/config", OVERSIZE, headers)
+    assert (status, body) == (403, {"error": "bad_csrf"})
+    assert answered["connection"] == "close"
+    rejected = [r for r in caplog.records if r.getMessage() == "admin_csrf_rejected"]
+    assert len(rejected) == 1
+
+
+def test_a_large_save_while_sessions_cannot_be_read_is_read_only(
+    admin_parts: tuple[TuneboxServer, Accounts], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    httpd, accounts = admin_parts
+    cookie, csrf = log_in(httpd, accounts)
+
+    def unreadable(_self: Accounts, _token: str) -> None:
+        raise SettingsUnavailable("down")
+
+    monkeypatch.setattr(Accounts, "session", unreadable)
+    headers = {
+        "Origin": ORIGIN,
+        "Content-Type": "application/json",
+        "Cookie": cookie,
+        "X-Tunebox-CSRF": csrf,
+    }
+    status, answered, body = announce(httpd, "/admin/api/config", OVERSIZE, headers)
+    assert (status, body) == (503, {"error": "read_only"})
+    assert answered["connection"] == "close"
+
+
+def test_a_large_post_from_off_the_network_is_hidden_before_any_session_read(
+    plain_server: TuneboxServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list[str] = []
+
+    def session(_self: Accounts, token: str) -> None:
+        asked.append(token)
+
+    monkeypatch.setattr(Accounts, "session", session)
+    headers = {
+        "Origin": PLAIN,
+        "Content-Type": "application/json",
+        "Cookie": "tunebox_admin=abc",
+        "X-Tunebox-CSRF": "x",
+        "X-Forwarded-For": "198.51.100.7",
+    }
+    status, answered, body = announce(plain_server, "/admin/api/config", OVERSIZE, headers)
+    assert (status, body) == (404, {"error": "not_found"})
+    assert answered["connection"] == "close"
+    assert asked == []

@@ -1030,8 +1030,18 @@ def test_a_crashing_route_answers_500_with_the_admin_headers(
     assert dict(answer.headers)["Cache-Control"] == "no-store"
 
 
-def head_only(world: World, path: str, csrf: str | None, origin: str = ORIGIN) -> Request:
-    headers: list[tuple[str, str]] = [("Origin", origin), ("Content-Type", "application/json")]
+def head_only(
+    world: World,
+    path: str,
+    csrf: str | None,
+    origin: str = ORIGIN,
+    length: int = MAX_BODY + 1,
+) -> Request:
+    headers: list[tuple[str, str]] = [
+        ("Origin", origin),
+        ("Content-Type", "application/json"),
+        ("Content-Length", str(length)),
+    ]
     if csrf:
         headers.append(("X-Tunebox-CSRF", csrf))
     if world.cookies:
@@ -1039,45 +1049,65 @@ def head_only(world: World, path: str, csrf: str | None, origin: str = ORIGIN) -
     return Request("POST", path, tuple(headers), b"", "198.51.100.7")
 
 
+def limit_of(world: World, request: Request) -> tuple[int, int | None]:
+    """The limit and the status of the refusal that comes with it."""
+    limit, refusal = world.admin.body_limit(request)
+    return limit, None if refusal is None else refusal.status
+
+
 def test_a_large_body_needs_a_live_session_and_token(world: World) -> None:
     path = "/admin/api/config"
-    assert world.admin.body_limit(head_only(world, path, None)) == MAX_BODY
+    assert limit_of(world, head_only(world, path, None)) == (MAX_BODY, 401)
     csrf = world.login()
-    assert world.admin.body_limit(head_only(world, path, None)) == MAX_BODY
-    assert world.admin.body_limit(head_only(world, path, "wrong")) == MAX_BODY
-    assert world.admin.body_limit(head_only(world, path, csrf, "https://evil.example")) == MAX_BODY
-    assert world.admin.body_limit(head_only(world, path, csrf)) == MAX_STATE_BODY
-    # Only the routes that need it.
-    assert world.admin.body_limit(head_only(world, "/admin/api/pin", csrf)) == MAX_BODY
+    assert limit_of(world, head_only(world, path, None)) == (MAX_BODY, 403)
+    assert limit_of(world, head_only(world, path, "wrong")) == (MAX_BODY, 403)
+    assert limit_of(world, head_only(world, path, csrf, "https://evil.example")) == (MAX_BODY, 403)
+    assert limit_of(world, head_only(world, path, csrf)) == (MAX_STATE_BODY, None)
+    # Only the routes that need it; the size refusal is the server's 413.
+    assert limit_of(world, head_only(world, "/admin/api/pin", csrf)) == (MAX_BODY, None)
 
 
-def test_the_limit_check_logs_nothing_and_survives_an_unreadable_database(
+def test_a_refusal_carries_the_admin_headers(world: World) -> None:
+    _limit, refusal = world.admin.body_limit(head_only(world, "/admin/api/config", None))
+    assert refusal is not None
+    assert dict(refusal.headers)["Cache-Control"] == "no-store"
+
+
+def test_a_body_within_the_limit_is_judged_after_it_is_read(
     world: World, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    csrf = world.login()
+    world.login()
+    asked: list[str] = []
+    monkeypatch.setattr(world.accounts, "session", asked.append)
     with caplog.at_level(logging.DEBUG):
-        assert world.admin.body_limit(head_only(world, "/admin/api/config", "wrong")) == MAX_BODY
-        assert world.admin.body_limit(head_only(world, "/admin/api/config", csrf, "x")) == MAX_BODY
+        within = head_only(world, "/admin/api/config", "wrong", length=MAX_BODY)
+        assert limit_of(world, within) == (MAX_BODY, None)
+        unnamed = Request("POST", "/admin/api/config", (("Origin", ORIGIN),), b"", "x")
+        assert limit_of(world, unnamed) == (MAX_BODY, None)
+        get = Request("GET", "/admin/api/config", (), b"", "198.51.100.7")
+        assert limit_of(world, get) == (MAX_BODY, None)
     assert "admin_csrf_rejected" not in caplog.text
+    assert asked == []
+
+
+def test_a_large_body_while_sessions_cannot_be_read_is_read_only(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
 
     def unreadable(_token: str) -> None:
         raise SettingsUnavailable("down")
 
     monkeypatch.setattr(world.accounts, "session", unreadable)
-    assert world.admin.body_limit(head_only(world, "/admin/api/config", csrf)) == MAX_BODY
-    get = Request("GET", "/admin/api/config", (), b"", "198.51.100.7")
-    assert world.admin.body_limit(get) == MAX_BODY
+    assert limit_of(world, head_only(world, "/admin/api/config", csrf)) == (MAX_BODY, 503)
 
 
 def test_a_refused_oversize_save_is_logged_once(
     world: World, caplog: pytest.LogCaptureFixture
 ) -> None:
     world.login()
-    announced = ("Content-Length", str(MAX_BODY + 1))
-    head = head_only(world, "/admin/api/config", "wrong")
-    oversize = Request(head.method, head.path, (*head.headers, announced), b"", head.client)
     with caplog.at_level(logging.WARNING):
-        assert world.admin.body_limit(oversize) == MAX_BODY
+        assert limit_of(world, head_only(world, "/admin/api/config", "wrong")) == (MAX_BODY, 403)
     rejected = [r for r in caplog.records if r.getMessage() == "admin_csrf_rejected"]
     assert len(rejected) == 1
 

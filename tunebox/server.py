@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
-from tunebox.admin import ADMIN_HEADERS, MAX_BODY, Admin, Request
+from tunebox.admin import ADMIN_HEADERS, Admin, Request, Response
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import Network, StreamConfig
@@ -226,20 +226,24 @@ class Handler(BaseHTTPRequestHandler):
         ):
             try:
                 self._note_forwarding()
+                admin = self._admin_shown(head) if is_admin else None
+                if is_admin and admin is None:
+                    return
                 if self.command == "POST":
-                    if is_admin and self.app.admin is not None:
+                    refusal = None
+                    if admin is not None:
                         # The headers decide how much may be read.
-                        limit = self.app.admin.body_limit(
+                        limit, refusal = admin.body_limit(
                             self._admin_request(path, target.query, b"")
                         )
                     else:
-                        limit = MAX_BODY if is_admin else PIN_BODY
-                    read = self._read_body(limit, is_admin)
+                        limit = PIN_BODY
+                    read = self._read_body(limit, is_admin, refusal)
                     if read is None:
                         return
                     body = read
-                if is_admin:
-                    self._admin(path, target.query, head, body)
+                if admin is not None:
+                    self._admin(admin, path, target.query, head, body)
                 elif is_pin:
                     self._pin(head, body)
                 else:
@@ -262,11 +266,12 @@ class Handler(BaseHTTPRequestHandler):
                     duration_ms=round((time.monotonic() - started) * 1000),
                 )
 
-    def _read_body(self, limit: int, admin: bool) -> bytes | None:
-        """The request body, or None after answering 411 or 413, or after
-        the client stalled or hung up before sending all of it. A body
-        that is not read would be parsed as the next request, so a refused
-        one also ends the connection."""
+    def _read_body(self, limit: int, admin: bool, refusal: Response | None = None) -> bytes | None:
+        """The request body, or None after answering 411, 413 or, for a
+        body over the limit, refusal when there is one; or after the client
+        stalled or hung up before sending all of it. A body that is not
+        read would be parsed as the next request, so a refused one also
+        ends the connection."""
         headers = ADMIN_HEADERS if admin else None
         length = self.headers.get("Content-Length")
         if self.headers.get("Transfer-Encoding") or length is None or not length.isdigit():
@@ -275,7 +280,12 @@ class Handler(BaseHTTPRequestHandler):
             return None
         if int(length) > limit:
             self.close_connection = True
-            self._send_json(413, {"error": "too_large"}, False, headers)
+            if refusal is not None:
+                self._send(
+                    refusal.status, refusal.body, refusal.content_type, False, refusal.headers
+                )
+            else:
+                self._send_json(413, {"error": "too_large"}, False, headers)
             return None
         try:
             body = self.rfile.read(int(length))
@@ -296,21 +306,29 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return body
 
-    def _admin(self, path: str, query: str, head: bool, body: bytes) -> None:
+    def _admin_shown(self, head: bool) -> Admin | None:
+        """The panel, or None after answering 404 when it is off, or on
+        plain http for a client off the home network; checked before any
+        body is read or any session looked up. An unread body ends the
+        connection."""
         admin = self.app.admin
-        if admin is None:
-            return self._send_json(404, {"error": "not_found"}, head)
-        forwarded = self._forwarded()
-        peer = self.client_address[0]
-        client = self._client()
-        if admin.plain_http:
+        if admin is not None and admin.plain_http:
+            peer = self.client_address[0]
             other = any(self.headers.get(name) for name in OTHER_FORWARDING)
-            if not nearby(peer, forwarded, other, self.app.trusted):
+            if not nearby(peer, self._forwarded(), other, self.app.trusted):
                 # Plain http carries the password readable: off the home
                 # network the panel looks switched off.
+                client = self._client()
                 level = logging.WARNING if self.app.refusals.first(client) else logging.DEBUG
                 event(log, level, "admin_not_nearby", client=client, peer=peer)
-                return self._send_json(404, {"error": "not_found"}, head)
+                admin = None
+        if admin is None:
+            if self.command == "POST":
+                self.close_connection = True
+            self._send_json(404, {"error": "not_found"}, head)
+        return admin
+
+    def _admin(self, admin: Admin, path: str, query: str, head: bool, body: bytes) -> None:
         method = "GET" if head else self.command
         response = admin.handle(self._admin_request(path, query, body, method))
         self._send(response.status, response.body, response.content_type, head, response.headers)

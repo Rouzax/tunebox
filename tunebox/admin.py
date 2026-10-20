@@ -123,6 +123,7 @@ class Response:
 
 
 _UINT = re.compile(r"[0-9]{1,18}")
+_LENGTH = re.compile(r"[0-9]+")
 
 
 def _uint(text: str) -> int | None:
@@ -208,12 +209,7 @@ class Admin:
             # withholds the exception text.
             log.error("request_crashed", exc_info=True, extra={"fields": {"path": request.path}})
             response = _error(500, "internal")
-        return Response(
-            response.status,
-            response.body,
-            response.content_type,
-            (*response.headers, *ADMIN_HEADERS.items()),
-        )
+        return _with_admin_headers(response)
 
     def _dispatch(self, request: Request) -> Response:
         if request.path == "/admin":
@@ -237,45 +233,42 @@ class Admin:
             return refused
         return handler(request)
 
-    def body_limit(self, request: Request) -> int:
+    def body_limit(self, request: Request) -> tuple[int, Response | None]:
         """The largest body this POST may send, judged on its headers alone
-        (the body is not read yet): a large one only on a route that takes
-        one, for a live session with its token and the right origin."""
-        if request.method != "POST" or not request.path.startswith("/admin/api/"):
-            return MAX_BODY
+        (the body is not read yet), and the answer to give instead of
+        reading a body over MAX_BODY. Only a route that takes a large body
+        grants one, to a live session with its token and the right origin;
+        any other request over MAX_BODY gets the refusal its handler would
+        have given, so the page can tell an ended session from a size."""
         large = LARGE_ROUTES.get(request.path.removeprefix("/admin/api/"))
-        if large is None:
-            return MAX_BODY
+        declared = content_length(request.header("Content-Length"))
+        if (
+            request.method != "POST"
+            or not request.path.startswith("/admin/api/")
+            or large is None
+            or declared is None
+            or declared <= MAX_BODY
+        ):
+            # Within MAX_BODY the handler's own checks judge it after the read.
+            return MAX_BODY, None
         try:
-            refused = self._refusal(request, needs_session=True, log_refusals=False)
+            refused = self._refusal(request, needs_session=True)
         except SettingsUnavailable:
-            return MAX_BODY
+            refused = _error(503, "read_only")
         if refused is None:
-            return large
-        declared = request.header("Content-Length") or ""
-        if declared.isdigit() and int(declared) > MAX_BODY:
-            # The server answers 413 without reading the body, so no handler
-            # will run to log this refusal.
-            self._refusal(request, needs_session=True)
-        return MAX_BODY
+            return large, None
+        return MAX_BODY, _with_admin_headers(refused)
 
-    def _refusal(
-        self, request: Request, needs_session: bool, log_refusals: bool = True
-    ) -> Response | None:
+    def _refusal(self, request: Request, needs_session: bool) -> Response | None:
         """The origin, content type, session and token checks a request must
         pass before its handler runs: the refusal, or None to go on. A
-        caller that checks ahead of the handler passes log_refusals False,
-        so the rejection is logged once, by whichever answers it."""
+        request body_limit refuses never reaches _api, so a rejection is
+        logged once."""
         if request.method == "POST":
             if not self._origin or request.header("Origin") != self._origin:
-                if log_refusals:
-                    event(
-                        log,
-                        logging.WARNING,
-                        "admin_csrf_rejected",
-                        client=request.client,
-                        why="origin",
-                    )
+                event(
+                    log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="origin"
+                )
                 return _error(403, "bad_origin")
             content_type = (request.header("Content-Type") or "").split(";")[0].strip()
             if content_type != "application/json":
@@ -286,14 +279,9 @@ class Admin:
                 return _error(401, "login_required")
             given = request.header("X-Tunebox-CSRF") or ""
             if request.method == "POST" and not _same(given, session.csrf):
-                if log_refusals:
-                    event(
-                        log,
-                        logging.WARNING,
-                        "admin_csrf_rejected",
-                        client=request.client,
-                        why="token",
-                    )
+                event(
+                    log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="token"
+                )
                 return _error(403, "bad_csrf")
         return None
 
@@ -793,6 +781,20 @@ class Admin:
         if target is None or content_type is None:
             return _error(404, "not_found")
         return Response(200, target.read_bytes(), content_type)
+
+
+def _with_admin_headers(response: Response) -> Response:
+    return Response(
+        response.status,
+        response.body,
+        response.content_type,
+        (*response.headers, *ADMIN_HEADERS.items()),
+    )
+
+
+def content_length(value: str | None) -> int | None:
+    """A Content-Length header's value; None unless it is ASCII digits only."""
+    return int(value) if value is not None and _LENGTH.fullmatch(value) else None
 
 
 def _body(request: Request, keys: tuple[str, ...]) -> dict[str, str] | None:
