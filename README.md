@@ -24,9 +24,12 @@ For listeners:
   title in a narrow window and beside it in a wide one. The station's name
   sits at the top. The title, artists and Played-by credit sit on a card,
   resting on the control bar in a narrow window and beside the cover in a
-  wide one; each wraps to two lines at most (one in a very short window)
-  and ends in "..." beyond that. A new song slides the card out and back
-  in with the new text.
+  wide one. In a narrow window the card keeps one height, so the cover
+  does not change size from song to song: each line stays one line, and
+  one that does not fit scrolls slowly to its end and back (with reduced
+  motion it ends in "..."). Beside the cover each wraps to two lines at
+  most and ends in "..." beyond that. A new song slides the card out and
+  back in with the new text.
 - **Day and night.** A button cycles automatic, day and night; night dims
   everything but the title.
 - **Visualizer.** Twelve styles, from spectrum bars to a ring around the

@@ -46,6 +46,48 @@ if (typeof WebSocket === 'undefined') {
 }
 
 // Runs in the page: measures everything and returns the problems found.
+// Stacked, the card keeps one height whatever the text, once ticker.js has
+// set the scrolling lines: the cover above it takes the rest, and a card
+// that changed with the song would resize it. Runs in the page; resolves
+// to the problems found.
+async function steadyCard() {
+    const root = document.querySelector('.tunebox');
+    if (root.dataset.layout === 'wide' || root.dataset.page !== 'main') {
+        return [];
+    }
+    const nodes = ['.car-title', '.car-artist', '.car-played'].map((s) => document.querySelector(s));
+    const playedLine = nodes[2].closest('.car-line');
+    const kept = [...nodes.map((n) => n.textContent), playedLine.hidden];
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
+    const measure = async (title, artist, played) => {
+        nodes[0].textContent = title;
+        nodes[1].textContent = artist;
+        nodes[2].textContent = played;
+        playedLine.hidden = !played;
+        await settle();
+        return {
+            card: document.querySelector('.onair').getBoundingClientRect().height,
+            cover: document.querySelector('.artwork-img').getBoundingClientRect().width,
+            scrolling: document.querySelectorAll('.onair .scrolling').length,
+        };
+    };
+    // Three times over, too long for any window.
+    const longer = (text) => [text, text, text].join(' ');
+    const long = await measure(longer(kept[0]), longer(kept[1]), longer(kept[2] || 'Somebody With A Long Name Mainstage'));
+    const short = await measure('Rain', 'Kaytranada', '');
+    nodes.forEach((n, i) => { n.textContent = kept[i]; });
+    playedLine.hidden = kept[3];
+    await settle();
+    const problems = [];
+    if (Math.abs(long.card - short.card) > 0.5 || Math.abs(long.cover - short.cover) > 0.5) {
+        problems.push(`the card's height follows the text (${long.card.toFixed(1)} vs ${short.card.toFixed(1)} px)`);
+    }
+    if (!long.scrolling || short.scrolling) {
+        problems.push(`long lines scroll: ${long.scrolling}, short lines scroll: ${short.scrolling}`);
+    }
+    return problems;
+}
+
 function inspect(page, slack) {
     const problems = [];
     const vw = document.documentElement.clientWidth;
@@ -196,12 +238,22 @@ function inspect(page, slack) {
             }
         }
         const titleNode = document.querySelector('.car-title');
-        const shown = titleNode.textContent;
+        const artistNode = document.querySelector('.car-artist');
+        const playedLine = document.querySelector('.car-played-line');
+        const shown = [titleNode.textContent, artistNode.textContent, playedLine.hidden];
         titleNode.textContent = 'Rain';
-        const narrow = card.getBoundingClientRect().width;
-        titleNode.textContent = shown;
-        if (Math.abs(narrow - cardBox.width) > 1) {
-            problems.push(`the card's width follows the title (${Math.round(narrow)} vs ${Math.round(cardBox.width)})`);
+        artistNode.textContent = 'Kaytranada';
+        playedLine.hidden = true;
+        const short = card.getBoundingClientRect();
+        const shortArt = document.querySelector('.artwork-img').getBoundingClientRect();
+        [titleNode.textContent, artistNode.textContent, playedLine.hidden] = shown;
+        if (Math.abs(short.width - cardBox.width) > 1) {
+            problems.push(`the card's width follows the title (${Math.round(short.width)} vs ${Math.round(cardBox.width)})`);
+        }
+        // Stacked, the cover takes the height the card leaves: a card that
+        // grew with the text would resize the cover on every song.
+        if (root.dataset.layout !== 'wide' && (Math.abs(short.height - cardBox.height) > 1 || Math.abs(shortArt.width - art.width) > 1)) {
+            problems.push(`the card's height follows the text (${Math.round(short.height)} vs ${Math.round(cardBox.height)})`);
         }
         // Text on the card reads at arm's length: WCAG contrast 4.5 or more.
         const rgba = (value) => (value.match(/[\d.]+/g) || []).map(Number);
@@ -225,8 +277,10 @@ function inspect(page, slack) {
         if (text.top < 0 || text.left < -slack || text.right > vw + slack) {
             problems.push('track text is outside the window');
         }
-        // A glance reads still text: every line wraps, to two lines at most,
-        // the title three beside the cover.
+        // Beside the cover a glance reads still text: every line wraps, to
+        // two lines at most, the title three. Stacked, every line is one
+        // line, and one that does not fit scrolls.
+        const wide = root.dataset.layout === 'wide';
         for (const line of lines) {
             const style = getComputedStyle(line);
             const height = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4;
@@ -235,10 +289,15 @@ function inspect(page, slack) {
             if (parseFloat(style.lineHeight) < 1.3 * parseFloat(style.fontSize) - 0.5) {
                 problems.push(`"${line.textContent.slice(0, 30)}" has line-height ${style.lineHeight} at ${style.fontSize}`);
             }
-            const most = line.classList.contains('car-title-line') ? 3 : 2;
+            const most = !wide ? 1 : line.classList.contains('car-title-line') ? 3 : 2;
             const limit = parseInt(style.webkitLineClamp, 10);
-            if (!(limit >= 1 && limit <= most)) {
-                problems.push(`"${line.textContent.slice(0, 30)}" may take ${style.webkitLineClamp} lines`);
+            if (wide ? !(limit >= 1 && limit <= most) : style.whiteSpace !== 'nowrap') {
+                problems.push(`"${line.textContent.slice(0, 30)}" may take more than ${most} lines`);
+            }
+            // Stacked, a line is exactly one line tall, scrolling or still:
+            // a pixel either way would resize the cover when scrolling starts.
+            if (!wide && Math.abs(line.getBoundingClientRect().height - height) > 0.5) {
+                problems.push(`"${line.textContent.slice(0, 30)}" is ${line.getBoundingClientRect().height.toFixed(1)} px tall, not one line (${height.toFixed(1)} px)`);
             }
             if (line.getBoundingClientRect().height > most * height + slack) {
                 problems.push(`"${line.textContent.slice(0, 30)}" takes more than ${most} lines`);
@@ -248,12 +307,19 @@ function inspect(page, slack) {
             const edges = line.getBoundingClientRect();
             const words = document.createRange();
             words.selectNodeContents(line);
-            if ([...words.getClientRects()].some((r) => r.left < edges.left - slack || r.right > edges.right + slack)) {
+            const runs = [...words.getClientRects()].some((r) => r.left < edges.left - slack || r.right > edges.right + slack);
+            const scrolling = line.classList.contains('scrolling');
+            if (runs && !scrolling) {
                 problems.push(`"${line.textContent.slice(0, 30)}" runs sideways out of its line`);
             }
+            if (!wide && scrolling !== (line.firstElementChild.offsetWidth > line.clientWidth + 1)) {
+                problems.push(`"${line.textContent.slice(0, 30)}" ${scrolling ? 'scrolls although it fits' : 'is cut instead of scrolling'}`);
+            }
         }
+        // Only a scrolling line's text moves, and only stacked.
         const onair = document.querySelector('.onair');
-        if (document.getAnimations().some((a) => a.effect && a.effect.target && onair.contains(a.effect.target))) {
+        if (document.getAnimations().some((a) => a.effect && a.effect.target && onair.contains(a.effect.target)
+            && (wide || !a.effect.target.matches('.scrolling > .car-line-text')))) {
             problems.push('track text moves');
         }
         const played = document.querySelector('.car-played-line');
@@ -426,7 +492,7 @@ async function run() {
                             document.querySelector('.car-title').textContent = ${JSON.stringify(LONG_TITLE)};
                             document.querySelector('.car-artist').textContent = ${JSON.stringify(LONG_ARTIST)};
                             document.querySelector('.car-played').textContent = ${JSON.stringify(LONG_PLAYED)};
-                            document.querySelector('.car-played').parentNode.hidden = false;
+                            document.querySelector('.car-played').closest('.car-line').hidden = false;
                         })()`);
                         for (const page of PAGES) {
                             await evaluate(`(() => {
@@ -444,7 +510,7 @@ async function run() {
                             const view = `${size.name} ${embed ? 'embed ' : ''}${mode} ${state} ${page}`;
                             const result = await evaluate(`(${inspect.toString()})('${page}', ${SLACK})`);
                             views += 1;
-                            for (const problem of result.problems) {
+                            for (const problem of [...result.problems, ...await evaluate(`(${steadyCard.toString()})()`)]) {
                                 failures.push(`${view} [${result.layout}]: ${problem}`);
                             }
                             if (SHOTS && state === 'playing') {

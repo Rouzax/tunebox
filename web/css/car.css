@@ -1,7 +1,5 @@
 /* The car theme, layered over base.css. */
 
-/* Track text: every line wraps, to two lines at most, so a glance reads it
-   whole without waiting for a scrolling line to come round. */
 /* Stacked, the card spans the window (the page's side padding included)
    and rests on the bar; its width never follows the text, so a title
    change moves nothing but the words. */
@@ -9,7 +7,9 @@
     box-sizing:    border-box;
     width:         calc(100% + 2rem);
     margin:        0 -1rem;
-    padding:       .95rem 1.25rem .8rem;
+    /* Also the width of a scrolling line's edge fades, which sit in it. */
+    --ticker-fade: 1.25rem;
+    padding:       .95rem var(--ticker-fade) .8rem;
     border-radius: 1.1rem 1.1rem 0 0;
     color:         var(--car-card-ink);
     background:    var(--car-card);
@@ -59,24 +59,47 @@
     }
 }
 
+/* Stacked, every line stays one line and the Played-by line keeps its room
+   when a song has none, so the card, and the cover that takes the height
+   above it, keep their size from song to song. ticker.js scrolls a line
+   that does not fit; with reduced motion it ends in an ellipsis. */
 .tunebox .onair .car-line {
-    display:            -webkit-box;
-    overflow:           hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow-wrap:      anywhere;
-    text-wrap:          balance;
+    overflow:      hidden;
+    white-space:   nowrap;
+    text-overflow: ellipsis;
 }
 
 .tunebox .onair .car-line[hidden] {
-    display: none;
+    display:    block;
+    visibility: hidden;
 }
 
-/* Too short for two lines each (a phone on its side, a small window): one
-   line each, ending in an ellipsis. The car's third keeps two. */
-@media (max-height: 30rem) {
-    .tunebox .onair .car-line {
-        -webkit-line-clamp: 1;
+/* A scrolling line reaches into the card's side padding, where its edge
+   fades sit, so at rest its first letter lines up with the still lines
+   and shows in full. */
+.tunebox .onair .car-line.scrolling {
+    margin-right:       calc(-1 * var(--ticker-fade));
+    margin-left:        calc(-1 * var(--ticker-fade));
+    text-overflow:      clip;
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--ticker-fade), #000 calc(100% - var(--ticker-fade)), transparent);
+    mask-image:         linear-gradient(to right, transparent, #000 var(--ticker-fade), #000 calc(100% - var(--ticker-fade)), transparent);
+}
+
+/* The padding keeps the first and last letters clear of the fades;
+   ticker.js measures it into the scroll distance. */
+.tunebox .onair .car-line.scrolling .car-line-text {
+    display:   inline-block;
+    padding:   0 var(--ticker-fade);
+    animation: car-ticker var(--ticker-duration, 10s) linear infinite alternate;
+}
+
+/* The holds at both ends leave the start and the end of the line readable. */
+@keyframes car-ticker {
+    0%, 15% {
+        transform: translateX(0);
+    }
+    85%, 100% {
+        transform: translateX(var(--ticker-shift, 0));
     }
 }
 
@@ -164,7 +187,7 @@
    keep it between the two. */
 .tunebox[data-viz="led"] #analyzer {
     top:    45%;
-    bottom: 6.5rem;
+    bottom: var(--bar-h);
 }
 
 /* The track text sits on a card: docked on the control bar when stacked,
@@ -402,13 +425,11 @@
    The station header and the control bar take their share first. */
 .tunebox .container,
 .tunebox .container .page {
-    height: calc(var(--car-vh, 100vh) - 6.5rem - var(--car-station-h));
+    height: calc(var(--car-vh, 100vh) - var(--bar-h) - var(--car-station-h));
 }
 
-/* Stacked (the car's third, phones): the cover takes the height the text
-   leaves, so one-line titles get a big cover and two-line ones a smaller
-   one, instead of reserving room for the longest case. Square by height,
-   and never wider than the window. */
+/* Stacked (the car's third, phones): the cover takes the height the card
+   leaves, square by height and never wider than the window. */
 .tunebox .artwork-image {
     display:         flex;
     flex:            1 1 0;
@@ -547,6 +568,29 @@
 .tunebox[data-layout="wide"] .onair.card-in {
     transform: translateY(-1rem);
     opacity:   0;
+}
+
+/* Beside the cover the card's height moves nothing, so the lines wrap, two
+   at most, and a glance reads them whole without waiting for a scroll. */
+.tunebox[data-layout="wide"] .onair .car-line {
+    display:            -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space:        normal;
+    overflow-wrap:      anywhere;
+    text-wrap:          balance;
+}
+
+.tunebox[data-layout="wide"] .onair .car-line[hidden] {
+    display: none;
+}
+
+/* Too short for two lines each (a phone on its side, a small window): one
+   line each, ending in an ellipsis. */
+@media (max-height: 30rem) {
+    .tunebox[data-layout="wide"] .onair .car-line {
+        -webkit-line-clamp: 1;
+    }
 }
 
 .tunebox[data-layout="wide"] .onair .car-title-line {

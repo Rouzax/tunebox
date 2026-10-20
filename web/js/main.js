@@ -12,6 +12,7 @@ import {bindPalette} from './palette.js';
 import {createPlayer, resumesAfterPause} from './player.js';
 import {createSwitcher} from './schedule.js';
 import {createStorage} from './storage.js';
+import {bindTicker} from './ticker.js';
 import {createToast} from './toast.js';
 import {clockOffsetMs, coverFor, displayLines, trackKey} from './tracks.js';
 import {bindVisualizer} from './visualizer.js';
@@ -236,6 +237,7 @@ async function start(root) {
         root.dataset.embed = '';
     }
     bindDisplay(app);
+    bindTicker(root);
     bindControls(app);
     bindLayout(app);
     bindDayNight(app);

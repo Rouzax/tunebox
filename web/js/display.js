@@ -74,7 +74,7 @@ export function bindDisplay(app) {
             title.textContent = lines.title;
             artist.textContent = lines.artist;
             played.textContent = lines.playedBy;
-            played.parentNode.hidden = !lines.playedBy;
+            played.closest('.car-line').hidden = !lines.playedBy;
             if (image.getAttribute('src') !== cover) {
                 image.src = cover;
             }
