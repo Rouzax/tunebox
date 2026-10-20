@@ -988,7 +988,7 @@ def test_set_the_pin_and_its_mode(world: World, caplog: pytest.LogCaptureFixture
             csrf=csrf,
         )
     assert json_of(response) == {"mode": "stations", "set": True, "revision": "stations.1"}
-    assert world.pin.mode == "stations"
+    assert world.pin.status().mode == "stations"
     change = next(r for r in caplog.records if r.getMessage() == "admin_change")
     assert change.__dict__["fields"] == {
         "kind": "pin",
@@ -1021,7 +1021,7 @@ def test_a_bad_pin_change_is_refused(world: World, body: dict[str, object], erro
     csrf = world.login()
     response = world.call("POST", "/admin/api/pin", body, csrf=csrf)
     assert (response.status, json_of(response)["error"]) == (400, error)
-    assert world.pin.mode == "off"
+    assert world.pin.status().mode == "off"
 
 
 def test_pin_changes_stay_out_of_the_history(world: World) -> None:
@@ -1334,7 +1334,7 @@ def test_a_pin_change_needs_the_revision_it_was_based_on(world: World) -> None:
     answer = world.call("POST", "/admin/api/pin", stale, csrf=csrf)
     assert answer.status == 409
     assert json_of(answer) == {"error": "stale", "revision": "stations.1"}
-    assert world.pin.mode == "stations"
+    assert world.pin.status().mode == "stations"
     assert world.call("POST", "/admin/api/pin", {"mode": "off"}, csrf=csrf).status == 400
 
 

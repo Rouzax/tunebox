@@ -129,14 +129,6 @@ class Pin:
         self._recent: deque[float] = deque()
         self._state = self._load()
 
-    @property
-    def mode(self) -> str:
-        return self._state.mode
-
-    @property
-    def revision(self) -> str:
-        return _revision(self._state)
-
     def status(self) -> PinStatus:
         state = self._state
         return PinStatus(state.mode, state.digest is not None, _revision(state))

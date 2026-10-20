@@ -62,7 +62,7 @@ def granted(world: World, pin: str = "123456", client: str = "198.51.100.7") -> 
 
 
 def test_off_by_default_and_open(world: World) -> None:
-    assert world.pin.mode == "off"
+    assert world.pin.status().mode == "off"
     assert world.pin.status().mode == "off" and world.pin.status().set is False
     assert not world.pin.access(None).locked
     assert not world.pin.access(None).hidden
@@ -73,7 +73,7 @@ def test_off_by_default_and_open(world: World) -> None:
 def test_a_mode_needs_a_pin(world: World, mode: str) -> None:
     with pytest.raises(PinError):
         world.pin.change(mode, None)
-    assert world.pin.mode == "off"
+    assert world.pin.status().mode == "off"
 
 
 def test_an_unknown_mode_is_refused(world: World) -> None:
@@ -211,7 +211,7 @@ def test_the_pin_survives_a_restart(world: World) -> None:
     world.pin.change("stations", "123456")
     cookie = granted(world)
     again = world.make()
-    assert again.mode == "stations"
+    assert again.status().mode == "stations"
     assert not again.access(cookie).hidden
     assert again.attempt("123456", "x").ok
 
@@ -262,13 +262,13 @@ def test_access_is_taken_from_one_state(world: World, monkeypatch: pytest.Monkey
 
 
 def test_the_revision_moves_with_the_mode_and_the_pin(world: World) -> None:
-    assert world.pin.revision == "off.0"
+    assert world.pin.status().revision == "off.0"
     world.pin.change("stations", "123456")
-    assert world.pin.revision == "stations.1"
+    assert world.pin.status().revision == "stations.1"
     world.pin.change("site", None)
-    assert world.pin.revision == "site.1"
+    assert world.pin.status().revision == "site.1"
     world.pin.change("site", "654321")
-    assert world.pin.revision == "site.2"
+    assert world.pin.status().revision == "site.2"
     assert world.pin.status().revision == "site.2"
 
 
@@ -277,7 +277,7 @@ def test_a_stale_change_is_refused(world: World) -> None:
     with pytest.raises(PinStale) as caught:
         world.pin.change("off", None, based_on="off.0")
     assert caught.value.current == "stations.1"
-    assert world.pin.mode == "stations"
+    assert world.pin.status().mode == "stations"
     assert world.pin.change("off", None, based_on="stations.1").mode == "off"
 
 
