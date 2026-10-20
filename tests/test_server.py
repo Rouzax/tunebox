@@ -1254,3 +1254,48 @@ def test_a_large_post_from_off_the_network_is_hidden_before_any_session_read(
     assert (status, body) == (404, {"error": "not_found"})
     assert answered["connection"] == "close"
     assert asked == []
+
+
+def exchange(httpd: TuneboxServer, raw: bytes) -> bytes:
+    """Everything the server sends back on one connection until it hangs up."""
+    with socket.create_connection(("127.0.0.1", httpd.server_address[1]), timeout=5) as conn:
+        conn.sendall(raw)
+        received = b""
+        while chunk := conn.recv(65536):
+            received += chunk
+    return received
+
+
+@pytest.mark.parametrize("path", [b"/admin/api/config", b"/admin/api/login", b"/api/pin"])
+def test_a_length_in_other_digits_is_refused_not_crashed(
+    admin_server: TuneboxServer, caplog: pytest.LogCaptureFixture, path: bytes
+) -> None:
+    # Superscript two: str.isdigit() takes it, int() does not.
+    raw = (
+        b"POST " + path + b" HTTP/1.1\r\nHost: x\r\nOrigin: " + ORIGIN.encode() + b"\r\n"
+        b"Content-Type: application/json\r\nContent-Length: \xb2\r\n\r\n{}"
+    )
+    with caplog.at_level(logging.DEBUG):
+        received = exchange(admin_server, raw)
+    assert received.startswith(b"HTTP/1.1 411 ")
+    assert received.count(b"HTTP/1.1 ") == 1
+    assert b"Connection: close" in received
+    assert not any(r.getMessage() == "request_crashed" for r in caplog.records)
+
+
+def test_a_crash_before_the_body_is_read_ends_the_connection(
+    admin_server: TuneboxServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def crash(_self: Admin, _request: Request) -> tuple[int, Response | None]:
+        raise RuntimeError("broken")
+
+    monkeypatch.setattr(Admin, "body_limit", crash)
+    smuggled = b"GET /api/channels HTTP/1.1\r\nHost: x\r\n\r\n"
+    raw = (
+        b"POST /admin/api/login HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+        b"Content-Length: " + str(len(smuggled)).encode() + b"\r\n\r\n" + smuggled
+    )
+    received = exchange(admin_server, raw)
+    assert received.startswith(b"HTTP/1.1 500 ")
+    assert received.count(b"HTTP/1.1 ") == 1
+    assert b"Connection: close" in received

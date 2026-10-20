@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
-from tunebox.admin import ADMIN_HEADERS, Admin, Request, Response
+from tunebox.admin import ADMIN_HEADERS, Admin, Request, Response, content_length
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import Network, StreamConfig
@@ -252,6 +252,8 @@ class Handler(BaseHTTPRequestHandler):
                 pass  # the client went away mid-response
             except Exception:  # keep one broken request out of socketserver's stderr
                 log.error("request_crashed", exc_info=True, extra={"fields": {"path": path}})
+                # The body may be unread, and would be parsed as the next request.
+                self.close_connection = True
                 if self._status == 0:
                     admin_headers = ADMIN_HEADERS if is_admin else None
                     self._send_json(500, {"error": "internal"}, head, admin_headers)
@@ -273,12 +275,12 @@ class Handler(BaseHTTPRequestHandler):
         read would be parsed as the next request, so a refused one also
         ends the connection."""
         headers = ADMIN_HEADERS if admin else None
-        length = self.headers.get("Content-Length")
-        if self.headers.get("Transfer-Encoding") or length is None or not length.isdigit():
+        length = content_length(self.headers.get("Content-Length"))
+        if self.headers.get("Transfer-Encoding") or length is None:
             self.close_connection = True
             self._send_json(411, {"error": "length_required"}, False, headers)
             return None
-        if int(length) > limit:
+        if length > limit:
             self.close_connection = True
             if refusal is not None:
                 self._send(
@@ -288,10 +290,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(413, {"error": "too_large"}, False, headers)
             return None
         try:
-            body = self.rfile.read(int(length))
+            body = self.rfile.read(length)
         except OSError:  # TimeoutError: the client stalled
             body = None
-        if body is None or len(body) < int(length):
+        if body is None or len(body) < length:
             # A client that stalls or hangs up mid-body is not a server
             # fault, and the stream is no longer usable: hang up silently.
             self.close_connection = True
@@ -300,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
                 logging.DEBUG,
                 "request_body_incomplete",
                 path=urllib.parse.urlsplit(self.path).path,
-                expected=int(length),
+                expected=length,
                 received=None if body is None else len(body),
             )
             return None
