@@ -186,7 +186,6 @@ class Admin:
         self.gate = Gate(accounts.server_key, self.plain_http, clock, monotonic, sleep)
         self._setup_token: str | None = None
         self._setup_until = 0.0
-        self._setup_secret: bytes | None = None
         if config.setup_page and not accounts.exists():
             self._setup_token = crypto.new_token()
             self._setup_until = monotonic() + SETUP_TOKEN_S
@@ -468,22 +467,17 @@ class Admin:
             return _error(400, "bad_request")
         if not self._setup_allowed(request, body["token"]):
             return _error(401, "setup_refused")
-        # One secret per token, so a reload shows the secret already scanned.
-        if self._setup_secret is None:
-            self._setup_secret = crypto.new_totp_secret()
-        return _json(
-            200,
-            {
-                "secret": crypto.secret_text(self._setup_secret),
-                "uri": crypto.otpauth_uri(self._setup_secret),
-            },
-        )
+        secret = self.gate.setup_secret()
+        # Anyone holding the token gets the same secret; this line shows
+        # every fetch, so one from an unexpected address stands out.
+        event(log, logging.WARNING, "admin_setup_started", client=request.client)
+        return _json(200, {"secret": crypto.secret_text(secret), "uri": crypto.otpauth_uri(secret)})
 
     def _setup_finish(self, request: Request) -> Response:
         body = _body(request, ("token", "password", "code"))
         if body is None:
             return _error(400, "bad_request")
-        secret = self._setup_secret
+        secret = self.gate.setup_secret_shown()
         if not self._setup_allowed(request, body["token"]) or secret is None:
             return _error(401, "setup_refused")
         try:
@@ -504,7 +498,7 @@ class Admin:
             except AccountError:
                 return _error(401, "setup_refused")
         self._setup_token = None
-        self._setup_secret = None
+        self.gate.end_setup()
         event(log, logging.WARNING, "admin_account_created", client=request.client)
         return _json(200, {"recovery_codes": codes})
 

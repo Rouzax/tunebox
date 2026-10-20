@@ -1,6 +1,8 @@
 import base64
 import json
 import logging
+import threading
+import time
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -350,9 +352,44 @@ def test_reloading_the_setup_page_keeps_the_secret(
     with caplog.at_level(logging.WARNING):
         world = World(tmp_path, setup_page=True, account=False)
     token = setup_token(caplog.records)
-    first = json_of(world.call("POST", "/admin/api/setup/start", {"token": token}))
-    again = json_of(world.call("POST", "/admin/api/setup/start", {"token": token}))
+    with caplog.at_level(logging.WARNING):
+        first = json_of(world.call("POST", "/admin/api/setup/start", {"token": token}))
+        again = json_of(
+            world.call("POST", "/admin/api/setup/start", {"token": token}, client="203.0.113.9")
+        )
     assert first["secret"] == again["secret"]
+    # Every fetch of the secret shows in the log, with who fetched it.
+    started = [r for r in caplog.records if r.getMessage() == "admin_setup_started"]
+    assert [r.__dict__["fields"]["client"] for r in started] == ["198.51.100.7", "203.0.113.9"]
+    world.settings.close()
+
+
+def test_two_setup_starts_at_once_get_one_secret(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        world = World(tmp_path, setup_page=True, account=False)
+    token = setup_token(caplog.records)
+    made = crypto.new_totp_secret
+
+    def slow() -> bytes:
+        time.sleep(0.05)
+        return made()
+
+    monkeypatch.setattr(crypto, "new_totp_secret", slow)
+    secrets: list[str] = []
+
+    def start(client: str) -> None:
+        answer = world.call("POST", "/admin/api/setup/start", {"token": token}, client=client)
+        secrets.append(json_of(answer)["secret"])
+
+    threads = [threading.Thread(target=start, args=(f"198.51.100.{n}",)) for n in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(secrets) == 2
+    assert secrets[0] == secrets[1]
     world.settings.close()
 
 

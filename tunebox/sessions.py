@@ -49,6 +49,8 @@ class Gate:
         self._lock = threading.Lock()
         # New authenticator secrets waiting for their first code, by session.
         self._totp: dict[str, bytes] = {}
+        # The secret the setup page shows, until the account is made.
+        self._setup: bytes | None = None
 
     def reserve(self, client: str) -> Callable[[], None] | None:
         return self._failures.reserve(group(client))
@@ -102,6 +104,22 @@ class Gate:
     def drop_totp(self, keep: Collection[str]) -> None:
         with self._lock:
             self._totp = {k: v for k, v in self._totp.items() if k in keep}
+
+    def setup_secret(self) -> bytes:
+        """The setup secret, made on first ask: one per setup token, so a
+        reload, or two starts at once, show the secret already scanned."""
+        with self._lock:
+            if self._setup is None:
+                self._setup = crypto.new_totp_secret()
+            return self._setup
+
+    def setup_secret_shown(self) -> bytes | None:
+        with self._lock:
+            return self._setup
+
+    def end_setup(self) -> None:
+        with self._lock:
+            self._setup = None
 
     def floor(self, started: float) -> None:
         left = started + LOGIN_FLOOR_S - self._monotonic()
