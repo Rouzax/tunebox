@@ -103,6 +103,9 @@ function backIcon() {
 // does not have to play on while the PIN is typed. options.canStop is asked
 // each time the keypad opens: Stop shows only while something plays.
 export function bindPinScreen(root, api, options) {
+    // ask() takes options of its own, so the keypad's are read here.
+    const canStop = options && options.canStop;
+    const onStop = options && options.onStop;
     const screen = root.querySelector('.pin-screen');
     const title = node('h2', 'pin-title');
     title.id = 'pin-title';
@@ -128,13 +131,14 @@ export function bindPinScreen(root, api, options) {
     screen.setAttribute('aria-labelledby', 'pin-title');
     screen.append(title, dots, error, keys, cancel);
     let stop = null;
-    if (options && options.onStop) {
+    if (onStop) {
         stop = node('button', 'pin-stop btn', 'Stop');
         stop.type = 'button';
         stop.hidden = true;
         stop.addEventListener('click', () => {
             stop.hidden = true;
-            options.onStop();
+            keys.querySelector('button').focus();
+            onStop();
         });
         screen.append(stop);
     }
@@ -262,7 +266,7 @@ export function bindPinScreen(root, api, options) {
                 draw();
                 screen.hidden = false;
                 if (stop) {
-                    stop.hidden = !options.canStop();
+                    stop.hidden = !(canStop && canStop());
                 }
                 keys.querySelector('button').focus();
             }
