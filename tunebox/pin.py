@@ -44,10 +44,28 @@ class PinError(Exception):
     pass
 
 
+class PinStale(PinError):
+    def __init__(self, current: str) -> None:
+        super().__init__("changed elsewhere")
+        self.current = current
+
+
+@dataclass(frozen=True)
+class Access:
+    """What one request may see, decided from one reading of the state."""
+
+    locked: bool
+    hidden: bool
+    # The answer depends on the grant cookie: no shared cache may keep it.
+    private: bool
+    revision: str
+
+
 @dataclass(frozen=True)
 class PinStatus:
     mode: str
     set: bool
+    revision: str
 
 
 @dataclass(frozen=True)
@@ -64,6 +82,10 @@ class _State:
     mode: str
     digest: str | None
     generation: int
+
+
+def _revision(state: _State) -> str:
+    return f"{state.mode}.{state.generation}"
 
 
 def valid_pin(text: str) -> bool:
@@ -85,7 +107,9 @@ def read_cookie(header: str | None, name: str) -> str | None:
 
 class Pin:
     """Safe to share between threads: the state is one immutable value,
-    replaced whole under a lock when it changes."""
+    replaced whole after a change commits. A change holds its own lock
+    through the database write; the failure record has another, so a slow
+    write never stalls PIN attempts."""
 
     def __init__(
         self,
@@ -99,7 +123,8 @@ class Pin:
         self._clock = clock
         self._monotonic = monotonic
         self._pace = Pace(FLOOD_PACE_S, clock=monotonic)
-        self._lock = threading.Lock()
+        self._change_lock = threading.Lock()
+        self._recent_lock = threading.Lock()
         self._failures = FailureLimit(FAIL_LIMIT, FAIL_WINDOW_S, LOCK_S, clock=monotonic)
         self._recent: deque[float] = deque()
         self._state = self._load()
@@ -108,12 +133,27 @@ class Pin:
     def mode(self) -> str:
         return self._state.mode
 
+    @property
+    def revision(self) -> str:
+        return _revision(self._state)
+
     def status(self) -> PinStatus:
         state = self._state
-        return PinStatus(state.mode, state.digest is not None)
+        return PinStatus(state.mode, state.digest is not None, _revision(state))
 
-    def granted(self, cookie_header: str | None) -> bool:
+    def access(self, cookie_header: str | None) -> Access:
         state = self._state
+        if state.mode == "off":
+            return Access(False, False, False, _revision(state))
+        granted = self._granted(state, cookie_header)
+        return Access(
+            locked=state.mode == "site" and not granted,
+            hidden=state.mode == "stations" and not granted,
+            private=True,
+            revision=_revision(state),
+        )
+
+    def _granted(self, state: _State, cookie_header: str | None) -> bool:
         value = read_cookie(cookie_header, GRANT_COOKIE)
         payload = crypto.unsign(self._key(), value, GRANT_PURPOSE) if value else None
         if payload is None:
@@ -128,23 +168,19 @@ class Pin:
         except ValueError:
             return False
 
-    def locks_site(self, cookie_header: str | None) -> bool:
-        return self._state.mode == "site" and not self.granted(cookie_header)
-
-    def hides_stations(self, cookie_header: str | None) -> bool:
-        return self._state.mode == "stations" and not self.granted(cookie_header)
-
     def attempt(self, pin: str, client: str, secure: bool = True) -> Attempt:
         """secure: the request reached the proxy over https, so the browser
         may be told to send the grant over https only."""
         state = self._state
         if state.mode == "off":
             return Attempt(False, reason="off")
-        if self._flooded() and not self._pace.allow():
-            return Attempt(False, reason="busy")
         release = self._failures.reserve(group(client))
         if release is None:
             return Attempt(False, reason="locked")
+        if self._flooded() and not self._pace.allow():
+            # Not this address's guess: its reservation goes back.
+            release()
+            return Attempt(False, reason="busy")
         given = self._digest(pin) if valid_pin(pin) else ""
         if state.digest is None or not hmac.compare_digest(given, state.digest):
             self._note_failure()
@@ -157,16 +193,19 @@ class Pin:
             True, cookie=self._cookie(crypto.sign(self._key(), payload, GRANT_PURPOSE), secure)
         )
 
-    def change(self, mode: str, pin: str | None) -> PinStatus:
+    def change(self, mode: str, pin: str | None, based_on: str | None = None) -> PinStatus:
         """Sets the mode and the PIN (None keeps it). A new PIN, and leaving
         "off", sign out every device; moving between the two other modes
-        keeps them."""
+        keeps them. based_on is the revision the caller saw; a different
+        current one raises PinStale."""
         if mode not in MODES:
             raise PinError(f"the mode is one of {', '.join(MODES)}")
         if pin is not None and not valid_pin(pin):
             raise PinError(f"the PIN is {PIN_MIN} to {PIN_MAX} digits")
-        with self._lock:
+        with self._change_lock:
             old = self._state
+            if based_on is not None and based_on != _revision(old):
+                raise PinStale(_revision(old))
             digest = self._digest(pin) if pin is not None else old.digest
             if mode != "off" and digest is None:
                 raise PinError("set a PIN before switching it on")
@@ -200,12 +239,12 @@ class Pin:
         return f"{GRANT_COOKIE}={value}; Path=/; Max-Age={GRANT_S}; HttpOnly;{flag} SameSite=Lax"
 
     def _note_failure(self) -> None:
-        with self._lock:
+        with self._recent_lock:
             self._recent.append(self._monotonic())
 
     def _flooded(self) -> bool:
         now = self._monotonic()
-        with self._lock:
+        with self._recent_lock:
             while self._recent and self._recent[0] <= now - FLOOD_WINDOW_S:
                 self._recent.popleft()
             # Capped: past the threshold only the count matters.

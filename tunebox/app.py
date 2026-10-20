@@ -120,11 +120,11 @@ def main() -> int:
             address,
             lambda: runtime.snapshot,
             web_dir,
+            pin,
             logos=logos,
             bursts=bursts,
             admin=admin,
             trusted=config.server.trusted_proxies,
-            pin=pin,
         )
     except OSError as error:
         print(f"tunebox: cannot listen on {address[0]}:{address[1]}: {error}", file=sys.stderr)

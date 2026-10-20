@@ -838,7 +838,8 @@ other content type, or a `Sec-Fetch-Site` other than `same-origin`) is a
 right PIN answers `204` and sets the `tunebox_grant` cookie (one year;
 `Secure` when your proxy says the visit came over https); a wrong one is a
 `401` with `{"error": "pin_wrong"}`; an address that must wait gets `429`
-with `{"error": "slow_down"}`. While the PIN is off it answers `204`
+with `{"error": "slow_down"}`; a try refused unchecked while many addresses
+are guessing gets `429` with `{"error": "busy"}` and `Retry-After: 2`. While the PIN is off it answers `204`
 without a cookie. While the PIN is on:
 
 - With **the whole player** locked and no grant, every page address
@@ -850,7 +851,11 @@ without a cookie. While the PIN is on:
   their `/now` and logos answer `404`, as for a station that does not
   exist, and `/api/player` gives no `default_channel` that is hidden.
 - Answers that depend on the grant are sent with `Cache-Control: private`
-  and `Vary: Cookie`.
+  and `Vary: Cookie`, `304` answers included.
+- The PIN revision (`<mode>.<generation>`, changed by every mode change and
+  every new PIN) is in the `pin` field of `/now` and in the
+  `X-Tunebox-Pin-Revision` header of `/api/channels`, so a player notices
+  a change.
 
 Everything under `/admin` belongs to the admin panel (when it is on) and
 is not meant for other clients: its API needs the panel's session cookie,

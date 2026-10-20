@@ -12,6 +12,7 @@ from tunebox import app
 from tunebox.accounts import Accounts
 from tunebox.app import WEB_ADMIN_DIR, StopSignal, main, open_settings, shut_down
 from tunebox.config import state_from_toml
+from tunebox.pin import Pin
 from tunebox.runtime import EMPTY, Runtime
 from tunebox.server import TuneboxServer
 from tunebox.settings import Settings, SettingsWriteError
@@ -71,7 +72,8 @@ def test_shutdown_waits_for_workers_before_closing_the_store(
     worker.start()
     settings = Settings(tmp_path / "t.db")
     runtime = Runtime(settings, lambda _config, _carry: pytest.fail("no channels expected"))
-    server = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path)
+    pin = Pin(settings, lambda: b"k" * 32)
+    server = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, pin)
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}).start()
     stop.set()
     with caplog.at_level(logging.ERROR):

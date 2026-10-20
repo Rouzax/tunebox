@@ -1,10 +1,25 @@
+import dataclasses
+import threading
+import time
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
 from tunebox import crypto
-from tunebox.pin import GRANT_COOKIE, GRANT_PURPOSE, GRANT_S, Pin, PinError, read_cookie, valid_pin
+from tunebox.pin import (
+    GRANT_COOKIE,
+    GRANT_PURPOSE,
+    GRANT_S,
+    Access,
+    Pin,
+    PinError,
+    PinStale,
+    read_cookie,
+    valid_pin,
+)
 from tunebox.settings import Settings
 
 KEY = b"k" * 32
@@ -49,8 +64,8 @@ def granted(world: World, pin: str = "123456", client: str = "198.51.100.7") -> 
 def test_off_by_default_and_open(world: World) -> None:
     assert world.pin.mode == "off"
     assert world.pin.status().mode == "off" and world.pin.status().set is False
-    assert not world.pin.locks_site(None)
-    assert not world.pin.hides_stations(None)
+    assert not world.pin.access(None).locked
+    assert not world.pin.access(None).hidden
     assert world.pin.attempt("123456", "x").reason == "off"
 
 
@@ -75,27 +90,27 @@ def test_a_pin_is_six_to_eight_ascii_digits(world: World, bad: str) -> None:
 
 def test_site_mode_locks_the_site_until_the_pin(world: World) -> None:
     world.pin.change("site", "123456")
-    assert world.pin.locks_site(None)
-    assert not world.pin.hides_stations(None)
+    assert world.pin.access(None).locked
+    assert not world.pin.access(None).hidden
     cookie = granted(world)
     assert cookie.startswith(f"{GRANT_COOKIE}=")
-    assert not world.pin.locks_site(cookie)
-    assert not world.pin.locks_site(f"other=1; {cookie}; more=2")
+    assert not world.pin.access(cookie).locked
+    assert not world.pin.access(f"other=1; {cookie}; more=2").locked
 
 
 def test_stations_mode_hides_stations_until_the_pin(world: World) -> None:
     world.pin.change("stations", "123456")
-    assert not world.pin.locks_site(None)
-    assert world.pin.hides_stations(None)
-    assert not world.pin.hides_stations(granted(world))
+    assert not world.pin.access(None).locked
+    assert world.pin.access(None).hidden
+    assert not world.pin.access(granted(world)).hidden
 
 
 def test_one_grant_serves_both_modes(world: World) -> None:
     world.pin.change("stations", "123456")
     cookie = granted(world)
     world.pin.change("site", None)
-    assert world.pin.granted(cookie)
-    assert not world.pin.locks_site(cookie)
+    assert not world.pin.access(cookie).hidden
+    assert not world.pin.access(cookie).locked
 
 
 def test_the_grant_cookie_attributes(world: World) -> None:
@@ -159,18 +174,18 @@ def test_changing_the_pin_signs_every_device_out(world: World) -> None:
     world.pin.change("site", "123456")
     cookie = granted(world)
     world.pin.change("site", "7654321")
-    assert world.pin.locks_site(cookie)
+    assert world.pin.access(cookie).locked
     assert world.pin.attempt("123456", "x").reason == "wrong"
-    assert not world.pin.locks_site(granted(world, "7654321"))
+    assert not world.pin.access(granted(world, "7654321")).locked
 
 
 def test_switching_off_and_on_signs_every_device_out(world: World) -> None:
     world.pin.change("site", "123456")
     cookie = granted(world)
     world.pin.change("off", None)
-    assert not world.pin.locks_site(None)
+    assert not world.pin.access(None).locked
     world.pin.change("site", None)
-    assert world.pin.locks_site(cookie)
+    assert world.pin.access(cookie).locked
 
 
 def test_moving_between_modes_keeps_the_devices(world: World) -> None:
@@ -178,7 +193,7 @@ def test_moving_between_modes_keeps_the_devices(world: World) -> None:
     cookie = granted(world)
     world.pin.change("stations", None)
     world.pin.change("site", None)
-    assert not world.pin.locks_site(cookie)
+    assert not world.pin.access(cookie).locked
 
 
 def test_an_expired_or_forged_grant_is_refused(world: World) -> None:
@@ -186,10 +201,10 @@ def test_an_expired_or_forged_grant_is_refused(world: World) -> None:
     cookie = granted(world)
     name, _, value = cookie.partition("=")
     payload, _, mac = value.rpartition(".")
-    assert world.pin.locks_site(f"{name}={payload}.{mac[:-2]}xx")
-    assert world.pin.locks_site(f"{name}=p1.abc.1.99999999999.{mac}")
+    assert world.pin.access(f"{name}={payload}.{mac[:-2]}xx").locked
+    assert world.pin.access(f"{name}=p1.abc.1.99999999999.{mac}").locked
     world.clock.now += GRANT_S + 1
-    assert world.pin.locks_site(cookie)
+    assert world.pin.access(cookie).locked
 
 
 def test_the_pin_survives_a_restart(world: World) -> None:
@@ -197,7 +212,7 @@ def test_the_pin_survives_a_restart(world: World) -> None:
     cookie = granted(world)
     again = world.make()
     assert again.mode == "stations"
-    assert again.granted(cookie)
+    assert not again.access(cookie).hidden
     assert again.attempt("123456", "x").ok
 
 
@@ -224,13 +239,77 @@ def test_a_grant_for_another_purpose_is_refused(world: World) -> None:
     world.pin.change("site", "123456")
     expiry = int(world.clock.now) + 999
     forged = crypto.sign(KEY, f"p2.dev.1.{expiry}", "known-browser")
-    assert world.pin.locks_site(f"{GRANT_COOKIE}={forged}")
+    assert world.pin.access(f"{GRANT_COOKIE}={forged}").locked
     genuine = crypto.sign(KEY, f"p2.dev.1.{expiry}", "listener-grant")
-    assert not world.pin.locks_site(f"{GRANT_COOKIE}={genuine}")
+    assert not world.pin.access(f"{GRANT_COOKIE}={genuine}").locked
 
 
 def test_a_grant_from_the_previous_version_is_refused(world: World) -> None:
     world.pin.change("site", "123456")
     expiry = int(world.clock.now) + 999
     old = crypto.sign(KEY, f"p1.dev.1.{expiry}", GRANT_PURPOSE)
-    assert world.pin.locks_site(f"{GRANT_COOKIE}={old}")
+    assert world.pin.access(f"{GRANT_COOKIE}={old}").locked
+
+
+def test_access_is_taken_from_one_state(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    world.pin.change("stations", "123456")
+    states = iter([world.pin._state, dataclasses.replace(world.pin._state, mode="site")])  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(
+        type(world.pin), "_state", property(lambda _self: next(states)), raising=False
+    )
+    access = world.pin.access(None)
+    assert access == Access(locked=False, hidden=True, private=True, revision="stations.1")
+
+
+def test_the_revision_moves_with_the_mode_and_the_pin(world: World) -> None:
+    assert world.pin.revision == "off.0"
+    world.pin.change("stations", "123456")
+    assert world.pin.revision == "stations.1"
+    world.pin.change("site", None)
+    assert world.pin.revision == "site.1"
+    world.pin.change("site", "654321")
+    assert world.pin.revision == "site.2"
+    assert world.pin.status().revision == "site.2"
+
+
+def test_a_stale_change_is_refused(world: World) -> None:
+    world.pin.change("stations", "123456")
+    with pytest.raises(PinStale) as caught:
+        world.pin.change("off", None, based_on="off.0")
+    assert caught.value.current == "stations.1"
+    assert world.pin.mode == "stations"
+    assert world.pin.change("off", None, based_on="stations.1").mode == "off"
+
+
+def test_a_locked_address_does_not_spend_the_flood_pace(world: World) -> None:
+    world.pin.change("site", "123456")
+    for _ in range(10):
+        world.pin.attempt("000000", "198.51.100.1")
+    for n in range(100):  # a flood from elsewhere
+        world.pin.attempt("000000", f"203.0.113.{n % 250}")
+        world.clock.now += 0.01
+    world.clock.now += 2.0
+    assert world.pin.attempt("000000", "198.51.100.1").reason == "locked"
+    assert world.pin.attempt("123456", "192.0.2.5").ok  # the slot was still free
+
+
+def test_a_pin_change_does_not_wait_for_a_flood_check(world: World) -> None:
+    world.pin.change("site", "123456")
+    held = threading.Event()
+    release = threading.Event()
+    real = world.settings.transaction
+
+    def slow_transaction() -> Any:
+        held.set()
+        release.wait(2)
+        return real()
+
+    with patch.object(world.settings, "transaction", slow_transaction):
+        changer = threading.Thread(target=world.pin.change, args=("site", "654321"))
+        changer.start()
+        held.wait(1)
+        started = time.monotonic()
+        world.pin.attempt("000000", "198.51.100.1")
+        assert time.monotonic() - started < 0.1
+        release.set()
+        changer.join(2)

@@ -39,7 +39,7 @@ from tunebox.config import (
 )
 from tunebox.logs import event
 from tunebox.paths import inside
-from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, read_cookie
+from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, PinStale, read_cookie
 from tunebox.rulecheck import refused
 from tunebox.sessions import KNOWN_S, Gate
 from tunebox.settings import (
@@ -716,10 +716,17 @@ class Admin:
         payload = _object(request) or {}
         mode = payload.get("mode")
         new_pin = payload.get("pin")
-        if not isinstance(mode, str) or not (new_pin is None or isinstance(new_pin, str)):
+        based_on = payload.get("based_on")
+        if (
+            not isinstance(mode, str)
+            or not isinstance(based_on, str)
+            or not (new_pin is None or isinstance(new_pin, str))
+        ):
             return _error(400, "bad_request")
         try:
-            status = self._pin.change(mode, new_pin)
+            status = self._pin.change(mode, new_pin, based_on)
+        except PinStale as error:
+            return _json(409, {"error": "stale", "revision": error.current})
         except PinError as error:
             return _json(400, {"error": "invalid", "message": str(error)})
         # Not in the history: a restore applies a whole configuration, and a

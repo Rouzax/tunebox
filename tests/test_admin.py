@@ -923,12 +923,19 @@ def test_pin_endpoints_need_a_session_and_the_token(world: World) -> None:
 
 def test_set_the_pin_and_its_mode(world: World, caplog: pytest.LogCaptureFixture) -> None:
     csrf = world.login()
-    assert json_of(world.call("GET", "/admin/api/pin")) == {"mode": "off", "set": False}
+    assert json_of(world.call("GET", "/admin/api/pin")) == {
+        "mode": "off",
+        "set": False,
+        "revision": "off.0",
+    }
     with caplog.at_level(logging.INFO):
         response = world.call(
-            "POST", "/admin/api/pin", {"mode": "stations", "pin": "123456"}, csrf=csrf
+            "POST",
+            "/admin/api/pin",
+            {"mode": "stations", "pin": "123456", "based_on": "off.0"},
+            csrf=csrf,
         )
-    assert json_of(response) == {"mode": "stations", "set": True}
+    assert json_of(response) == {"mode": "stations", "set": True, "revision": "stations.1"}
     assert world.pin.mode == "stations"
     change = next(r for r in caplog.records if r.getMessage() == "admin_change")
     assert change.__dict__["fields"] == {
@@ -938,21 +945,24 @@ def test_set_the_pin_and_its_mode(world: World, caplog: pytest.LogCaptureFixture
         "client": "198.51.100.7",
     }
     assert "123456" not in caplog.text
-    site = world.call("POST", "/admin/api/pin", {"mode": "site"}, csrf=csrf)
-    assert json_of(site) == {"mode": "site", "set": True}
-    off = world.call("POST", "/admin/api/pin", {"mode": "off"}, csrf=csrf)
-    assert json_of(off) == {"mode": "off", "set": True}
+    site = world.call(
+        "POST", "/admin/api/pin", {"mode": "site", "based_on": "stations.1"}, csrf=csrf
+    )
+    assert json_of(site) == {"mode": "site", "set": True, "revision": "site.1"}
+    off = world.call("POST", "/admin/api/pin", {"mode": "off", "based_on": "site.1"}, csrf=csrf)
+    assert json_of(off) == {"mode": "off", "set": True, "revision": "off.1"}
 
 
 @pytest.mark.parametrize(
     ("body", "error"),
     [
-        ({"mode": "site"}, "invalid"),
-        ({"mode": "site", "pin": "12345"}, "invalid"),
-        ({"mode": "everything", "pin": "123456"}, "invalid"),
-        ({"mode": True}, "bad_request"),
-        ({"pin": "123456"}, "bad_request"),
-        ({"mode": "site", "pin": 123456}, "bad_request"),
+        ({"mode": "site", "based_on": "off.0"}, "invalid"),
+        ({"mode": "site", "pin": "12345", "based_on": "off.0"}, "invalid"),
+        ({"mode": "everything", "pin": "123456", "based_on": "off.0"}, "invalid"),
+        ({"mode": True, "based_on": "off.0"}, "bad_request"),
+        ({"pin": "123456", "based_on": "off.0"}, "bad_request"),
+        ({"mode": "site", "pin": 123456, "based_on": "off.0"}, "bad_request"),
+        ({"mode": "site", "pin": "123456", "based_on": 0}, "bad_request"),
     ],
 )
 def test_a_bad_pin_change_is_refused(world: World, body: dict[str, object], error: str) -> None:
@@ -964,7 +974,12 @@ def test_a_bad_pin_change_is_refused(world: World, body: dict[str, object], erro
 
 def test_pin_changes_stay_out_of_the_history(world: World) -> None:
     csrf = world.login()
-    world.call("POST", "/admin/api/pin", {"mode": "site", "pin": "123456"}, csrf=csrf)
+    world.call(
+        "POST",
+        "/admin/api/pin",
+        {"mode": "site", "pin": "123456", "based_on": "off.0"},
+        csrf=csrf,
+    )
     assert json_of(world.call("GET", "/admin/api/history"))["entries"] == []
 
 
@@ -1183,3 +1198,17 @@ def test_a_save_that_cannot_go_live_says_so(world: World) -> None:
     answer = save(world, csrf, 0, state_of(station("owr")))
     assert answer.status == 200
     assert json_of(answer) == {"version": 1, "changed": True, "applied": False}
+
+
+def test_a_pin_change_needs_the_revision_it_was_based_on(world: World) -> None:
+    csrf = world.login()
+    status = json_of(world.call("GET", "/admin/api/pin"))
+    assert status == {"mode": "off", "set": False, "revision": "off.0"}
+    body = {"mode": "stations", "pin": "123456", "based_on": "off.0"}
+    assert world.call("POST", "/admin/api/pin", body, csrf=csrf).status == 200
+    stale = {"mode": "off", "based_on": "off.0"}
+    answer = world.call("POST", "/admin/api/pin", stale, csrf=csrf)
+    assert answer.status == 409
+    assert json_of(answer) == {"error": "stale", "revision": "stations.1"}
+    assert world.pin.mode == "stations"
+    assert world.call("POST", "/admin/api/pin", {"mode": "off"}, csrf=csrf).status == 400

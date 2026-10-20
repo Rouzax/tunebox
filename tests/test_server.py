@@ -49,9 +49,16 @@ def serve(httpd: TuneboxServer) -> None:
     thread.start()
 
 
+def make_pin(tmp_path: Path) -> Pin:
+    """A PIN in mode off on its own settings database; the caller leaves the
+    database to be removed with tmp_path."""
+    return Pin(Settings(tmp_path / "pin.db"), lambda: b"k" * 32)
+
+
 def make_server(
     tmp_path: Path, pin: Pin | None = None, extra: tuple[ChannelConfig, ...] = ()
 ) -> TuneboxServer:
+    pin = pin or make_pin(tmp_path)
     web = tmp_path / "web"
     web.mkdir()
     (web / "index.html").write_text("<!doctype html><title>t</title>", encoding="utf-8")
@@ -87,7 +94,7 @@ def make_server(
         (logo_dir / f"{config.id}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     snapshot = Snapshot(1, channels, PlayerConfig(52.0, 5.0, extra[0].id if extra else None))
     httpd = TuneboxServer(
-        ("127.0.0.1", 0), lambda: snapshot, web, logos=logos, bursts=FakeBursts(), pin=pin
+        ("127.0.0.1", 0), lambda: snapshot, web, pin, logos=logos, bursts=FakeBursts()
     )
     serve(httpd)
     return httpd
@@ -252,10 +259,10 @@ def test_now_adds_the_burst_of_the_stream_played(
     original = channel.now_view
 
     def spy(
-        buffer_s: float = 0, version: int = 0, stream: str | None = None
+        buffer_s: float = 0, version: int = 0, stream: str | None = None, pin: str = "off.0"
     ) -> tuple[dict[str, object], str]:
         seen.append(buffer_s)
-        return original(buffer_s, version, stream)
+        return original(buffer_s, version, stream, pin)
 
     monkeypatch.setattr(channel, "now_view", spy)
     status, _, _ = request(server, "/api/channels/owr/now?buffer_s=2.5&stream=0")
@@ -406,12 +413,13 @@ def admin_parts(tmp_path: Path) -> Generator[tuple[TuneboxServer, Accounts]]:
     web_admin.mkdir()
     (web_admin / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
     accounts = Accounts(settings)
+    pin = Pin(settings, accounts.server_key)
     admin = Admin(
         accounts,
         AdminConfig(True, False, ORIGIN),
         web_admin,
         settings=settings,
-        pin=Pin(settings, accounts.server_key),
+        pin=pin,
         apply=lambda: 0,
         samples=list,
     )
@@ -422,6 +430,7 @@ def admin_parts(tmp_path: Path) -> Generator[tuple[TuneboxServer, Accounts]]:
         ("127.0.0.1", 0),
         lambda: EMPTY,
         web,
+        pin,
         admin=admin,
         trusted=(ipaddress.ip_network("127.0.0.0/8"),),
     )
@@ -460,16 +469,17 @@ def plain_server(tmp_path: Path) -> Generator[TuneboxServer]:
     web_admin.mkdir()
     (web_admin / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
     accounts = Accounts(settings)
+    pin = Pin(settings, accounts.server_key)
     admin = Admin(
         accounts,
         AdminConfig(True, False, PLAIN),
         web_admin,
         settings=settings,
-        pin=Pin(settings, accounts.server_key),
+        pin=pin,
         apply=lambda: 0,
         samples=list,
     )
-    httpd = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, admin=admin)
+    httpd = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, pin, admin=admin)
     serve(httpd)
     yield httpd
     httpd.shutdown()
@@ -517,12 +527,13 @@ def test_plain_http_hides_the_panel_from_an_untrusted_proxy(
 def test_plain_http_believes_a_trusted_proxy_about_the_client(tmp_path: Path) -> None:
     settings = Settings(tmp_path / "t.db")
     accounts = Accounts(settings)
+    pin = Pin(settings, accounts.server_key)
     admin = Admin(
         accounts,
         AdminConfig(True, False, PLAIN),
         tmp_path,
         settings=settings,
-        pin=Pin(settings, accounts.server_key),
+        pin=pin,
         apply=lambda: 0,
         samples=list,
     )
@@ -530,6 +541,7 @@ def test_plain_http_believes_a_trusted_proxy_about_the_client(tmp_path: Path) ->
         ("127.0.0.1", 0),
         lambda: EMPTY,
         tmp_path,
+        pin,
         admin=admin,
         trusted=(ipaddress.ip_network("127.0.0.0/8"),),
     )
@@ -719,14 +731,14 @@ def test_every_forwarded_for_line_is_read(
 
 
 class Recorder(Admin):
-    def __init__(self, settings: Settings, web: Path) -> None:
+    def __init__(self, settings: Settings, web: Path, pin: Pin) -> None:
         accounts = Accounts(settings)
         super().__init__(
             accounts,
             AdminConfig(True, False, ORIGIN),
             web,
             settings=settings,
-            pin=Pin(settings, accounts.server_key),
+            pin=pin,
             apply=lambda: 0,
             samples=list,
         )
@@ -739,8 +751,9 @@ class Recorder(Admin):
 
 def test_the_admin_gets_the_path_and_the_query_apart(tmp_path: Path) -> None:
     settings = Settings(tmp_path / "t.db")
-    admin = Recorder(settings, tmp_path)
-    httpd = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, admin=admin)
+    pin = Pin(settings, Accounts(settings).server_key)
+    admin = Recorder(settings, tmp_path, pin)
+    httpd = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, pin, admin=admin)
     serve(httpd)
     request(httpd, "/admin/api/history?before=12")
     httpd.shutdown()
@@ -940,8 +953,9 @@ def test_a_paced_pin_attempt_is_429_and_no_failure(
     monkeypatch.setattr(site.pin, "attempt", busy)
     with caplog.at_level(logging.INFO):
         status, headers, body = give_pin(site.httpd)
-    assert (status, json.loads(body)) == (429, {"error": "slow_down"})
+    assert (status, json.loads(body)) == (429, {"error": "busy"})
     assert headers["cache-control"] == "no-store"
+    assert headers["retry-after"] == "2"
     assert not [r for r in caplog.records if r.getMessage() == "listener_pin_failed"]
 
 
@@ -1027,3 +1041,83 @@ def test_a_stalled_body_closes_the_connection_without_a_crash(
             assert sock.recv(4096) == b""  # closed with no answer, 500 or otherwise
         assert any(r.getMessage() == "request_body_incomplete" for r in caplog.records)
     assert not any(r.getMessage() == "request_crashed" for r in caplog.records)
+
+
+def test_a_pin_change_changes_the_now_etag(tmp_path: Path) -> None:
+    pin = make_pin(tmp_path)
+    httpd = make_server(tmp_path, pin=pin)
+    _, headers, body = request(httpd, "/api/channels/owr/now")
+    assert json.loads(body)["pin"] == "off.0"
+    pin.change("stations", "123456")
+    status, _, body = request(
+        httpd, "/api/channels/owr/now", headers={"If-None-Match": headers["etag"]}
+    )
+    assert status == 200 and json.loads(body)["pin"] == "stations.1"
+    _, listed, _ = request(httpd, "/api/channels")
+    assert listed["x-tunebox-pin-revision"] == "stations.1"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_an_old_grant_after_a_new_pin_hides_the_stations_again(tmp_path: Path) -> None:
+    pin = make_pin(tmp_path)
+    hidden = dataclasses.replace(channel_config(), id="late", needs_pin=True)
+    httpd = make_server(tmp_path, pin=pin, extra=(hidden,))
+    pin.change("stations", "123456")
+    grant = cast(str, pin.attempt("123456", "198.51.100.7").cookie).split(";")[0]
+    assert request(httpd, "/api/channels/late/now", headers={"Cookie": grant})[0] == 200
+    pin.change("stations", "654321")
+    assert request(httpd, "/api/channels/late/now", headers={"Cookie": grant})[0] == 404
+    assert request(httpd, "/logos/late.png", headers={"Cookie": grant})[0] == 404
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_a_304_while_a_pin_is_on_stays_private(tmp_path: Path) -> None:
+    pin = make_pin(tmp_path)
+    httpd = make_server(tmp_path, pin=pin)
+    pin.change("stations", "123456")
+    _, headers, _ = request(httpd, "/api/channels/owr/now")
+    status, again, _ = request(
+        httpd, "/api/channels/owr/now", headers={"If-None-Match": headers["etag"]}
+    )
+    assert status == 304
+    assert again["vary"] == "Cookie"
+    assert again["cache-control"].startswith("private")
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_a_busy_pin_answer_says_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pin = make_pin(tmp_path)
+    httpd = make_server(tmp_path, pin=pin)
+
+    def busy(pin: str, client: str, secure: bool = True) -> Attempt:
+        return Attempt(False, reason="busy")
+
+    monkeypatch.setattr(pin, "attempt", busy)
+    status, headers, body = request(
+        httpd, "/api/pin", "POST", {"Content-Type": "application/json"}, b'{"pin": "123456"}'
+    )
+    assert status == 429
+    assert json.loads(body) == {"error": "busy"}
+    assert headers["retry-after"] == "2"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_a_repeated_cookie_line_counts_as_absent(tmp_path: Path) -> None:
+    pin = make_pin(tmp_path)
+    pin.change("site", "123456")
+    httpd = make_server(tmp_path, pin=pin)
+    grant = cast(str, pin.attempt("123456", "198.51.100.7").cookie).split(";")[0]
+    connection = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=5)
+    connection.putrequest("GET", "/api/channels")
+    connection.putheader("Cookie", grant)
+    connection.putheader("Cookie", "other=1")
+    connection.endheaders()
+    assert connection.getresponse().status == 401
+    connection.close()
+    assert request(httpd, "/api/channels", headers={"Cookie": grant})[0] == 200
+    httpd.shutdown()
+    httpd.server_close()

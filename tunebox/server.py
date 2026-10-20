@@ -22,7 +22,7 @@ from tunebox.logos import Logos
 from tunebox.logs import bound, event
 from tunebox.netguard import OTHER_FORWARDING, client_address, nearby, trusted_peer
 from tunebox.paths import inside
-from tunebox.pin import Pin
+from tunebox.pin import Access, Pin
 from tunebox.runtime import Snapshot
 
 log = logging.getLogger(__name__)
@@ -150,11 +150,11 @@ class TuneboxServer(ThreadingHTTPServer):
         address: tuple[str, int],
         snapshot: Callable[[], Snapshot],
         web_dir: Path,
+        pin: Pin,
         logos: Logos | None = None,
         bursts: Bursts | None = None,
         admin: Admin | None = None,
         trusted: tuple[Network, ...] = (),
-        pin: Pin | None = None,
     ) -> None:
         self.current = snapshot
         self.admin = admin
@@ -363,6 +363,11 @@ class Handler(BaseHTTPRequestHandler):
         proxied = self._forwarded() or any(self.headers.get(n) for n in OTHER_FORWARDING)
         return loopback and not proxied
 
+    def _cookie_header(self) -> str | None:
+        """A repeated Cookie line counts as absent, as on admin requests."""
+        lines = self.headers.get_all("Cookie") or []
+        return lines[0] if len(lines) == 1 else None
+
     def _pin(self, head: bool, body: bytes) -> None:
         pin = self.app.pin
         if self.command != "POST":
@@ -381,7 +386,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             payload = None
         given = cast("dict[str, object]", payload).get("pin") if isinstance(payload, dict) else None
-        if pin is None or not isinstance(given, str):
+        if not isinstance(given, str):
             return self._send_json(400, {"error": "bad_request"}, head, NO_STORE)
         client = self._client()
         result = pin.attempt(given, client, secure=self._https())
@@ -394,7 +399,8 @@ class Handler(BaseHTTPRequestHandler):
         if result.reason == "busy":
             # Someone's flood, not this address's guess: no CrowdSec strike.
             event(log, logging.DEBUG, "listener_pin_paced", client=client)
-            return self._send_json(429, {"error": "slow_down"}, head, NO_STORE)
+            retry = {**NO_STORE, "Retry-After": "2"}
+            return self._send_json(429, {"error": "busy"}, head, retry)
         event(log, logging.WARNING, "listener_pin_failed", client=client, reason=result.reason)
         if result.reason == "locked":
             return self._send_json(429, {"error": "slow_down"}, head, NO_STORE)
@@ -410,13 +416,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(200, {"status": "ok"}, head)
             status = {cid: channel.status() for cid, channel in channels.items()}
             return self._send_json(200, {"status": "ok", "channels": status}, head)
-        pin = self.app.pin
-        if pin is not None and pin.mode != "off" and _locked_route(parts):
-            cookie = self.headers.get("Cookie")
-            if pin.locks_site(cookie):
+        access = self.app.pin.access(self._cookie_header())
+        if _locked_route(parts) and access.private:
+            if access.locked:
                 return self._send_json(401, {"error": "pin_required"}, head, NO_STORE)
             self._private = True
-            self._hidden = pin.hides_stations(cookie)
+            self._hidden = access.hidden
         visible = {
             cid: channel
             for cid, channel in channels.items()
@@ -432,7 +437,11 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 for cid, channel in visible.items()
             ]
-            headers = {"Cache-Control": "no-cache", "X-Tunebox-Version": str(snapshot.version)}
+            headers = {
+                "Cache-Control": "no-cache",
+                "X-Tunebox-Version": str(snapshot.version),
+                "X-Tunebox-Pin-Revision": access.revision,
+            }
             if len(visible) < len(channels):
                 # The player offers "More stations" for these.
                 headers["X-Tunebox-Pin"] = "more"
@@ -466,7 +475,9 @@ class Handler(BaseHTTPRequestHandler):
                 bursts.request(stream)
                 buffer_s += bursts.burst_s(stream.url)
             name = stream.name if stream else None
-            body, etag = channel.now_view(buffer_s, version=snapshot.version, stream=name)
+            body, etag = channel.now_view(
+                buffer_s, version=snapshot.version, stream=name, pin=access.revision
+            )
             if etag_matches(self.headers.get("If-None-Match"), etag):
                 return self._not_modified(etag)
             headers = {"ETag": etag, "Cache-Control": "no-cache"}
@@ -483,7 +494,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(404, {"error": "not_found"}, head)
         if parts and parts[0] == "logos":
             return self._logo(parts, head, hidden=set(channels) - set(visible))
-        return self._static(path, head)
+        return self._static(path, head, access)
 
     def _logo(self, parts: list[str], head: bool, hidden: set[str]) -> None:
         if urllib.parse.unquote(parts[-1]).split(".")[0] in hidden:
@@ -505,7 +516,7 @@ class Handler(BaseHTTPRequestHandler):
         }
         self._send(200, target.read_bytes(), LOGO_TYPES[kind], head, headers)
 
-    def _static(self, path: str, head: bool, locked: bool = False) -> None:
+    def _static(self, path: str, head: bool, access: Access, locked: bool = False) -> None:
         """locked: the PIN page in place of a page the PIN keeps; never
         cached, and without an ETag a browser could revalidate the real
         page against."""
@@ -515,13 +526,12 @@ class Handler(BaseHTTPRequestHandler):
         content_type = CONTENT_TYPES.get(target.suffix) if target else None
         if target is None or content_type is None:
             return self._send_json(404, {"error": "not_found"}, head)
-        pin = self.app.pin
         page = target.suffix == ".html" and target != web_dir / PIN_PAGE.lstrip("/")
-        if not locked and page and pin is not None and pin.mode != "off":
+        if not locked and page and access.private:
             # Judged on the file about to be served, not the path as typed:
             # /index%2ehtml is the player page too.
-            if pin.locks_site(self.headers.get("Cookie")):
-                return self._static(PIN_PAGE, head, locked=True)
+            if access.locked:
+                return self._static(PIN_PAGE, head, access, locked=True)
             self._private = True
         headers: dict[str, str] = dict(NO_STORE)
         if not locked:
@@ -579,6 +589,11 @@ class Handler(BaseHTTPRequestHandler):
         self._status = 304
         self.send_response(304)
         self.send_header("ETag", etag)
+        if self._private:
+            # The same headers as the 200 this stands in for, so a cache
+            # that stores or revalidates the answer keeps it per device.
+            self.send_header("Cache-Control", "private, no-cache")
+            self.send_header("Vary", "Cookie")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", "0")
         self.end_headers()
