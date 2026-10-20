@@ -31,6 +31,7 @@ from tunebox.config import (
 )
 from tunebox.limits import FailureLimit, Pace, group
 from tunebox.logs import event
+from tunebox.pin import read_cookie
 from tunebox.rulecheck import check, lint
 from tunebox.settings import (
     Settings,
@@ -94,13 +95,7 @@ class Request:
         return next((v for k, v in self.headers.items() if k.lower() == wanted), None)
 
     def cookie(self, name: str) -> str | None:
-        """Read pair by pair: SimpleCookie drops every cookie when one
-        cookie of another app on the host is malformed."""
-        for pair in (self.header("Cookie") or "").split(";"):
-            key, sep, value = pair.strip().partition("=")
-            if sep and key == name:
-                return value
-        return None
+        return read_cookie(self.header("Cookie"), name)
 
 
 @dataclass(frozen=True)
