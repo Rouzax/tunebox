@@ -762,6 +762,29 @@ async function run() {
             return null;
         });
 
+        await step('a playing hidden station asks again after a PIN change', async () => {
+            await click('.channel-groups .channel[data-id="second"]');
+            if (!(await until(`document.querySelector('.current-channel').textContent === 'Second Station'`))) {
+                return 'could not pick the hidden station';
+            }
+            const changed = await adminCall('POST', 'pin', {mode: 'stations', pin: '24682468'});
+            if (changed !== 200) {
+                return `the PIN change answered ${changed}`;
+            }
+            // Its next poll finds it gone; the keypad offers it back.
+            if (!(await until(pinShown, 15000))) {
+                return 'no keypad after the PIN changed';
+            }
+            await typePin('24682468');
+            if (!(await until(`!(${pinShown})`))) {
+                return 'the new PIN did not close the keypad';
+            }
+            const polls = `performance.getEntriesByType('resource').filter((e) => e.name.includes('/api/channels/second/now')).length`;
+            const before = await evaluate(polls);
+            // Titles resume: the station is polled again within one interval.
+            return (await until(`${polls} > ${before}`, 15000)) ? null : 'the hidden station is no longer polled after the PIN';
+        });
+
         await step('switch the PIN off in the panel', async () => {
             const said = await savePin('off');
             const status = await evaluate(`fetch('/api/channels').then((r) => r.status)`);

@@ -159,6 +159,9 @@ async function start(root) {
     // The configuration changed: take the new list and keep what plays. A
     // channel that is gone keeps playing without titles until another is picked.
     let refreshing = false;
+    // The station on air left the list, so its titles stopped; they start
+    // again if it comes back (a PIN typed for hidden stations).
+    let lostChannel = false;
     async function refreshChannels() {
         if (refreshing) {
             return;
@@ -178,8 +181,17 @@ async function start(root) {
                 if (kept.replaced && player.state() !== 'stopped') {
                     app.play();
                 }
+                if (lostChannel) {
+                    lostChannel = false;
+                    poller.start(app.channel.id);
+                }
             } else {
                 poller.stop();
+                lostChannel = true;
+                if (fresh.more) {
+                    // Most likely hidden behind a changed PIN: offer it back.
+                    app.unlock();
+                }
             }
             events.emit('channels', {channels: app.channels});
             events.emit('stream', {channel: app.channel, stream: app.stream});
