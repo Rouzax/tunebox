@@ -11,6 +11,7 @@ from tunebox import crypto
 from tunebox.accounts import Accounts
 from tunebox.admin import ADMIN_HEADERS, Admin, Request, Response
 from tunebox.config import AdminConfig
+from tunebox.pin import Pin
 from tunebox.settings import Settings, SettingsWriteError
 
 ORIGIN = "https://radio.example"
@@ -45,11 +46,13 @@ class World:
         (web / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
         (web / "notes.md").write_text("x", encoding="utf-8")
         self.applied: list[int] = []
+        self.pin = Pin(self.settings, self.accounts.server_key, clock=self.clock)
         self.admin = Admin(
             self.accounts,
             AdminConfig(True, setup_page, origin),
             web,
             settings=self.settings,
+            pin=self.pin,
             apply=self.apply,
             samples=lambda: ["FISHER - Stay"],
             clock=self.clock,
@@ -834,3 +837,57 @@ def test_history_ids_are_plain_digits(world: World, before: str) -> None:
     world.login()
     assert world.call("GET", f"/admin/api/history?before={before}").status == 400
     assert world.call("GET", f"/admin/api/history/{before}").status == 404
+
+
+def test_pin_endpoints_need_a_session_and_the_token(world: World) -> None:
+    assert world.call("GET", "/admin/api/pin").status == 401
+    assert world.call("POST", "/admin/api/pin", {"mode": "off"}).status == 401
+    world.login()
+    assert world.call("POST", "/admin/api/pin", {"mode": "off"}).status == 403
+
+
+def test_set_the_pin_and_its_mode(world: World, caplog: pytest.LogCaptureFixture) -> None:
+    csrf = world.login()
+    assert json_of(world.call("GET", "/admin/api/pin")) == {"mode": "off", "set": False}
+    with caplog.at_level(logging.INFO):
+        response = world.call(
+            "POST", "/admin/api/pin", {"mode": "stations", "pin": "123456"}, csrf=csrf
+        )
+    assert json_of(response) == {"mode": "stations", "set": True}
+    assert world.pin.mode == "stations"
+    change = next(r for r in caplog.records if r.getMessage() == "admin_change")
+    assert change.__dict__["fields"] == {
+        "kind": "pin",
+        "mode": "stations",
+        "new_pin": True,
+        "client": "198.51.100.7",
+    }
+    assert "123456" not in caplog.text
+    site = world.call("POST", "/admin/api/pin", {"mode": "site"}, csrf=csrf)
+    assert json_of(site) == {"mode": "site", "set": True}
+    off = world.call("POST", "/admin/api/pin", {"mode": "off"}, csrf=csrf)
+    assert json_of(off) == {"mode": "off", "set": True}
+
+
+@pytest.mark.parametrize(
+    ("body", "error"),
+    [
+        ({"mode": "site"}, "invalid"),
+        ({"mode": "site", "pin": "12345"}, "invalid"),
+        ({"mode": "everything", "pin": "123456"}, "invalid"),
+        ({"mode": True}, "bad_request"),
+        ({"pin": "123456"}, "bad_request"),
+        ({"mode": "site", "pin": 123456}, "bad_request"),
+    ],
+)
+def test_a_bad_pin_change_is_refused(world: World, body: dict[str, object], error: str) -> None:
+    csrf = world.login()
+    response = world.call("POST", "/admin/api/pin", body, csrf=csrf)
+    assert (response.status, json_of(response)["error"]) == (400, error)
+    assert world.pin.mode == "off"
+
+
+def test_pin_changes_stay_out_of_the_history(world: World) -> None:
+    csrf = world.login()
+    world.call("POST", "/admin/api/pin", {"mode": "site", "pin": "123456"}, csrf=csrf)
+    assert json_of(world.call("GET", "/admin/api/history"))["entries"] == []

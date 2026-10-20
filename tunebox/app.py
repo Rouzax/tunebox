@@ -79,6 +79,7 @@ def main() -> int:
             config.admin,
             admin_dir,
             settings=settings,
+            pin=pin,
             apply=runtime.apply,
             samples=lambda: [
                 title

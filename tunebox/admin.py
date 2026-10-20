@@ -31,7 +31,7 @@ from tunebox.config import (
 )
 from tunebox.limits import FailureLimit, Pace, group
 from tunebox.logs import event
-from tunebox.pin import read_cookie
+from tunebox.pin import Pin, PinError, read_cookie
 from tunebox.rulecheck import check, lint
 from tunebox.settings import (
     Settings,
@@ -142,14 +142,17 @@ class Admin:
         config: AdminConfig,
         web_dir: Path,
         settings: Settings,
+        pin: Pin | None = None,
         apply: Callable[[], int] = lambda: 0,
         samples: Callable[[], list[str]] = list,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        """apply reloads the running channels after a change; samples gives
-        recent titles that new title rules are tried on."""
+        """pin is the listening PIN the settings page sets; apply reloads the
+        running channels after a change; samples gives recent titles that
+        new title rules are tried on."""
         self._accounts = accounts
+        self._pin = pin
         self._settings = settings
         self._apply = apply
         self._samples = samples
@@ -256,6 +259,8 @@ class Admin:
             ("POST", "account/totp/start"): (self._totp_start, True),
             ("POST", "account/totp/finish"): (self._totp_finish, True),
             ("POST", "account/recovery"): (self._recovery, True),
+            ("GET", "pin"): (self._pin_status, True),
+            ("POST", "pin"): (self._pin_change, True),
         }
         if (method, name) in fixed:
             return fixed[(method, name)]
@@ -641,6 +646,36 @@ class Admin:
             return _error(404, "not_found")
         event(log, logging.INFO, "admin_change", kind="session_end", client=request.client)
         return Response(204)
+
+    def _pin_status(self, _request: Request) -> Response:
+        if self._pin is None:
+            return _error(404, "not_found")
+        return _json(200, dataclasses.asdict(self._pin.status()))
+
+    def _pin_change(self, request: Request) -> Response:
+        if self._pin is None:
+            return _error(404, "not_found")
+        payload = _object(request) or {}
+        mode = payload.get("mode")
+        new_pin = payload.get("pin")
+        if not isinstance(mode, str) or not (new_pin is None or isinstance(new_pin, str)):
+            return _error(400, "bad_request")
+        try:
+            status = self._pin.change(mode, new_pin)
+        except PinError as error:
+            return _json(400, {"error": "invalid", "message": str(error)})
+        # Not in the history: a restore applies a whole configuration, and a
+        # PIN does not belong in one. This line is the record.
+        event(
+            log,
+            logging.INFO,
+            "admin_change",
+            kind="pin",
+            mode=mode,
+            new_pin=new_pin is not None,
+            client=request.client,
+        )
+        return _json(200, dataclasses.asdict(status))
 
     def _static(self, relative: str) -> Response:
         relative = urllib.parse.unquote(relative) or "index.html"
