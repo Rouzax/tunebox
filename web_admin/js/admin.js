@@ -270,8 +270,11 @@ window.addEventListener('hashchange', () => {
     route();
 });
 
+// The setup token comes in the fragment (#setup=...), which the browser
+// never sends to a server or a proxy's log. It is URL-safe base64.
 function setupToken() {
-    return new URLSearchParams(window.location.search).get('token');
+    const match = /^#setup=([0-9A-Za-z_-]+)$/.exec(window.location.hash);
+    return match ? match[1] : null;
 }
 
 async function refresh() {

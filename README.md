@@ -295,9 +295,10 @@ command with `--reset`; that signs out every session.
 
 **Setting it up in the browser instead:** add `setup_page = true` to
 `[admin]` and restart. tunebox logs `admin_setup_token` with a one-time
-token; open `https://radio.example/admin/?token=<token>` within 15 minutes
-to choose the password and scan a QR code. The page closes once the
-account exists. Remove `setup_page` afterwards.
+token (the whole path is in the `path` field); open
+`https://radio.example/admin/#setup=<token>` within 15 minutes to choose
+the password and scan a QR code. A reload keeps the same secret. The page
+closes once the account exists. Remove `setup_page` afterwards.
 
 **How it is protected:** the panel only accepts changes from
 `public_origin`. Five failed logins from one address lock that

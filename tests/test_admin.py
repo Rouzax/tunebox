@@ -338,6 +338,48 @@ def test_setup_page_flow(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> No
     world.settings.close()
 
 
+def test_reloading_the_setup_page_keeps_the_secret(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        world = World(tmp_path, setup_page=True, account=False)
+    token = setup_token(caplog.records)
+    first = json_of(world.call("POST", "/admin/api/setup/start", {"token": token}))
+    again = json_of(world.call("POST", "/admin/api/setup/start", {"token": token}))
+    assert first["secret"] == again["secret"]
+    world.settings.close()
+
+
+def test_setup_token_log_line_gives_the_fragment_path(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        world = World(tmp_path, setup_page=True, account=False)
+    token = setup_token(caplog.records)
+    fields = next(
+        r.__dict__["fields"] for r in caplog.records if r.getMessage() == "admin_setup_token"
+    )
+    assert fields["path"] == f"/admin/#setup={token}"
+    world.settings.close()
+
+
+def test_setup_finish_is_refused_once_an_account_exists(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        world = World(tmp_path, setup_page=True, account=False)
+    token = setup_token(caplog.records)
+    started = json_of(world.call("POST", "/admin/api/setup/start", {"token": token}))
+    world.accounts.create(PASSWORD, SECRET, ["aaaa-bbbb-cccc"], step=0)
+    secret = base64.b32decode(started["secret"] + "=" * (-len(started["secret"]) % 8))
+    code = crypto.totp(secret, int(world.clock.now // 30))
+    answer = world.call(
+        "POST", "/admin/api/setup/finish", {"token": token, "password": PASSWORD, "code": code}
+    )
+    assert answer.status == 401
+    world.settings.close()
+
+
 def test_setup_is_closed_once_an_account_exists(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

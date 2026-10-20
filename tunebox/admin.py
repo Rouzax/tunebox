@@ -194,6 +194,7 @@ class Admin:
                 logging.WARNING,
                 "admin_setup_token",
                 token=self._setup_token,
+                path=f"/admin/#setup={self._setup_token}",
                 expires_in_s=SETUP_TOKEN_S,
             )
 
@@ -454,7 +455,9 @@ class Admin:
             return _error(400, "bad_request")
         if not self._setup_allowed(request, body["token"]):
             return _error(401, "setup_refused")
-        self._setup_secret = crypto.new_totp_secret()
+        # One secret per token, so a reload shows the secret already scanned.
+        if self._setup_secret is None:
+            self._setup_secret = crypto.new_totp_secret()
         return _json(
             200,
             {

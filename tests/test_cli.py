@@ -7,7 +7,7 @@ import pytest
 from tunebox import crypto
 from tunebox.accounts import Accounts
 from tunebox.cli import run
-from tunebox.settings import Settings
+from tunebox.settings import Settings, SettingsUnavailable
 
 PASSWORD = "a long enough password"
 NOW = 1_000_000.0
@@ -79,3 +79,15 @@ def test_usage_and_a_missing_config(config: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("TUNEBOX_CONFIG", str(config.parent / "missing.toml"))
     assert run(["admin", "setup"], out=printed.append) == 2
     assert "missing.toml" in printed[-1]
+
+
+def test_a_database_that_cannot_be_read_is_reported(
+    config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable(_self: Accounts) -> bool:
+        raise SettingsUnavailable("database is locked")
+
+    monkeypatch.setattr(Accounts, "exists", unreadable)
+    said: list[str] = []
+    assert run(["admin", "setup"], out=said.append) == 2
+    assert said == ["tunebox: database is locked"]

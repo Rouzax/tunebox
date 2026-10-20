@@ -37,6 +37,9 @@ def run(
     try:
         accounts = Accounts(settings, clock=clock)
         return _setup(accounts, argv[2:] == ["--reset"], ask, ask_secret, out, clock)
+    except (SettingsUnavailable, SettingsWriteError) as error:
+        out(f"tunebox: {error}")
+        return 2
     finally:
         settings.close()
 
