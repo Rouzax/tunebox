@@ -95,18 +95,34 @@ class Runtime:
                 return self.snapshot.version
             if version <= self.snapshot.version:
                 return self.snapshot.version
+            # Every channel that needs making is made first: a source that
+            # cannot be built fails here, before any running one is touched.
+            # A channel made with carry copies the old one's recent list a
+            # moment before the old one is retired; a poll landing in between
+            # is fetched again by the new poller.
+            made: dict[str, Channel] = {}
+            try:
+                for config in resolved.channels:
+                    old = self._live.get(config.id)
+                    if old is None:
+                        made[config.id] = self._make(config, None)
+                    elif needs_restart(old.channel.config, config):
+                        made[config.id] = self._make(config, old.channel)
+            except Exception as error:  # noqa: BLE001 - any build failure keeps the live set
+                event(log, logging.ERROR, "apply_failed", error=str(error), version=version)
+                return self.snapshot.version
             live: dict[str, _Live] = {}
             for config in resolved.channels:
                 old = self._live.pop(config.id, None)
                 previous = old.channel.config if old else None
-                if old is None:
-                    live[config.id] = self._start(config, None)
-                elif needs_restart(old.channel.config, config):
-                    # Retired first, so a poll it has in flight cannot save
-                    # after the replacement has started.
-                    self._retire(old)
-                    live[config.id] = self._start(config, old.channel)
+                if config.id in made:
+                    if old is not None:
+                        # Retired first, so a poll it has in flight cannot
+                        # save after the replacement has started.
+                        self._retire(old)
+                    live[config.id] = self._start(made[config.id])
                 else:
+                    assert old is not None
                     old.channel.replace_config(config)
                     live[config.id] = old
                 if self._logos is not None and (previous is None or previous.logo != config.logo):
@@ -132,11 +148,10 @@ class Runtime:
         for thread in threads:
             thread.join(max(0.0, deadline - time.monotonic()))
 
-    def _start(self, config: ChannelConfig, carry: Channel | None) -> _Live:
-        channel = self._make(config, carry)
+    def _start(self, channel: Channel) -> _Live:
         stop = threading.Event()
         thread = threading.Thread(
-            target=channel.run, args=(stop,), name=f"channel-{config.id}", daemon=True
+            target=channel.run, args=(stop,), name=f"channel-{channel.config.id}", daemon=True
         )
         thread.start()
         return _Live(channel, stop, thread)

@@ -46,10 +46,13 @@ class Harness:
         self.store = Store(None)
         self.covers = CoverService(self.store, lambda _track: None)
         self.made: list[tuple[str, Channel | None]] = []
+        self.unbuildable: set[str] = set()
         self.logos = RecordingLogos(tmp_path / "logos")
         self.runtime = Runtime(self.settings, self.make, self.logos)
 
     def make(self, config: ChannelConfig, carry: Channel | None) -> Channel:
+        if config.id in self.unbuildable:
+            raise ValueError("cannot build this source")
         self.made.append((config.id, carry))
         return Channel(config, FakeSource(), self.covers, self.store, rng=NoJitter(), carry=carry)
 
@@ -175,3 +178,16 @@ def test_stop_and_join_does_not_wait_out_the_idle_check(harness: Harness) -> Non
     started = time.monotonic()
     harness.runtime.stop_and_join(time.monotonic() + 5)
     assert time.monotonic() - started < 0.5
+
+
+def test_a_failed_apply_keeps_the_running_channels(harness: Harness) -> None:
+    harness.commit(rows(doc("owr")))
+    assert harness.runtime.apply() == 1
+    before = dict(harness.runtime.snapshot.channels)
+    harness.made.clear()
+    harness.unbuildable.add("bad")
+    harness.commit(rows(doc("owr", poll_interval_s=30), doc("new"), doc("bad")))
+    assert harness.runtime.apply() == 1
+    assert dict(harness.runtime.snapshot.channels) == before
+    assert [made for made, _carry in harness.made] == ["owr", "new"]
+    assert harness.runtime.apply() == 1

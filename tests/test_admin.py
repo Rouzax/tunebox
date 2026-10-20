@@ -46,6 +46,7 @@ class World:
         (web / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
         (web / "notes.md").write_text("x", encoding="utf-8")
         self.applied: list[int] = []
+        self.apply_result: int | None = None
         self.pin = Pin(self.settings, self.accounts.server_key, clock=self.clock)
         self.admin = Admin(
             self.accounts,
@@ -94,7 +95,9 @@ class World:
 
     def apply(self) -> int:
         self.applied.append(1)
-        return len(self.applied)
+        if self.apply_result is not None:
+            return self.apply_result
+        return self.settings.load()[1]
 
     def code(self, offset: int = 0) -> str:
         return crypto.totp(SECRET, int(self.clock.now // 30) + offset)
@@ -165,6 +168,9 @@ def test_a_known_browser_grant_from_plain_http_gets_no_lane_on_https(tmp_path: P
         AdminConfig(True, False, ORIGIN),
         tmp_path / "web_admin",
         settings=world.settings,
+        pin=world.pin,
+        apply=world.apply,
+        samples=list,
         clock=world.clock,
         monotonic=world.clock,
     )
@@ -578,7 +584,7 @@ def test_config_round_trip_applies_and_records(world: World) -> None:
         {"based_on": 0, "state": state_of(station("a"), station("b")), "target": "a"},
         csrf=csrf,
     )
-    assert json_of(answer) == {"version": 1, "changed": True}
+    assert json_of(answer) == {"version": 1, "changed": True, "applied": True}
     assert world.applied == [1]
     loaded = json_of(world.call("GET", "/admin/api/config"))
     assert [c["id"] for c in loaded["state"]["channels"]] == ["a", "b"]
@@ -728,7 +734,7 @@ def test_restore_applies_the_old_state(world: World) -> None:
     restore = f"/admin/api/history/{entries[0]['id']}/restore"
     assert world.call("POST", restore, {"based_on": 1}, csrf=csrf).status == 409
     answer = world.call("POST", restore, {"based_on": 2}, csrf=csrf)
-    assert json_of(answer) == {"version": 3, "changed": True}
+    assert json_of(answer) == {"version": 3, "changed": True, "applied": True}
     stored = json_of(world.call("GET", "/admin/api/config"))["state"]
     assert [c["id"] for c in stored["channels"]] == ["a"]
     assert world.applied == [1, 1, 1]
@@ -1051,9 +1057,9 @@ def test_the_limit_check_logs_nothing_and_survives_an_unreadable_database(
 def test_saving_the_stored_state_again_changes_nothing(world: World) -> None:
     csrf = world.login()
     first = save(world, csrf, 0, state_of(station("owr")))
-    assert json_of(first) == {"version": 1, "changed": True}
+    assert json_of(first) == {"version": 1, "changed": True, "applied": True}
     again = save(world, csrf, 1, state_of(station("owr")))
-    assert json_of(again) == {"version": 1, "changed": False}
+    assert json_of(again) == {"version": 1, "changed": False, "applied": True}
     assert world.applied == [1]
 
 
@@ -1169,3 +1175,11 @@ def test_state_names_the_limits(world: World) -> None:
         "pin_min": 6,
         "pin_max": 8,
     }
+
+
+def test_a_save_that_cannot_go_live_says_so(world: World) -> None:
+    csrf = world.login()
+    world.apply_result = 0
+    answer = save(world, csrf, 0, state_of(station("owr")))
+    assert answer.status == 200
+    assert json_of(answer) == {"version": 1, "changed": True, "applied": False}

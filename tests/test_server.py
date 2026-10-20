@@ -406,7 +406,15 @@ def admin_parts(tmp_path: Path) -> Generator[tuple[TuneboxServer, Accounts]]:
     web_admin.mkdir()
     (web_admin / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
     accounts = Accounts(settings)
-    admin = Admin(accounts, AdminConfig(True, False, ORIGIN), web_admin, settings=settings)
+    admin = Admin(
+        accounts,
+        AdminConfig(True, False, ORIGIN),
+        web_admin,
+        settings=settings,
+        pin=Pin(settings, accounts.server_key),
+        apply=lambda: 0,
+        samples=list,
+    )
     web = tmp_path / "web"
     web.mkdir()
     (web / "index.html").write_text("<!doctype html>", encoding="utf-8")
@@ -451,11 +459,15 @@ def plain_server(tmp_path: Path) -> Generator[TuneboxServer]:
     web_admin = tmp_path / "web_admin"
     web_admin.mkdir()
     (web_admin / "index.html").write_text("<!doctype html><title>admin</title>", encoding="utf-8")
+    accounts = Accounts(settings)
     admin = Admin(
-        Accounts(settings),
+        accounts,
         AdminConfig(True, False, PLAIN),
         web_admin,
         settings=settings,
+        pin=Pin(settings, accounts.server_key),
+        apply=lambda: 0,
+        samples=list,
     )
     httpd = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, admin=admin)
     serve(httpd)
@@ -504,11 +516,15 @@ def test_plain_http_hides_the_panel_from_an_untrusted_proxy(
 
 def test_plain_http_believes_a_trusted_proxy_about_the_client(tmp_path: Path) -> None:
     settings = Settings(tmp_path / "t.db")
+    accounts = Accounts(settings)
     admin = Admin(
-        Accounts(settings),
+        accounts,
         AdminConfig(True, False, PLAIN),
         tmp_path,
         settings=settings,
+        pin=Pin(settings, accounts.server_key),
+        apply=lambda: 0,
+        samples=list,
     )
     httpd = TuneboxServer(
         ("127.0.0.1", 0),
@@ -704,8 +720,15 @@ def test_every_forwarded_for_line_is_read(
 
 class Recorder(Admin):
     def __init__(self, settings: Settings, web: Path) -> None:
+        accounts = Accounts(settings)
         super().__init__(
-            Accounts(settings), AdminConfig(True, False, ORIGIN), web, settings=settings
+            accounts,
+            AdminConfig(True, False, ORIGIN),
+            web,
+            settings=settings,
+            pin=Pin(settings, accounts.server_key),
+            apply=lambda: 0,
+            samples=list,
         )
         self.seen: list[Request] = []
 

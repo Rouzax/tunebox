@@ -153,9 +153,10 @@ class Admin:
         config: AdminConfig,
         web_dir: Path,
         settings: Settings,
-        pin: Pin | None = None,
-        apply: Callable[[], int] = lambda: 0,
-        samples: Callable[[], list[str]] = list,
+        pin: Pin,
+        apply: Callable[[], int],
+        samples: Callable[[], list[str]],
+        *,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -535,10 +536,12 @@ class Admin:
         except StaleVersion as error:
             return _json(409, {"error": "stale", "version": error.current})
         if not changed:
-            return _json(200, {"version": version, "changed": False})
-        self._apply()
+            return _json(200, {"version": version, "changed": False, "applied": True})
+        applied = self._apply() >= version
+        if not applied:
+            event(log, logging.WARNING, "admin_change_not_live", version=version)
         event(log, logging.INFO, "admin_change", kind=kind, target=target, version=version)
-        return _json(200, {"version": version, "changed": True})
+        return _json(200, {"version": version, "changed": True, "applied": applied})
 
     def _history(self, request: Request) -> Response:
         raw = urllib.parse.parse_qs(request.query).get("before", [""])[0]
@@ -707,13 +710,9 @@ class Admin:
         return Response(204)
 
     def _pin_status(self, _request: Request) -> Response:
-        if self._pin is None:
-            return _error(404, "not_found")
         return _json(200, dataclasses.asdict(self._pin.status()))
 
     def _pin_change(self, request: Request) -> Response:
-        if self._pin is None:
-            return _error(404, "not_found")
         payload = _object(request) or {}
         mode = payload.get("mode")
         new_pin = payload.get("pin")
