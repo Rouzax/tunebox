@@ -149,8 +149,8 @@ does not work there.
 Open `http://<your host>:<port>/` (or the address your reverse proxy gives
 it). What the buttons do:
 
-- **Play / stop** (middle). Stop drops the stream, so play always starts at
-  what is on air now.
+- **Play / stop** (middle). Play always starts at what is on air now, not
+  where you stopped.
 - **Recently played** (clock, bottom left) and **Stations** (radio). On the
   stations page, tap a station to switch; under the playing station you can
   pick its quality, for example "Data saver (AAC 96)" for 4G.

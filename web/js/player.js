@@ -8,9 +8,12 @@ import {createWatchdog, lagSeconds, retryDelayMs} from './reconnect.js';
 const NOT_SUPPORTED = 4;
 const TICK_MS = 1000;
 
-// One live stream. Stop drops the source instead of pausing, so play always
-// starts at live and nothing keeps downloading. While a stream is wanted the
-// player never gives up by itself: dead streams are retried with backoff.
+// One live stream. Stop pauses and keeps the source: Chromium takes a page
+// with no media source off the system's media controls, and the car's play
+// key would no longer reach it. A paused stream downloads about a minute
+// more, then the browser stops reading it. Play sets the source again, so it
+// starts at live. While a stream is wanted the player never gives up by
+// itself: dead streams are retried with backoff.
 // Events: state, audio ({element, cors}), webaudio-unavailable, autoplay-refused
 // ({resumed}: refused on a reconnect), interrupted (paused from outside and
 // held there), debug (a reconnect decision, as text).
@@ -97,8 +100,7 @@ export function createPlayer({events, makeAudio, timers, now, resumeAfterPause =
                 failed(el.error ? el.error.code : 0);
             }
         });
-        // A pause the player did not ask for: the player never pauses; it
-        // drops the source, which clears url first.
+        // A pause the player did not ask for: stop clears url before it pauses.
         el.addEventListener('pause', () => {
             if (el === audio && url && el.paused && !el.ended) {
                 pausedFromOutside();
@@ -216,8 +218,7 @@ export function createPlayer({events, makeAudio, timers, now, resumeAfterPause =
             tick = null;
         }
         if (audio) {
-            audio.removeAttribute('src');
-            audio.load();
+            audio.pause();
         }
         setState('stopped');
     }

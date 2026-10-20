@@ -78,6 +78,10 @@ function fakeAudio(made) {
                 return audio.playResult || Promise.resolve();
             },
             load() {},
+            pause() {
+                audio.paused = true;
+                audio.fire('pause');
+            },
             removeAttribute(name) {
                 if (name === 'src') {
                     audio.src = '';
@@ -386,12 +390,29 @@ test('the pause at the end of a stream is not an interruption', () => {
     assert.ok(!log.includes('interrupted'));
 });
 
-test('stop clears the stream and nothing retries afterwards', () => {
+// Chromium takes a page without a media source off the system's media
+// controls, after which the car's play key no longer reaches it.
+test('stop pauses the stream instead of dropping it, and play starts again at live', () => {
+    const {made, player, log} = harness();
+    player.play('https://example.invalid/a.aac');
+    made[0].fire('playing');
+    made[0].currentTime = 30;
+    player.stop();
+    assert.equal(made[0].paused, true);
+    assert.equal(made[0].src, 'https://example.invalid/a.aac');
+    assert.ok(!log.includes('interrupted'));
+    player.play('https://example.invalid/a.aac');
+    assert.equal(made.length, 1);
+    assert.equal(made[0].currentTime, 0);
+    assert.equal(made[0].plays, 2);
+});
+
+test('stop ends playback and nothing retries afterwards', () => {
     const {timers, made, player} = harness();
     player.play('https://example.invalid/a.aac');
     made[0].fire('playing');
     player.stop();
-    assert.equal(made[0].src, '');
+    assert.equal(made[0].paused, true);
     assert.equal(player.state(), 'stopped');
     timers.advance(120000);
     assert.equal(made[0].plays, 1);
