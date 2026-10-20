@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from tunebox import crypto
-from tunebox.pin import GRANT_COOKIE, GRANT_S, Pin, PinError, read_cookie, valid_pin
+from tunebox.pin import GRANT_COOKIE, GRANT_PURPOSE, GRANT_S, Pin, PinError, read_cookie, valid_pin
 from tunebox.settings import Settings
 
 KEY = b"k" * 32
@@ -227,3 +227,10 @@ def test_a_grant_for_another_purpose_is_refused(world: World) -> None:
     assert world.pin.locks_site(f"{GRANT_COOKIE}={forged}")
     genuine = crypto.sign(KEY, f"p2.dev.1.{expiry}", "listener-grant")
     assert not world.pin.locks_site(f"{GRANT_COOKIE}={genuine}")
+
+
+def test_a_grant_from_the_previous_version_is_refused(world: World) -> None:
+    world.pin.change("site", "123456")
+    expiry = int(world.clock.now) + 999
+    old = crypto.sign(KEY, f"p1.dev.1.{expiry}", GRANT_PURPOSE)
+    assert world.pin.locks_site(f"{GRANT_COOKIE}={old}")

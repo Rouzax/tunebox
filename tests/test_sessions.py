@@ -1,6 +1,7 @@
 import time
 
-from tunebox.sessions import LOGIN_FLOOR_S, Gate
+from tunebox import crypto
+from tunebox.sessions import KNOWN_PURPOSE, LOGIN_FLOOR_S, Gate
 
 
 class Clock:
@@ -85,3 +86,11 @@ def test_floor_uses_the_real_clock_by_default() -> None:
     started = time.monotonic()
     gate.floor(started)
     assert time.monotonic() - started >= LOGIN_FLOOR_S
+
+
+def test_grants_of_the_previous_version_give_no_lane() -> None:
+    clock = Clock()
+    expiry = int(clock.now) + 999
+    for plain_http, old in ((False, "k1"), (True, "h1")):
+        grant = crypto.sign(b"k" * 32, f"{old}.3.{expiry}", KNOWN_PURPOSE)
+        assert not make(clock, plain_http).known(grant, 3)

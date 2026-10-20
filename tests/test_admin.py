@@ -1009,3 +1009,21 @@ def test_a_wrong_password_and_a_wrong_code_take_the_same_floor(
         client="198.51.100.8",
     )
     assert len(floors) == 2
+
+
+def test_the_floor_follows_every_other_work_of_a_failed_login(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order: list[str] = []
+
+    def floor(_started: float) -> None:
+        order.append("floor")
+
+    def suspected() -> bool:
+        order.append("read")
+        return False
+
+    monkeypatch.setattr(world.admin.gate, "floor", floor)
+    monkeypatch.setattr(world.accounts, "totp_suspected", suspected)
+    world.call("POST", "/admin/api/login", {"password": PASSWORD, "code": "000000"})
+    assert order == ["read", "floor"]

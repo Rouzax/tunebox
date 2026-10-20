@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from tunebox import crypto
-from tunebox.accounts import ABSOLUTE_S, AccountError, Accounts, Session, session_id
+from tunebox.accounts import ABSOLUTE_S, AccountError, Accounts, Outcome, Session, session_id
 from tunebox.config import (
     CODECS,
     DEFAULTS,
@@ -355,7 +355,13 @@ class Admin:
             outcome = self._accounts.login(
                 body["password"], body["code"], request.client, user_agent
             )
+        answer = self._login_answer(request, outcome, release)
         self.gate.floor(started)
+        return answer
+
+    def _login_answer(
+        self, request: Request, outcome: Outcome, release: Callable[[], None]
+    ) -> Response:
         if outcome.reason == "unavailable":
             # A right login that could not be saved is not a failure of
             # this address.
