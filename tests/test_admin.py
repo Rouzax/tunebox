@@ -683,3 +683,154 @@ def test_a_group_inside_a_station_document_is_refused(world: World) -> None:
     answer = save(world, csrf, 0, state_of(bad))
     assert answer.status == 400
     assert "channels[0].doc.group" in json_of(answer)["message"]
+
+
+def fresh(world: World, csrf: str) -> None:
+    """Re-authenticates with the next step's code (the login used this one)."""
+    response = world.call("POST", "/admin/api/account/reauth", {"code": world.code(1)}, csrf=csrf)
+    assert response.status == 204, response.body
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "account/reauth",
+        "account/password",
+        "account/totp/start",
+        "account/totp/finish",
+        "account/recovery",
+        "account/sessions/0123456789abcdef/end",
+    ],
+)
+def test_account_posts_need_a_session_and_the_token(world: World, path: str) -> None:
+    assert world.call("POST", f"/admin/api/{path}", {}).status == 401
+    world.login()
+    assert world.call("POST", f"/admin/api/{path}", {}).status == 403
+
+
+def test_account_lists_the_sessions_and_marks_this_one(world: World) -> None:
+    world.login()
+    world.clock.now += 30
+    mine = world.cookies.copy()
+    world.cookies.clear()
+    world.login()
+    world.cookies = mine
+    body = json_of(world.call("GET", "/admin/api/account"))
+    assert len(body["sessions"]) == 2
+    assert [s["current"] for s in body["sessions"]] == [False, True]
+    assert body["fresh"] is False
+    assert all(len(s["id"]) == 16 for s in body["sessions"])
+
+
+def test_sensitive_changes_need_a_fresh_code(world: World) -> None:
+    csrf = world.login()
+    response = world.call("POST", "/admin/api/account/recovery", {}, csrf=csrf)
+    assert (response.status, json_of(response)["error"]) == (403, "reauth_required")
+    fresh(world, csrf)
+    assert json_of(world.call("GET", "/admin/api/account"))["fresh"] is True
+    response = world.call("POST", "/admin/api/account/recovery", {}, csrf=csrf)
+    assert response.status == 200
+    assert len(json_of(response)["recovery_codes"]) == 10
+
+
+def test_a_wrong_reauth_code_is_refused_logged_and_limited(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    csrf = world.login()
+    reauth = "/admin/api/account/reauth"
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            response = world.call("POST", reauth, {"code": "000000"}, csrf=csrf)
+            assert (response.status, json_of(response)["error"]) == (400, "code_wrong")
+        limited = world.call("POST", reauth, {"code": world.code(1)}, csrf=csrf)
+    assert limited.status == 429
+    failed = [r for r in caplog.records if r.getMessage() == "admin_reauth_failed"]
+    assert len(failed) == 5
+    assert failed[0].__dict__["fields"] == {"client": "198.51.100.7", "reason": "totp"}
+    # Never the ban scenarios' event: the owner's typo must not ban the house.
+    assert not [r for r in caplog.records if r.getMessage() == "admin_login_failed"]
+
+
+def test_a_password_change_keeps_this_browser_and_its_lane(world: World) -> None:
+    csrf = world.login()
+    old_known = world.cookies["__Secure-tunebox_known"]
+    fresh(world, csrf)
+    body = {"password": "another long password"}
+    response = world.call("POST", "/admin/api/account/password", body, csrf=csrf)
+    assert response.status == 204
+    assert world.cookies["__Secure-tunebox_known"] != old_known
+    assert world.call("GET", "/admin/api/account").status == 200
+    headers = {"Cookie": f"__Secure-tunebox_known={old_known}"}
+    old = Request("POST", "/admin/api/login", headers, b"", "x")
+    assert not world.admin._known(old)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_short_new_password_is_refused(world: World) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+    response = world.call("POST", "/admin/api/account/password", {"password": "short"}, csrf=csrf)
+    assert (response.status, json_of(response)["error"]) == (400, "password_too_short")
+
+
+def test_a_new_authenticator_needs_its_own_code(world: World) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+    started = json_of(world.call("POST", "/admin/api/account/totp/start", {}, csrf=csrf))
+    secret = base64.b32decode(started["secret"] + "=" * (-len(started["secret"]) % 8))
+    assert started["uri"].startswith("otpauth://totp/")
+    finish = "/admin/api/account/totp/finish"
+    wrong = world.call("POST", finish, {"code": world.code(1)}, csrf=csrf)
+    assert (wrong.status, json_of(wrong)["error"]) == (400, "code_wrong")
+    right = {"code": crypto.totp(secret, int(world.clock.now // 30))}
+    assert world.call("POST", finish, right, csrf=csrf).status == 204
+    again = world.call("POST", finish, right, csrf=csrf)
+    assert (again.status, json_of(again)["error"]) == (400, "no_new_secret")
+
+
+def test_finishing_without_starting_is_refused(world: World) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+    response = world.call("POST", "/admin/api/account/totp/finish", {"code": "123456"}, csrf=csrf)
+    assert (response.status, json_of(response)["error"]) == (400, "no_new_secret")
+
+
+def test_ending_another_session(world: World) -> None:
+    world.login()
+    world.clock.now += 30
+    mine = world.cookies.copy()
+    world.cookies.clear()
+    world.login()
+    theirs = world.cookies.copy()
+    world.cookies = mine
+    csrf = json_of(world.call("GET", "/admin/api/state"))["session"]["csrf"]
+    listed = json_of(world.call("GET", "/admin/api/account"))["sessions"]
+    other = next(s["id"] for s in listed if not s["current"])
+    own = next(s["id"] for s in listed if s["current"])
+    response = world.call("POST", f"/admin/api/account/sessions/{own}/end", {}, csrf=csrf)
+    assert (response.status, json_of(response)["error"]) == (400, "this_session")
+    end_other = f"/admin/api/account/sessions/{other}/end"
+    assert world.call("POST", end_other, {}, csrf=csrf).status == 204
+    assert world.call("POST", end_other, {}, csrf=csrf).status == 404
+    world.cookies = theirs
+    assert world.call("GET", "/admin/api/account").status == 401
+
+
+def test_account_events_never_carry_secrets(world: World, caplog: pytest.LogCaptureFixture) -> None:
+    csrf = world.login()
+    with caplog.at_level(logging.DEBUG):
+        fresh(world, csrf)
+        body = {"password": "another long password"}
+        world.call("POST", "/admin/api/account/password", body, csrf=csrf)
+        codes = json_of(world.call("POST", "/admin/api/account/recovery", {}, csrf=csrf))
+    text = " ".join(json.dumps(r.__dict__.get("fields", {})) for r in caplog.records)
+    assert "another long password" not in text
+    assert codes["recovery_codes"][0] not in text
+    changes = [r for r in caplog.records if r.getMessage() == "admin_change"]
+    assert [r.__dict__["fields"]["kind"] for r in changes] == ["password", "recovery_codes"]
+
+
+@pytest.mark.parametrize("before", ["99999999999999999999", "²", "-1", "1e3"])
+def test_history_ids_are_plain_digits(world: World, before: str) -> None:
+    world.login()
+    assert world.call("GET", f"/admin/api/history?before={before}").status == 400
+    assert world.call("GET", f"/admin/api/history/{before}").status == 404

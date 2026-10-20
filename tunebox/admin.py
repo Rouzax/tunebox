@@ -9,6 +9,7 @@ import dataclasses
 import hmac
 import json
 import logging
+import re
 import threading
 import time
 import urllib.parse
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from tunebox import crypto
-from tunebox.accounts import ABSOLUTE_S, AccountError, Accounts, Session
+from tunebox.accounts import ABSOLUTE_S, AccountError, Accounts, Session, session_id
 from tunebox.config import (
     CODECS,
     DEFAULTS,
@@ -110,6 +111,14 @@ class Response:
     headers: tuple[tuple[str, str], ...] = ()
 
 
+_UINT = re.compile(r"[0-9]{1,18}")
+
+
+def _uint(text: str) -> int | None:
+    """A history id: ASCII digits that fit SQLite's integer."""
+    return int(text) if _UINT.fullmatch(text) else None
+
+
 def body_limit(path: str) -> int:
     """The largest body a POST to path may send."""
     return MAX_STATE_BODY if path == "/admin/api/config" else MAX_BODY
@@ -171,6 +180,8 @@ class Admin:
         # scrypt takes about 33 MB and 0.1 s; more at once is a way to run
         # tunebox out of memory.
         self._hashing = threading.BoundedSemaphore(2)
+        # New authenticator secrets waiting for their first code, by session.
+        self._new_totp: dict[str, bytes] = {}
         self._setup_token: str | None = None
         self._setup_until = 0.0
         self._setup_secret: bytes | None = None
@@ -244,11 +255,19 @@ class Admin:
             ("GET", "config"): (self._config, True),
             ("POST", "config"): (self._save, True),
             ("GET", "history"): (self._history, True),
+            ("GET", "account"): (self._account, True),
+            ("POST", "account/reauth"): (self._reauth, True),
+            ("POST", "account/password"): (self._password, True),
+            ("POST", "account/totp/start"): (self._totp_start, True),
+            ("POST", "account/totp/finish"): (self._totp_finish, True),
+            ("POST", "account/recovery"): (self._recovery, True),
         }
         if (method, name) in fixed:
             return fixed[(method, name)]
         parts = name.split("/")
-        if parts[0] != "history" or not parts[1:2] or not parts[1].isdigit():
+        if parts[:2] == ["account", "sessions"] and len(parts) == 4 and parts[3] == "end":
+            return (self._end_session, True) if method == "POST" else None
+        if parts[0] != "history" or not parts[1:2] or _uint(parts[1]) is None:
             return None
         if len(parts) == 2 and method == "GET":
             return (self._history_entry, True)
@@ -320,17 +339,21 @@ class Admin:
             return _error(401, "login_failed")
         release()
         event(log, logging.INFO, "admin_login", client=request.client)
+        return _json(
+            200,
+            {"csrf": outcome.csrf},
+            self._cookie(self.session_cookie, outcome.token or "", ABSOLUTE_S),
+            self._known_grant(),
+        )
+
+    def _known_grant(self) -> tuple[str, str]:
+        """The known-browser cookie for the account's current generation."""
         expiry = int(self._clock() + KNOWN_S)
         grant = crypto.sign(
             self._accounts.server_key(),
             f"{self._grant_version}.{self._accounts.generation()}.{expiry}",
         )
-        return _json(
-            200,
-            {"csrf": outcome.csrf},
-            self._cookie(self.session_cookie, outcome.token or "", ABSOLUTE_S),
-            self._cookie(self.known_cookie, grant, KNOWN_S),
-        )
+        return self._cookie(self.known_cookie, grant, KNOWN_S)
 
     def _logout(self, request: Request) -> Response:
         session = self._session(request)
@@ -412,10 +435,14 @@ class Admin:
         if step is None:
             return _error(400, "code_wrong")
         codes = crypto.new_recovery_codes()
+        if not self._hashing.acquire(blocking=False):
+            return self._limited(request, "busy")
         try:
             self._accounts.create(body["password"], secret, codes, step)
         except AccountError:
             return _error(401, "setup_refused")
+        finally:
+            self._hashing.release()
         self._setup_token = None
         self._setup_secret = None
         event(log, logging.WARNING, "admin_account_created", client=request.client)
@@ -482,8 +509,11 @@ class Admin:
         return f"{new[patterns[at]] if at is not None else 'rules'}: {reason}"
 
     def _history(self, request: Request) -> Response:
-        before = urllib.parse.parse_qs(request.query).get("before", [""])[0]
-        entries, more = self._settings.history(int(before) if before.isdigit() else None)
+        raw = urllib.parse.parse_qs(request.query).get("before", [""])[0]
+        before = _uint(raw) if raw else None
+        if raw and before is None:
+            return _error(400, "bad_request")
+        entries, more = self._settings.history(before)
         return _json(200, {"entries": [dataclasses.asdict(e) for e in entries], "more": more})
 
     def _history_entry(self, request: Request) -> Response:
@@ -511,6 +541,111 @@ class Admin:
         _, before, _ = found
         raw = json.loads(state_to_json(before))
         return self._commit(raw, based_on, "restore", f"history {entry_id}")
+
+    def _live(self, request: Request) -> Session:
+        """The caller's session; _api has checked that there is one."""
+        session = self._session(request)
+        if session is None:
+            raise SettingsUnavailable("the session ended during the request")
+        return session
+
+    def _fresh(self, request: Request) -> Session | None:
+        session = self._live(request)
+        return session if self._accounts.fresh(session) else None
+
+    def _account(self, request: Request) -> Response:
+        session = self._live(request)
+        mine = session_id(session.token_hash)
+        listed = [
+            {**dataclasses.asdict(s), "current": s.id == mine} for s in self._accounts.sessions()
+        ]
+        return _json(200, {"sessions": listed, "fresh": self._accounts.fresh(session)})
+
+    def _reauth(self, request: Request) -> Response:
+        body = _body(request, ("code",))
+        if body is None:
+            return _error(400, "bad_request")
+        release = self._failures.reserve(group(request.client))
+        if release is None:
+            return self._limited(request, "address")
+        reason = self._accounts.reauth(self._live(request), body["code"])
+        if reason == "unavailable":
+            release()
+            return _error(503, "read_only")
+        if reason is not None:
+            # Not admin_login_failed: the CrowdSec scenarios ban on that, and
+            # this is someone with a session, most likely the owner.
+            event(log, logging.WARNING, "admin_reauth_failed", client=request.client, reason=reason)
+            return _error(400, "code_wrong")
+        release()
+        return Response(204)
+
+    def _password(self, request: Request) -> Response:
+        body = _body(request, ("password",))
+        if body is None:
+            return _error(400, "bad_request")
+        session = self._fresh(request)
+        if session is None:
+            return _error(403, "reauth_required")
+        password = body["password"]
+        if len(password) < crypto.MIN_PASSWORD:
+            return _error(400, "password_too_short")
+        try:
+            password.encode()
+        except UnicodeEncodeError:  # a lone surrogate from a JSON escape
+            return _error(400, "bad_request")
+        if not self._hashing.acquire(blocking=False):
+            return self._limited(request, "busy")
+        try:
+            self._accounts.change_password(session, password)
+        finally:
+            self._hashing.release()
+        event(log, logging.INFO, "admin_change", kind="password", client=request.client)
+        return Response(204, headers=(self._known_grant(),))
+
+    def _totp_start(self, request: Request) -> Response:
+        session = self._fresh(request)
+        if session is None:
+            return _error(403, "reauth_required")
+        secret = crypto.new_totp_secret()
+        self._new_totp[session.token_hash] = secret
+        return _json(200, {"secret": crypto.secret_text(secret), "uri": crypto.otpauth_uri(secret)})
+
+    def _totp_finish(self, request: Request) -> Response:
+        body = _body(request, ("code",))
+        if body is None:
+            return _error(400, "bad_request")
+        session = self._fresh(request)
+        if session is None:
+            return _error(403, "reauth_required")
+        secret = self._new_totp.get(session.token_hash)
+        if secret is None:
+            return _error(400, "no_new_secret")
+        step = crypto.matching_step(secret, body["code"].strip(), self._clock(), -1)
+        if step is None:
+            return _error(400, "code_wrong")
+        self._accounts.replace_totp(session, secret, step)
+        # Every session but this one has ended; their waiting secrets too.
+        self._new_totp.clear()
+        event(log, logging.INFO, "admin_change", kind="totp", client=request.client)
+        return Response(204, headers=(self._known_grant(),))
+
+    def _recovery(self, request: Request) -> Response:
+        session = self._fresh(request)
+        if session is None:
+            return _error(403, "reauth_required")
+        codes = self._accounts.replace_recovery_codes(session)
+        event(log, logging.INFO, "admin_change", kind="recovery_codes", client=request.client)
+        return _json(200, {"recovery_codes": codes}, self._known_grant())
+
+    def _end_session(self, request: Request) -> Response:
+        wanted = request.path.removeprefix("/admin/api/account/sessions/").split("/")[0]
+        if wanted == session_id(self._live(request).token_hash):
+            return _error(400, "this_session")
+        if not self._accounts.end_session(wanted):
+            return _error(404, "not_found")
+        event(log, logging.INFO, "admin_change", kind="session_end", client=request.client)
+        return Response(204)
 
     def _static(self, relative: str) -> Response:
         relative = urllib.parse.unquote(relative) or "index.html"
