@@ -43,7 +43,9 @@ Wrong codes typed to confirm a change in the panel (`admin_reauth_failed`)
 are logged but not banned on: they come from someone already logged in,
 most likely you. PIN tries refused while tunebox paces a flood from many
 addresses (`listener_pin_paced`) are not counted either: they are someone
-else's flood, not this address's guess.
+else's flood, not this address's guess. PIN posts that another site's
+page made a visitor's browser send (`listener_pin_cross_site`) are refused
+and not counted, so such a page cannot get your own address banned.
 
 Refused cross-site requests (`admin_csrf_rejected`) are logged but never
 counted: any web page can make a visitor's browser send one, so counting

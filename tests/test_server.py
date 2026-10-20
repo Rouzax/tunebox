@@ -891,3 +891,24 @@ def test_a_locked_site_judges_the_file_it_would_serve(site: PinWorld, path: str)
     assert status == 200, path
     assert b"<title>PIN</title>" in body, path
     assert headers["cache-control"] == "no-store", path
+
+
+def test_a_cross_site_post_counts_as_nothing(
+    site: PinWorld, caplog: pytest.LogCaptureFixture
+) -> None:
+    form = {"Content-Type": "text/plain", "Origin": "https://evil.example"}
+    with caplog.at_level(logging.INFO):
+        for _ in range(10):
+            status, _, _ = request(site.httpd, "/api/pin", "POST", form, b'{"pin": "000000"}')
+            assert status == 403
+        cross = {"Content-Type": "application/json", "Sec-Fetch-Site": "cross-site"}
+        assert request(site.httpd, "/api/pin", "POST", cross, b'{"pin": "000000"}')[0] == 403
+    assert not [r for r in caplog.records if r.getMessage() == "listener_pin_failed"]
+    # The household's own address is not locked out by it.
+    assert give_pin(site.httpd)[0] == 204
+
+
+def test_the_player_own_pin_post_passes(site: PinWorld) -> None:
+    same = {"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}
+    status, _, _ = request(site.httpd, "/api/pin", "POST", same, b'{"pin": "123456"}')
+    assert status == 204

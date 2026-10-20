@@ -70,3 +70,9 @@ def test_wrong_pins_have_a_scenario() -> None:
     assert "capacity: 19" in text
     samples = (EXAMPLES / "sample.log").read_text(encoding="utf-8")
     assert '"event": "listener_pin_failed"' in samples
+
+
+def test_refused_cross_site_pin_posts_are_not_counted() -> None:
+    text = (EXAMPLES / "scenarios" / "tunebox-listener-pin-bf.yaml").read_text(encoding="utf-8")
+    assert "listener_pin_cross_site" not in text
+    assert "listener_pin_cross_site" in emitted_events()

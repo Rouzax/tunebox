@@ -819,7 +819,10 @@ check its feed then, so an old `last_poll_ok` is expected.
 (the configured one, else the first station). It may be cached for five
 minutes.
 
-**`POST /api/pin`** with `{"pin": "123456"}` passes the listening PIN. A
+**`POST /api/pin`** with `{"pin": "123456"}` and `Content-Type:
+application/json` passes the listening PIN; a post from another site (any
+other content type, or a `Sec-Fetch-Site` other than `same-origin`) is a
+`403` and counts as nothing, so a stranger's page cannot lock you out. A
 right PIN answers `204` and sets the `tunebox_grant` cookie (one year;
 `Secure` when your proxy says the visit came over https); a wrong one is a
 `401` with `{"error": "pin_wrong"}`; an address that must wait gets `429`

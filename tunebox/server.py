@@ -320,6 +320,15 @@ class Handler(BaseHTTPRequestHandler):
         pin = self.app.pin
         if self.command != "POST":
             return self._send_json(405, {"error": "method_not_allowed"}, head, NO_STORE)
+        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        site = self.headers.get("Sec-Fetch-Site")
+        if content_type != "application/json" or (site is not None and site != "same-origin"):
+            # Another site's page making a visitor's browser post here. Counted
+            # as a failure, it would lock the household out of the PIN, or get
+            # its address banned. A form cannot send JSON, and a cross-site
+            # fetch with it needs a preflight that tunebox never answers.
+            event(log, logging.INFO, "listener_pin_cross_site", client=self._client())
+            return self._send_json(403, {"error": "bad_request_origin"}, head, NO_STORE)
         try:
             payload: object = json.loads(body or b"null")
         except ValueError:
