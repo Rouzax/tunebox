@@ -5,6 +5,7 @@ import ipaddress
 import json
 import logging
 import socket
+import struct
 import threading
 import time
 from collections.abc import Generator
@@ -1301,3 +1302,23 @@ def test_a_crash_before_the_body_is_read_ends_the_connection(
     assert received.startswith(b"HTTP/1.1 500 ")
     assert received.count(b"HTTP/1.1 ") == 1
     assert b"Connection: close" in received
+
+
+def test_a_dropped_connection_prints_no_traceback(
+    server: TuneboxServer, capfd: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    sock = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5)
+    sock.sendall(b"GET /api/channels HTTP/1.1\r\nHost: x\r\n\r\n")
+    assert sock.recv(65536).startswith(b"HTTP/1.1 200")
+    # Close with a reset while the server waits for the next request on
+    # the kept-alive connection, as a browser does when it drops a socket.
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    sock.close()
+    for _ in range(50):
+        if any(r.getMessage() == "connection_dropped" for r in caplog.records):
+            break
+        time.sleep(0.02)
+    assert "Traceback" not in capfd.readouterr().err
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    assert any(r.getMessage() == "connection_dropped" for r in caplog.records)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import sys
 import time
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
@@ -166,6 +167,16 @@ class TuneboxServer(ThreadingHTTPServer):
         self.web_dir = web_dir.resolve()
         self.logos = logos
         super().__init__(address, Handler)
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        """Errors outside a request's own handling, such as a browser that
+        drops a kept-alive connection while tunebox waits for its next
+        request. socketserver would print a traceback outside the log."""
+        error = sys.exc_info()[1]
+        if isinstance(error, (ConnectionError, TimeoutError)):
+            event(log, logging.DEBUG, "connection_dropped", error=type(error).__name__)
+            return
+        log.error("connection_crashed", exc_info=True)
 
 
 class Handler(BaseHTTPRequestHandler):
