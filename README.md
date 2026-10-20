@@ -22,9 +22,11 @@ For listeners:
   quality choice per station (for example a lower bitrate on 4G), recently
   played songs with covers, and a layout that puts the cover above the
   title in a narrow window and beside it in a wide one. The station's name
-  sits at the top; the title, artists and Played-by credit each wrap to two
-  lines at most (one in a very short window) and end in "..." beyond that,
-  so nothing moves while you glance at it.
+  sits at the top. The title, artists and Played-by credit sit on a card,
+  resting on the control bar in a narrow window and beside the cover in a
+  wide one; each wraps to two lines at most (one in a very short window)
+  and ends in "..." beyond that. A new song slides the card out and back
+  in with the new text.
 - **Day and night.** A button cycles automatic, day and night; night dims
   everything but the title.
 - **Visualizer.** Twelve styles, from spectrum bars to a ring around the

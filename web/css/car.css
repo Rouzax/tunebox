@@ -2,14 +2,61 @@
 
 /* Track text: every line wraps, to two lines at most, so a glance reads it
    whole without waiting for a scrolling line to come round. */
+/* Stacked, the card spans the window (the page's side padding included)
+   and rests on the bar; its width never follows the text, so a title
+   change moves nothing but the words. */
 .tunebox .onair {
-    /* .page centres its children, which would let .onair grow to the
-       unwrapped text width. */
     box-sizing:    border-box;
-    width:         100%;
-    /* Stacked, the caption can sit at the page's foot; this keeps the
-       scrim's dark part above the control bar, which would cut it off. */
-    margin-bottom: 1.5rem;
+    width:         calc(100% + 2rem);
+    margin:        0 -1rem;
+    padding:       .95rem 1.25rem .8rem;
+    border-radius: 1.1rem 1.1rem 0 0;
+    color:         var(--car-card-ink);
+    background:    var(--car-card);
+    box-shadow:    0 -.4rem 1.2rem rgba(0, 0, 0, .12);
+    text-align:    left;
+    transition:    transform 450ms cubic-bezier(.2, .8, .2, 1), opacity 450ms ease;
+}
+
+/* The cover's main colour (palette.js), darker on the light card by day so
+   a pale cover still shows; it ties the card to the cover beside it. */
+.tunebox .onair::before {
+    position:      absolute;
+    top:           .4rem;
+    left:          1.25rem;
+    width:         2.25rem;
+    height:        .25rem;
+    content:       "";
+    border-radius: 1rem;
+    background:    var(--art-1);
+    background:    hsl(from var(--art-1) h s 62%);
+}
+
+.tunebox.car-day .onair::before {
+    background: hsl(from var(--art-1) h s 42%);
+}
+
+/* A new song: the card slides down behind the bar (the page clips it
+   there), takes the new text and slides back up; display.js swaps the
+   classes. Transform and opacity only, which a car's graphics chip
+   handles without repainting. */
+.tunebox .onair.card-out {
+    transform:  translateY(110%);
+    transition: transform 300ms cubic-bezier(.4, 0, 1, 1);
+}
+
+.tunebox .onair.card-in {
+    transform:  translateY(110%);
+    transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tunebox .onair,
+    .tunebox .onair.card-out,
+    .tunebox .onair.card-in {
+        transform:  none;
+        transition: none;
+    }
 }
 
 .tunebox .onair .car-line {
@@ -120,9 +167,24 @@
     bottom: 6.5rem;
 }
 
-/* Album-art gradients can be as light as the text, so give it its own contrast. */
-.tunebox .onair {
-    text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 10px rgba(0, 0, 0, .6);
+/* The track text sits on a card: docked on the control bar when stacked,
+   floating beside the cover when wide. Its solid ground keeps the text
+   readable whatever the cover or the visualizer does, and the bar shares
+   its colour, so the two read as one unit. */
+.tunebox {
+    --car-card:      rgba(14, 22, 32, .94);
+    --car-card-ink:  #e3e9f0;
+    --car-card-soft: #a3b2c3;
+}
+
+.tunebox.car-day {
+    --car-card:      rgba(255, 255, 255, .92);
+    --car-card-ink:  #1f2a37;
+    --car-card-soft: #4b5869;
+}
+
+.tunebox .player {
+    background: var(--car-card);
 }
 
 /* Cover palette from palette.js. Registered so a track change cross-fades
@@ -255,22 +317,10 @@
     filter: brightness(.65);
 }
 
-.tunebox.car-night .player,
+/* The bar keeps the card's colour at night; only its controls dim. */
+.tunebox.car-night .player > *,
 .tunebox.car-night .car-daynight {
     opacity: .6;
-}
-
-.tunebox.car-night .onair .car-artist-line {
-    opacity: .55;
-}
-
-/* Brighter than the artist: at night it is the smallest line. */
-.tunebox.car-night .onair .car-played-line {
-    opacity: .75;
-}
-
-.tunebox.car-night .onair .car-title-line {
-    opacity: .85;
 }
 
 /* Day: a light theme, like the car's own screen by day. base.css paints the
@@ -288,21 +338,12 @@
     opacity: .4;
 }
 
-/* The track text sits on the dark scrim in both modes, so it stays white. */
-.tunebox.car-day .onair {
-    color: #fff;
-}
-
 /* The accent darkened for contrast on the light base; browsers without
    color-mix() keep the first value, the accent darkened likewise. */
 .tunebox.car-day .icon-fill,
 .tunebox.car-day .car-daynight svg {
     fill: #1f6fbf;
     fill: color-mix(in srgb, var(--accent-color) 65%, #000);
-}
-
-.tunebox.car-day .player {
-    background: rgba(255, 255, 255, .55);
 }
 
 .tunebox.car-day .car-daynight {
@@ -371,15 +412,16 @@
 .tunebox .artwork-image {
     display:         flex;
     flex:            1 1 0;
+    align-items:     center;
     justify-content: center;
     min-height:      8rem;
-    max-height:      min(30rem, 85vw);
-    margin-bottom:   1.25rem;
+    margin-bottom:   1rem;
 }
 
 .tunebox .artwork-image .artwork-img {
     width:        auto;
     height:       100%;
+    max-height:   min(30rem, 85vw);
     aspect-ratio: 1 / 1;
 }
 
@@ -427,60 +469,18 @@
     background: var(--accent-color, #62a8ea);
 }
 
-/* Scrim: a dark caption behind the track text in both modes, so the
-   visualizer moving behind it stays out of the way of a glance and the
-   white text has a solid ground even in the light theme. The box covers
-   every line end plus a feather on each side, where a mask fades it out
-   along an S-curve: a fade that starts on a slope shows its start as an
-   edge. A static mask costs a car's graphics chip far less than backdrop
-   blur. .onair is its own stacking context (base.css), so z-index -1 keeps the scrim above
-   the page and below the text. Its width follows the widest line, from
-   caption.js (--car-scrim-w). The feathered box reaches past the page's
-   edge, which would make the page scroll; layout containment counts it as
-   painted overflow only, as a shadow is, without clipping it. */
-.tunebox {
-    --car-scrim:   rgba(12, 22, 36, .4);
-    --car-feather: 2rem;
-    --car-ramp:    3rem;
-}
-
-.tunebox.car-night {
-    --car-scrim: rgba(6, 14, 24, .6);
-}
-
-.tunebox .onair {
-    contain: layout;
-}
-
-.tunebox .onair::before {
-    --car-fade: transparent 0, rgba(0, 0, 0, 0.043) calc(var(--car-ramp) * 0.125), rgba(0, 0, 0, 0.156) calc(var(--car-ramp) * 0.25), rgba(0, 0, 0, 0.316) calc(var(--car-ramp) * 0.375), rgba(0, 0, 0, 0.5) calc(var(--car-ramp) * 0.5), rgba(0, 0, 0, 0.684) calc(var(--car-ramp) * 0.625), rgba(0, 0, 0, 0.844) calc(var(--car-ramp) * 0.75), rgba(0, 0, 0, 0.957) calc(var(--car-ramp) * 0.875), #000 var(--car-ramp),
-                #000 calc(100% - var(--car-ramp)), rgba(0, 0, 0, 0.957) calc(100% - var(--car-ramp) * 0.875), rgba(0, 0, 0, 0.844) calc(100% - var(--car-ramp) * 0.75), rgba(0, 0, 0, 0.684) calc(100% - var(--car-ramp) * 0.625), rgba(0, 0, 0, 0.5) calc(100% - var(--car-ramp) * 0.5), rgba(0, 0, 0, 0.316) calc(100% - var(--car-ramp) * 0.375), rgba(0, 0, 0, 0.156) calc(100% - var(--car-ramp) * 0.25), rgba(0, 0, 0, 0.043) calc(100% - var(--car-ramp) * 0.125), transparent 100%;
-    position:       absolute;
-    z-index:        -1;
-    top:            calc(-.4rem - var(--car-feather));
-    bottom:         calc(-.4rem - var(--car-feather));
-    left:           50%;
-    width:          calc(var(--car-scrim-w, 100%) + 1.5rem + 2 * var(--car-feather));
-    transform:      translateX(-50%);
-    content:        "";
-    pointer-events: none;
-    background:     var(--car-scrim);
-    -webkit-mask-image:     linear-gradient(to right, var(--car-fade)), linear-gradient(to bottom, var(--car-fade));
-    -webkit-mask-composite: source-in;
-    mask-image:             linear-gradient(to right, var(--car-fade)), linear-gradient(to bottom, var(--car-fade));
-    mask-composite:         intersect;
-}
-
+/* Line heights stay at 1.3 or more: below that, tall Poppins glyphs of a
+   cut line's hidden next line show as marks above the cut. */
 .tunebox .onair .car-title-line {
     font-size:   1.7rem;
     font-weight: 500;
-    line-height: 1.2;
+    line-height: 1.3;
 }
 
 .tunebox .onair .car-artist-line {
     font-size:   1.15rem;
     line-height: 1.3;
-    opacity:     .9;
+    color:       var(--car-card-soft);
 }
 
 /* Which festival set the track comes from, under the artist: large enough
@@ -489,11 +489,11 @@
     margin-top:  .15rem;
     font-size:   1.03rem;
     line-height: 1.3;
-    opacity:     .92;
+    color:       var(--car-card-soft);
 }
 
 .tunebox .onair .car-played-label {
-    opacity: .7;
+    opacity: .8;
 }
 
 /* Wide windows (data-layout from layout.js): cover left, sized by height, text
@@ -511,7 +511,6 @@
 
 .tunebox[data-layout="wide"] .artwork-image {
     flex:          none;
-    max-height:    none;
     margin-bottom: 0;
 }
 
@@ -528,18 +527,26 @@
     width:         auto;
     max-width:     46rem;
     min-width:     0;
-    margin-bottom: 0;
-    padding:       0;
-    text-align:    left;
+    margin:        0;
+    padding:       1.3rem 1.6rem 1.15rem;
+    border-radius: 1.1rem;
+    box-shadow:    0 .6rem 1.8rem rgba(0, 0, 0, .16);
 }
 
-/* Beside the cover the caption reads as a panel; a wider feather keeps it
-   a shadow rather than a box. */
 .tunebox[data-layout="wide"] .onair::before {
-    --car-feather: 3rem;
-    --car-ramp:    4.5rem;
-    left:          calc(-.75rem - var(--car-feather));
-    transform:     none;
+    left: 1.6rem;
+}
+
+/* Floating, a new song fades the card down a little instead of behind the bar. */
+.tunebox[data-layout="wide"] .onair.card-out {
+    transform:  translateY(1.5rem);
+    opacity:    0;
+    transition: transform 300ms cubic-bezier(.4, 0, 1, 1), opacity 300ms ease;
+}
+
+.tunebox[data-layout="wide"] .onair.card-in {
+    transform: translateY(-1rem);
+    opacity:   0;
 }
 
 .tunebox[data-layout="wide"] .onair .car-title-line {

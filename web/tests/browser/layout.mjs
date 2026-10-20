@@ -175,11 +175,52 @@ function inspect(page, slack) {
         if (text.bottom > barRect.top + slack) {
             problems.push(`track text runs under the control bar (${Math.round(text.bottom)} > ${Math.round(barRect.top)})`);
         }
-        // The scrim reaches past the text and fades out (car.css); its dark
-        // part must end above the bar, or the bar cuts it off with an edge.
-        const scrimEnd = text.bottom + parseFloat(getComputedStyle(root).fontSize) * 1.4;
-        if (scrimEnd > barRect.top + slack) {
-            problems.push(`the caption's scrim runs into the control bar (${Math.round(scrimEnd)} > ${Math.round(barRect.top)})`);
+        // The track text sits on a card: on the control bar across the
+        // window when stacked, floating beside the cover when wide, with a
+        // width that does not follow the title.
+        const card = document.querySelector('.onair');
+        const cardBox = box(card);
+        if (root.dataset.layout === 'wide') {
+            if (cardBox.bottom > barRect.top - 4) {
+                problems.push('the card touches the control bar beside the cover');
+            }
+            if (cardBox.left < art.right) {
+                problems.push('the card overlaps the cover');
+            }
+        } else {
+            if (cardBox.left > slack || cardBox.right < vw - slack) {
+                problems.push(`the card does not span the window (${Math.round(cardBox.left)}..${Math.round(cardBox.right)})`);
+            }
+            if (Math.abs(cardBox.bottom - barRect.top) > slack) {
+                problems.push(`the card is not on the control bar (${Math.round(cardBox.bottom)} vs ${Math.round(barRect.top)})`);
+            }
+        }
+        const titleNode = document.querySelector('.car-title');
+        const shown = titleNode.textContent;
+        titleNode.textContent = 'Rain';
+        const narrow = card.getBoundingClientRect().width;
+        titleNode.textContent = shown;
+        if (Math.abs(narrow - cardBox.width) > 1) {
+            problems.push(`the card's width follows the title (${Math.round(narrow)} vs ${Math.round(cardBox.width)})`);
+        }
+        // Text on the card reads at arm's length: WCAG contrast 4.5 or more.
+        const rgba = (value) => (value.match(/[\d.]+/g) || []).map(Number);
+        const lum = ([r, g, b]) => [r, g, b].map((v) => {
+            const c = v / 255;
+            return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+        }).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+        const ground = rgba(getComputedStyle(card).backgroundColor);
+        if (ground.length < 3 || (ground.length === 4 && ground[3] < 0.85)) {
+            problems.push(`the card is not solid (${getComputedStyle(card).backgroundColor})`);
+        } else {
+            for (const line of lines) {
+                const ink = rgba(getComputedStyle(line).color);
+                const [a, b] = [lum(ink), lum(ground)].sort((x, y) => y - x);
+                const ratio = (a + 0.05) / (b + 0.05) * (parseFloat(getComputedStyle(line).opacity) || 1);
+                if (ratio < 4.5) {
+                    problems.push(`"${line.textContent.slice(0, 20)}" has contrast ${ratio.toFixed(1)} on the card`);
+                }
+            }
         }
         if (text.top < 0 || text.left < -slack || text.right > vw + slack) {
             problems.push('track text is outside the window');
@@ -189,6 +230,11 @@ function inspect(page, slack) {
         for (const line of lines) {
             const style = getComputedStyle(line);
             const height = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4;
+            // Below 1.3, tall Poppins glyphs (parentheses) of a cut line's
+            // hidden next line show as marks above the cut.
+            if (parseFloat(style.lineHeight) < 1.3 * parseFloat(style.fontSize) - 0.5) {
+                problems.push(`"${line.textContent.slice(0, 30)}" has line-height ${style.lineHeight} at ${style.fontSize}`);
+            }
             const most = line.classList.contains('car-title-line') ? 3 : 2;
             const limit = parseInt(style.webkitLineClamp, 10);
             if (!(limit >= 1 && limit <= most)) {
@@ -393,7 +439,7 @@ async function run() {
                                     root.querySelector(open).click();
                                 }
                             })()`);
-                            // Page slide (600 ms), caption measuring and fonts.
+                            // Page slide (600 ms) and fonts.
                             await sleep(900);
                             const view = `${size.name} ${embed ? 'embed ' : ''}${mode} ${state} ${page}`;
                             const result = await evaluate(`(${inspect.toString()})('${page}', ${SLACK})`);

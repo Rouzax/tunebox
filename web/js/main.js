@@ -1,5 +1,4 @@
 import {createApi, createPoller} from './api.js';
-import {bindCaption} from './caption.js';
 import {canPlay, keepSelection, nextChannel, pickChannel, pickStream} from './channels.js';
 import {bindControls} from './controls.js';
 import {bindDayNight} from './daynight.js';
@@ -79,7 +78,7 @@ async function start(root) {
     };
 
     // Only a change of what is shown is announced: rewriting the same text
-    // would re-measure the caption on every poll.
+    // would replay the card's change on every poll.
     function show(track) {
         const key = `${app.channel.id}\u0000${trackKey(track)}`;
         if (key === shown) {
@@ -238,7 +237,6 @@ async function start(root) {
     }
     bindDisplay(app);
     bindControls(app);
-    bindCaption(root);
     bindLayout(app);
     bindDayNight(app);
     bindPalette(app);
