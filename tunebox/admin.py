@@ -567,7 +567,9 @@ class Admin:
             return _error(400, "bad_request")
         release = self._failures.reserve(group(request.client))
         if release is None:
-            return self._limited(request, "address")
+            # Not why=address, which the CrowdSec ban scenario counts: this
+            # is someone with a session typing codes wrong.
+            return self._limited(request, "reauth")
         reason = self._accounts.reauth(self._live(request), body["code"])
         if reason == "unavailable":
             release()

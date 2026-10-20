@@ -39,7 +39,8 @@ few typos.
 | `tunebox/admin-totp-bf` | 3 wrong codes (from the app or recovery codes) after a correct password within about 10 minutes |
 | `tunebox/listener-pin-bf` | 20 wrong listening PINs, or tries while locked out, from one address within about 10 minutes |
 
-Wrong codes typed to confirm a change in the panel (`admin_reauth_failed`)
+Wrong codes typed to confirm a change in the panel (`admin_reauth_failed`,
+and `admin_rate_limited` with `why` `reauth` once the address is locked)
 are logged but not banned on: they come from someone already logged in,
 most likely you. PIN tries refused while tunebox paces a flood from many
 addresses (`listener_pin_paced`) are not counted either: they are someone

@@ -891,3 +891,16 @@ def test_pin_changes_stay_out_of_the_history(world: World) -> None:
     csrf = world.login()
     world.call("POST", "/admin/api/pin", {"mode": "site", "pin": "123456"}, csrf=csrf)
     assert json_of(world.call("GET", "/admin/api/history"))["entries"] == []
+
+
+def test_a_locked_reauth_is_not_a_ban_signal(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    csrf = world.login()
+    reauth = "/admin/api/account/reauth"
+    for _ in range(5):
+        world.call("POST", reauth, {"code": "000000"}, csrf=csrf)
+    with caplog.at_level(logging.WARNING):
+        assert world.call("POST", reauth, {"code": "000000"}, csrf=csrf).status == 429
+    limited = [r for r in caplog.records if r.getMessage() == "admin_rate_limited"]
+    assert limited[0].__dict__["fields"]["why"] == "reauth"

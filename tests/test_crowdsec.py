@@ -76,3 +76,11 @@ def test_refused_cross_site_pin_posts_are_not_counted() -> None:
     text = (EXAMPLES / "scenarios" / "tunebox-listener-pin-bf.yaml").read_text(encoding="utf-8")
     assert "listener_pin_cross_site" not in text
     assert "listener_pin_cross_site" in emitted_events()
+
+
+def test_a_locked_reauth_is_not_counted_for_a_ban() -> None:
+    bf = (EXAMPLES / "scenarios" / "tunebox-admin-bf.yaml").read_text(encoding="utf-8")
+    # Only why == 'address' rate limits count; a locked re-authentication
+    # says why=reauth (the owner typing codes wrong in a live session).
+    assert "'reauth'" not in bf
+    assert "evt.Meta.why == 'address'" in bf
