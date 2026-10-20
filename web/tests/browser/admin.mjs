@@ -54,12 +54,26 @@ function freePort() {
 }
 
 // RFC 6238 with SHA-1, 30 s steps and 6 digits, as tunebox's crypto.totp.
-function totp(step) {
+function totp(step, key = Buffer.from(SECRET, 'hex')) {
     const counter = Buffer.alloc(8);
     counter.writeBigUInt64BE(BigInt(step));
-    const mac = createHmac('sha1', Buffer.from(SECRET, 'hex')).update(counter).digest();
+    const mac = createHmac('sha1', key).update(counter).digest();
     const offset = mac[mac.length - 1] & 0x0f;
     return String((mac.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, '0');
+}
+
+// The bytes of an RFC 4648 base32 text, as the setup page shows its secret.
+function base32(text) {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let bits = '';
+    for (const letter of text.replace(/[\s=]/g, '').toUpperCase()) {
+        bits += alphabet.indexOf(letter).toString(2).padStart(5, '0');
+    }
+    const bytes = [];
+    for (let i = 0; i + 8 <= bits.length; i += 8) {
+        bytes.push(parseInt(bits.slice(i, i + 8), 2));
+    }
+    return Buffer.from(bytes);
 }
 
 function station(id, name, url = `https://example.invalid/${id}.aac`) {
@@ -115,7 +129,8 @@ function silentStream(folder) {
     })));
 }
 
-async function startTunebox(folder, port, streamUrl) {
+// setup: no account yet and the setup page on, as a first start would be.
+async function startTunebox(folder, port, streamUrl, setup = false) {
     writeFileSync(join(folder, 'tunebox.toml'), [
         '[server]',
         'host = "127.0.0.1"',
@@ -124,12 +139,13 @@ async function startTunebox(folder, port, streamUrl) {
         '',
         '[admin]',
         'enabled = true',
+        `setup_page = ${setup}`,
         `public_origin = "http://127.0.0.1:${port}"`,
         '',
         station('first', 'First Station', streamUrl),
         station('second', 'Second Station'),
     ].join('\n'));
-    const made = spawnSync(PYTHON, ['-c', [
+    const made = setup ? {status: 0} : spawnSync(PYTHON, ['-c', [
         'import sys',
         'from pathlib import Path',
         'from tunebox.accounts import Accounts',
@@ -1139,6 +1155,43 @@ async function run() {
             return `name not stored (message: ${await message()})`;
         });
 
+        await step('a kept edit that went stale is not saved', async () => {
+            await evaluate(`window.location.hash = '#edit/first'`);
+            if (!(await until(`document.querySelector('form.edit')`))) {
+                return 'no form';
+            }
+            await evaluate(`document.querySelector('form.edit').elements.name.value = 'Lost Update'`);
+            await endPageSession();
+            await evaluate(`document.querySelector('form.edit').requestSubmit()`);
+            if (!(await until(`!document.querySelector('#login').hidden`))) {
+                return `the login form did not show (message: ${await message()})`;
+            }
+            const problem = await pageLogin();
+            if (problem) {
+                return problem;
+            }
+            if (!(await until(`document.querySelector('#shell .pending') && !document.querySelector('#shell .pending').hidden`))) {
+                return 'no box offering the change';
+            }
+            // Another browser saves meanwhile, so the kept change is stale.
+            const {data} = await otherCall('GET', 'config');
+            const changed = JSON.parse(JSON.stringify(data.state));
+            changed.channels.find((row) => row.id === 'first').doc.name = 'Changed Elsewhere';
+            const saved = await otherCall('POST', 'config', {based_on: data.version, state: changed});
+            if (saved.status !== 200) {
+                return `the other browser's save answered ${saved.status}`;
+            }
+            await buttonNamed('Save it now');
+            if (!(await until(`document.querySelector('.message').textContent.indexOf('kept change was not saved') >= 0`))) {
+                return `message: ${await message()}`;
+            }
+            if (!(await until(`document.querySelector('#shell .pending').hidden`))) {
+                return 'the box still offers the stale change';
+            }
+            const stored = (await channels(base)).find((c) => c.id === 'first');
+            return stored && stored.name === 'Changed Elsewhere' ? null : `stored name: ${stored && stored.name}`;
+        });
+
         await step('a stale PIN form is refused', async () => {
             await send('Page.navigate', {url: `${base}/admin/#settings`});
             if (!(await until(`document.querySelector('form.pin [name=pin_mode]')`))) {
@@ -1171,6 +1224,69 @@ async function run() {
             }
             await buttonNamed('Leave without saving');
             return (await until(`location.hash === '#stations'`)) ? null : 'did not leave after the answer';
+        });
+
+        // A first start: no account, the setup page on, the link from the log.
+        await step('the setup link shows the form, keeps its secret and leaves the address bar clean', async () => {
+            const setupFolder = mkdtempSync(join(tmpdir(), 'tunebox-setup-'));
+            let first = null;
+            try {
+                const setupPort = await freePort();
+                first = await startTunebox(setupFolder, setupPort, undefined, true);
+                const line = first.log.join('').split('\n').find((text) => text.indexOf('admin_setup_token') >= 0);
+                const token = line && JSON.parse(line).token;
+                if (!token) {
+                    return 'the log holds no setup link';
+                }
+                const link = `http://127.0.0.1:${setupPort}/admin/#setup=${token}`;
+                // A page being replaced has no usable context for a moment.
+                const shown = async (expression) => {
+                    for (let i = 0; i < 50; i++) {
+                        try {
+                            if (await evaluate(`Boolean(${expression})`)) {
+                                return true;
+                            }
+                        } catch (error) {
+                            // Navigating.
+                        }
+                        await sleep(100);
+                    }
+                    return false;
+                };
+                await send('Page.navigate', {url: link});
+                if (!(await shown(`document.querySelector('#setup') && !document.querySelector('#setup').hidden && document.querySelector('.secret').textContent !== ''`))) {
+                    return 'the setup form did not show';
+                }
+                const secret = await evaluate(`document.querySelector('.secret').textContent`);
+                await send('Page.reload');
+                await sleep(300);
+                if (!(await shown(`document.querySelector('#setup') && !document.querySelector('#setup').hidden && document.querySelector('.secret').textContent !== ''`))) {
+                    return 'the setup form did not show after a reload';
+                }
+                const again = await evaluate(`document.querySelector('.secret').textContent`);
+                if (again !== secret) {
+                    return 'a reload showed another secret';
+                }
+                const code = totp(Math.floor(Date.now() / 30000), base32(secret));
+                await evaluate(`(() => {
+                    const form = document.querySelector('#setup');
+                    form.password.value = 'a setup check password';
+                    form.code.value = ${JSON.stringify(code)};
+                    form.requestSubmit();
+                })()`);
+                if (!(await until(`document.querySelectorAll('ul.recovery li').length === 10`))) {
+                    return `no recovery codes (message: ${await message()})`;
+                }
+                const where = await evaluate(`location.pathname + location.hash`);
+                return where === '/admin/' ? null : `the address bar says ${where}`;
+            } finally {
+                if (first) {
+                    const exited = new Promise((done) => first.child.once('exit', done));
+                    first.child.kill('SIGTERM');
+                    await Promise.race([exited, sleep(5000)]);
+                }
+                rmSync(setupFolder, {recursive: true, force: true});
+            }
         });
     } finally {
         if (browser) {

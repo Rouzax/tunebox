@@ -186,7 +186,7 @@ async function commit(answer, state, done, retry) {
             route();
             message('Changed elsewhere; the page now shows the current stations. Check them before changing anything.');
         }
-        return {ok: false};
+        return {ok: false, stale: true};
     }
     if (status === 400 && data.error === 'invalid') {
         const text = explain(data.message, state);
@@ -255,6 +255,12 @@ function showPending() {
             pending = null;
             showPending();
             ctx.go('#stations', true);
+        } else if (result.stale) {
+            // Resent against the version it started from, so the refusal
+            // says the stations moved on; the kept change would overwrite them.
+            pending = null;
+            showPending();
+            message('The stations changed elsewhere, so the kept change was not saved.');
         }
     }));
     const discard = document.createElement('button');
