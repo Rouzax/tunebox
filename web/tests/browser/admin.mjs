@@ -1,6 +1,9 @@
 // Browser check of the admin panel: log in with a password and a TOTP code,
 // then switch a station off, reorder, edit, have a dangerous title rule
-// refused, restore from the history and log out, checking after each step
+// refused, restore from the history, change the settings, lock the player
+// with a PIN and pass it, hide a chosen station behind it, confirm account
+// changes with a code, change the password, log out and log in with it,
+// checking after each step
 // that the player's /api/channels follows. Also checks that the pages have no
 // sideways scroll at phone and laptop sizes, and no page or CSP errors.
 //
@@ -175,7 +178,9 @@ async function run() {
                     width: size.width, height: size.height, deviceScaleFactor: 1, mobile: Boolean(size.mobile),
                 });
                 await sleep(150);
-                const wide = await evaluate('document.documentElement.scrollWidth - window.innerWidth');
+                // Against the device's width, not innerWidth: a phone widens
+                // its layout viewport to fit content that is too wide.
+                const wide = await evaluate(`document.documentElement.scrollWidth - ${size.width}`);
                 if (wide > 1) {
                     failures.push(`${where} at ${size.name}: ${wide} px sideways scroll`);
                 }
@@ -219,12 +224,46 @@ async function run() {
             return wrong.length ? `no account field before the password in ${wrong.join(', ')}` : null;
         });
 
+        let usedStep = 0;
+        // A code from a 30 s step later than the last one used; waits for
+        // the next step when needed.
+        const freshCode = async () => {
+            while (Math.floor(Date.now() / 30000) <= usedStep) {
+                await sleep(500);
+            }
+            usedStep = Math.floor(Date.now() / 30000);
+            return totp(usedStep);
+        };
+        const adminCall = (method, path, body) => evaluate(`(async () => {
+            const state = await (await fetch('/admin/api/state')).json();
+            const response = await fetch('/admin/api/' + ${JSON.stringify(path)}, {
+                method: ${JSON.stringify(method)},
+                headers: {'Content-Type': 'application/json', 'X-Tunebox-CSRF': state.session.csrf},
+                body: ${body === undefined ? 'undefined' : JSON.stringify(JSON.stringify(body))},
+            });
+            return response.status;
+        })()`);
+        // Safe while a page loads: the keypad's container may not be there yet.
+        const pinShown = `(document.querySelector('.pin-screen') && !document.querySelector('.pin-screen').hidden)`;
+        const typePin = (digits) => evaluate(`(() => {
+            for (const key of ${JSON.stringify([...digits, 'ok'])}) {
+                document.querySelector('.pin-keys [data-key="' + key + '"]').click();
+            }
+            return true;
+        })()`);
+        const buttonNamed = (text) => evaluate(`(() => {
+            const found = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)});
+            if (!found) { throw new Error('no button ' + ${JSON.stringify(text)}); }
+            found.click();
+            return true;
+        })()`);
+
         // Authenticator autofill (1Password on Android) fills a code only in
         // a form of its own; with the password beside it, it copies the code.
-        const toCode = async () => {
+        const toCode = async (password = PASSWORD) => {
             await evaluate(`(() => {
                 const form = document.querySelector('#login');
-                form.password.value = ${JSON.stringify(PASSWORD)};
+                form.password.value = ${JSON.stringify(password)};
                 form.requestSubmit();
             })()`);
             if (!(await until(`!document.querySelector('#code').hidden && document.querySelector('#login').hidden`))) {
@@ -257,9 +296,10 @@ async function run() {
             if (problem) {
                 return problem;
             }
+            const code = await freshCode();
             await evaluate(`(() => {
                 const form = document.querySelector('#code');
-                form.code.value = ${JSON.stringify(totp(Math.floor(Date.now() / 30000)))};
+                form.code.value = ${JSON.stringify(code)};
                 form.requestSubmit();
             })()`);
             if (!(await until(`document.querySelectorAll('.station').length === 2`))) {
@@ -571,6 +611,204 @@ async function run() {
             return `old name not back (message: ${await message()})`;
         });
 
+        await step('settings save the defaults and the start station', async () => {
+            await evaluate(`window.location.hash = '#settings'`);
+            if (!(await until(`document.querySelector('form.settings [name=delay_s]')`))) {
+                return 'settings page not shown';
+            }
+            await evaluate(`(() => {
+                const form = document.querySelector('form.settings');
+                form.delay_s.value = '9';
+                form.default_channel.value = 'second';
+            })()`);
+            const said = await saveBy('form.settings button[type=submit]');
+            const player = await evaluate(`fetch('/api/player').then((r) => r.json())`);
+            return said === 'Settings saved.' && player.default_channel === 'second'
+                ? null : `${said} / default ${player.default_channel}`;
+        });
+        // The PIN form loads after the page: measure with it in place.
+        await until(`document.querySelector('form.pin [name=pin_mode]')`);
+        await noSideways('settings');
+
+        await step('half a location is refused on the page', async () => {
+            await evaluate(`(() => {
+                const form = document.querySelector('form.settings');
+                form.latitude.value = '52.1';
+                form.requestSubmit();
+            })()`);
+            const shown = await until(`!document.querySelector('form.settings .error').hidden`);
+            await evaluate(`document.querySelector('form.settings').latitude.value = ''`);
+            return shown ? null : 'no error for a latitude without a longitude';
+        });
+
+        const savePin = async (mode, digits) => {
+            await send('Page.navigate', {url: `${base}/admin/#settings`});
+            if (!(await until(`document.querySelector('form.pin [name=pin_mode]')`))) {
+                throw new Error('PIN form not shown');
+            }
+            await evaluate(`(() => {
+                const form = document.querySelector('form.pin');
+                form.pin_mode.value = ${JSON.stringify(mode)};
+                form.pin.value = ${JSON.stringify(digits || '')};
+            })()`);
+            return saveBy('form.pin button[type=submit]');
+        };
+
+        await step('lock the whole player', async () => {
+            const said = await savePin('site', '123456');
+            return said === 'PIN saved. The player asks for it now.' ? null : said;
+        });
+
+        await step('a locked site shows only the PIN page', async () => {
+            await send('Page.navigate', {url: `${base}/`});
+            if (!(await until(pinShown))) {
+                return 'no PIN screen';
+            }
+            const player = await evaluate(`Boolean(document.querySelector('.main-container'))`);
+            const status = await evaluate(`fetch('/api/channels').then((r) => r.status)`);
+            return !player && status === 401 ? null : `player markup: ${player}, channels answered ${status}`;
+        });
+
+        await step('the PIN page fits the car', async () => {
+            for (const size of [{width: 489, height: 518}, {width: 390, height: 844}, {width: 844, height: 390}]) {
+                await send('Emulation.setDeviceMetricsOverride', {...size, deviceScaleFactor: 1, mobile: false});
+                await sleep(150);
+                const bad = await evaluate(`[...document.querySelectorAll('.pin-keys button, .pin-title')]
+                    .map((node) => node.getBoundingClientRect())
+                    .filter((r) => r.top < 0 || r.left < 0 || r.bottom > innerHeight || r.right > innerWidth).length`);
+                const small = await evaluate(`Math.min(...[...document.querySelectorAll('.pin-keys button')]
+                    .map((node) => node.getBoundingClientRect().height))`);
+                if (bad || small < 44) {
+                    return `${size.width}x${size.height}: ${bad} outside, smallest key ${small} px`;
+                }
+            }
+            await send('Emulation.clearDeviceMetricsOverride');
+            return null;
+        });
+
+        await step('a wrong PIN says so', async () => {
+            await typePin('000000');
+            const said = await until(`!document.querySelector('.pin-error').hidden`);
+            const text = await evaluate(`document.querySelector('.pin-error').textContent`);
+            return said && text.startsWith('Wrong PIN') ? null : `error shown: ${said}, "${text}"`;
+        });
+
+        await step('the right PIN opens the player', async () => {
+            await typePin('123456');
+            // The PIN page reloads into the player.
+            if (!(await until(`document.querySelector('.main-container') && !(${pinShown}) && document.querySelector('.current-channel').textContent`, 8000))) {
+                return 'the player did not open, or no station shown';
+            }
+            return null;
+        });
+
+        await step('a changed PIN asks again while listening', async () => {
+            const changed = await adminCall('POST', 'pin', {mode: 'site', pin: '7654321'});
+            if (changed !== 200) {
+                return `the PIN change answered ${changed}`;
+            }
+            // The next poll of what is playing comes within 10 s.
+            if (!(await until(pinShown, 15000))) {
+                return 'no PIN keypad after the PIN changed';
+            }
+            await typePin('7654321');
+            return (await until(`!(${pinShown})`)) ? null : 'the new PIN did not close the keypad';
+        });
+
+        await step('chosen stations hide the marked one', async () => {
+            await send('Page.navigate', {url: `${base}/admin/#edit/second`});
+            if (!(await until(`document.querySelector('form.edit [name=needs_pin]')`))) {
+                return 'no "Needs the PIN" box';
+            }
+            await evaluate(`(() => {
+                const form = document.querySelector('form.edit');
+                form.elements.needs_pin.checked = true;
+                form.requestSubmit();
+            })()`);
+            const mark = `document.querySelector('.station[data-id="second"] .id')`;
+            if (!(await until(`${mark} && ${mark}.textContent.includes('PIN')`))) {
+                return `not marked in the list (message: ${await message()})`;
+            }
+            const said = await savePin('stations');
+            if (!said.startsWith('PIN saved. Stations marked')) {
+                return said;
+            }
+            // A device without the grant.
+            await send('Network.enable');
+            await send('Network.deleteCookies', {name: 'tunebox_grant', url: `${base}/`});
+            await send('Page.navigate', {url: `${base}/`});
+            if (!(await until(`document.querySelector('.channel-groups .channel')`))) {
+                return 'player not shown';
+            }
+            const listed = await evaluate(`[...document.querySelectorAll('.channel-groups .channel')].map((b) => b.dataset.id)`);
+            const offered = await evaluate(`Boolean(document.querySelector('.more-stations'))`);
+            if (listed.join() !== 'first' || !offered) {
+                return `listed ${listed.join()}, "More stations" offered: ${offered}`;
+            }
+            await click('.more-stations');
+            if (!(await until(pinShown))) {
+                return 'no keypad for more stations';
+            }
+            await click('.pin-cancel');
+            if (!(await until(`!(${pinShown})`))) {
+                return 'Cancel did not close the keypad';
+            }
+            await click('.more-stations');
+            await until(pinShown);
+            await typePin('7654321');
+            if (!(await until(`document.querySelectorAll('.channel-groups .channel').length === 2 && !document.querySelector('.more-stations')`))) {
+                return 'the hidden station did not appear after the PIN';
+            }
+            return null;
+        });
+
+        await step('switch the PIN off in the panel', async () => {
+            const said = await savePin('off');
+            const status = await evaluate(`fetch('/api/channels').then((r) => r.status)`);
+            await evaluate(`window.location.hash = '#stations'`);
+            return said === 'PIN saved. The player is open to everyone.' && status === 200 ? null : `${said} / ${status}`;
+        });
+
+        await step('the account page lists this browser', async () => {
+            await evaluate(`window.location.hash = '#account'`);
+            if (!(await until(`document.querySelectorAll('table.sessions tbody tr').length === 1`))) {
+                return 'sessions not listed';
+            }
+            const text = await evaluate(`document.querySelector('table.sessions tbody').textContent`);
+            return text.includes('This browser') ? null : text;
+        });
+        await noSideways('account');
+
+        await step('new recovery codes ask for a code first', async () => {
+            await buttonNamed('Make new recovery codes');
+            if (!(await until(`document.querySelector('form.confirm-code')`))) {
+                return 'no code asked';
+            }
+            const code = await freshCode();
+            await evaluate(`(() => {
+                const form = document.querySelector('form.confirm-code');
+                form.code.value = ${JSON.stringify(code)};
+                form.requestSubmit();
+            })()`);
+            if (!(await until(`document.querySelectorAll('ul.recovery li').length === 10`))) {
+                return `no codes shown (message: ${await message()})`;
+            }
+            return null;
+        });
+
+        await step('change the password without a second code', async () => {
+            await evaluate(`(() => {
+                const inputs = document.querySelectorAll('[name="new-password"], [name="new-password-again"]');
+                for (const input of inputs) {
+                    input.value = 'a new browser check password';
+                }
+                inputs[0].form.requestSubmit();
+            })()`);
+            if (!(await until(`document.querySelector('.message').textContent.startsWith('Password changed')`))) {
+                return `not changed (message: ${await message()})`;
+            }
+            return null;
+        });
         await step('log out', async () => {
             await click('.logout');
             if (!(await until(`!document.querySelector('#login').hidden`))) {
@@ -578,6 +816,21 @@ async function run() {
             }
             const status = await evaluate(`fetch('/admin/api/config').then((r) => r.status)`);
             return status === 401 ? null : `config answered ${status} after logout`;
+        });
+
+        await step('log in with the new password', async () => {
+            await sleep(1100);
+            const problem = await toCode('a new browser check password');
+            if (problem) {
+                return problem;
+            }
+            const code = await freshCode();
+            await evaluate(`(() => {
+                const form = document.querySelector('#code');
+                form.code.value = ${JSON.stringify(code)};
+                form.requestSubmit();
+            })()`);
+            return (await until(`!document.querySelector('#shell').hidden`)) ? null : `not logged in (message: ${await message()})`;
         });
     } finally {
         if (browser) {

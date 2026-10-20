@@ -198,6 +198,10 @@ Replace `radio.example` with your own address. `channel=` is any station
 day/night, fullscreen or small-window buttons, and the cover always above
 the title. The small-window button opens this same address.
 
+With the listening PIN locking the whole player, an embed on another site
+cannot pass the PIN; see
+[Settings and the listening PIN](#settings-and-the-listening-pin).
+
 ## Reach it from other devices
 
 The compose file only accepts connections from the machine itself, on
@@ -378,6 +382,75 @@ change again; an open edit form keeps what you typed, and saving it again
 applies it to the current stations. When a save gets no answer at all, the
 page says the change may or may not have been saved and shows what is
 stored.
+
+### Settings and the listening PIN
+
+**Settings** (in the panel's menu) holds what every station inherits unless
+it sets its own: the title delay, the PawTunes delay, how often tunebox
+checks a station's feed, and how many recently played songs each station
+keeps. An empty field uses tunebox's built-in value, shown in grey. Below
+that: the station a new device starts on, and the location the player uses
+to switch between day and night. Saving works like a station change: it
+takes effect at once and shows up in the History, where it can be undone.
+
+The **listening PIN** keeps strangers who find the player's address out of
+tunebox. It is off by default. Pick where it asks, type a PIN of 6 to 8
+digits, and save:
+
+- **The whole player**: every page of the player shows a keypad until the
+  PIN is typed. Nothing of the player, its stations or its titles shows
+  before that.
+- **Chosen stations**: the player is open, but the stations you marked
+  **Needs the PIN** in their editor are left out of its list, titles and
+  logos. The station list ends with **More stations with the PIN**, which
+  asks for it once and then shows them.
+
+How it behaves:
+
+- A device types the PIN once per browser and stays let in for a year, for
+  both modes; moving between the two modes keeps devices let in.
+- A device that is playing when the PIN changes, or when the whole player
+  gets locked, keeps playing; the keypad appears within ten seconds, and the
+  titles come back once the PIN is typed.
+- A new PIN, or switching it on from off, asks every device again.
+- After 10 wrong PINs from one address, that address waits 15 minutes. When
+  wrong PINs pour in from many addresses at once (more than 100 in an hour),
+  tunebox checks one try every 2 seconds for everyone together and asks the
+  rest to try again. With the CrowdSec files from `examples/crowdsec/`, 20
+  wrong PINs ban the address at your proxy (for an hour with the profile in
+  their README).
+- The admin panel, `/healthz` and `/api/pawtunes` stay open (PawTunes keeps
+  working, hidden stations included).
+- With the whole player locked, an embed of it on another site stops
+  working: browsers do not send the PIN's cookie to a page inside another
+  site's frame.
+- The PIN keeps tunebox private, not the audio: the streams are the
+  stations' own public addresses, and anyone who knows one can play it
+  without tunebox.
+
+The PIN is not stored; tunebox keeps a keyed hash of it. PIN changes do not
+appear in the History (they cannot be undone there); the log records each
+change as `admin_change` with `kind` `pin`, never the PIN itself. Marking a
+station **Needs the PIN** is a station change like any other and does appear
+in the History.
+
+### Your account
+
+**Account** lists the browsers that are logged in, with their address and
+when they were last used; **Sign out** ends one of them. (To end your own,
+use Log out.)
+
+The same page changes the password, moves the login codes to a new
+authenticator app, and makes new recovery codes. Each of these asks for a
+code from your authenticator app first (or a recovery code), unless you
+typed one in the last 5 minutes, and each signs every other browser out. New
+recovery codes are shown once; the old ones stop working. A new
+authenticator is confirmed with a code from the new app; the old app's codes
+stop working then.
+
+A wrong code there counts towards the same limits as a wrong code at login
+(5 per address in 15 minutes), but it is logged as `admin_reauth_failed`,
+which the CrowdSec files do not ban on.
 
 ## Use it with PawTunes
 
@@ -576,7 +649,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | No sound, and the ring around the stop button keeps spinning ("Reconnecting...") | The stream cannot be reached from this device or network, or the browser cannot play it. | The player keeps trying. Try another quality on the stations page; open `/check.html` on the device to see which formats it plays. To see why, open the player with `?debug=1` added to its address (for example `https://radio.example.com/?debug=1`) and press play: a panel lists what the browser reports about the stream, with its own error text and the player's reconnect decisions. Copy puts the list on the clipboard. The panel stays in that browser; nothing is sent to tunebox. |
 | "This browser cannot play AAC" (or MP3) | The browser lacks that codec (common for AAC in some Linux browsers). | Pick a quality with the other codec, usually "Compatible" (MP3). |
 | No visualizer | It starts after the first tap or key press on the page. A stream served without the cross-origin permission plays without it ("No visualizer for this stream"). | Tap the page once. Nothing to do for such a stream. |
-| A station shows only its name, no song | Its feed answered slowly or not at all when you opened it (tunebox does not show a song it cannot confirm is on now). | Wait for the next update (10 seconds). If it stays empty, `/healthz` shows `stale_since` for that station. |
+| A station shows only its name, no song | Its feed answered slowly or not at all when you opened it (tunebox does not show a song it cannot confirm is on now). | Wait for the next update (10 seconds). If it stays empty, `/healthz` asked on the host itself shows `stale_since` for that station (see [HTTP API](#http-api)). |
 | PawTunes shows nothing new | PawTunes cannot reach the URL. | Open the same `/api/pawtunes/<id>` address in a browser from the PawTunes machine; you should see the current song. |
 
 For more detail in the log, set `LOG_LEVEL: info,tunebox.covers=debug` in
@@ -635,6 +708,7 @@ is reported at startup instead of being ignored.
 | `group` | no | Heading on the channel page. |
 | `logo` | no | `https://` address of the station logo. tunebox downloads it once into the data folder and serves it from there, so listeners' browsers never contact that address. PNG, JPEG, WebP or SVG, up to 2 MB. |
 | `always` | no, default `false` | Check the station even while nobody listens. |
+| `needs_pin` | no, default `false` | With the listening PIN on "Chosen stations": hide this station from devices that have not typed the PIN. |
 
 `[channels.rules]` (optional)
 
@@ -731,9 +805,12 @@ source reads: `artist`, `title` (with its credit), `artwork` (optional) and
 `history` (up to 20 entries with `artist`, `title`, `played_at` in
 milliseconds and optional `artwork`).
 
-**`GET /healthz`** is `200` while the server runs, with each station's last
-successful check, `stale_since` and `active`. An unreachable station does
-not make it fail. `active` is `false` for a station nobody has listened to in
+**`GET /healthz`** is `200` with `{"status": "ok"}` while the server runs.
+Asked on the host itself (a connection from loopback without proxy
+headers, as Docker's healthcheck makes), it also gives each station's last
+successful check, `stale_since` and `active`: run
+`docker exec tunebox python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/healthz').read().decode())"`.
+An unreachable station does not make it fail. `active` is `false` for a station nobody has listened to in
 the last ten minutes (and that has no `always = true`); tunebox does not
 check its feed then, so an old `last_poll_ok` is expected.
 
@@ -741,6 +818,24 @@ check its feed then, so an old `last_poll_ok` is expected.
 `latitude`, `longitude` (both `null` when not set) and `default_channel`
 (the configured one, else the first station). It may be cached for five
 minutes.
+
+**`POST /api/pin`** with `{"pin": "123456"}` passes the listening PIN. A
+right PIN answers `204` and sets the `tunebox_grant` cookie (one year;
+`Secure` when your proxy says the visit came over https); a wrong one is a
+`401` with `{"error": "pin_wrong"}`; an address that must wait gets `429`
+with `{"error": "slow_down"}`. While the PIN is off it answers `204`
+without a cookie. While the PIN is on:
+
+- With **the whole player** locked and no grant, every page address
+  answers with the PIN page, and `/api/*` (except `/api/pin` and
+  `/api/pawtunes`) and `/logos/` answer `401` with
+  `{"error": "pin_required"}`.
+- With **chosen stations** and no grant, `/api/channels` leaves out the
+  stations with `needs_pin` and adds the header `X-Tunebox-Pin: more`;
+  their `/now` and logos answer `404`, as for a station that does not
+  exist, and `/api/player` gives no `default_channel` that is hidden.
+- Answers that depend on the grant are sent with `Cache-Control: private`
+  and `Vary: Cookie`.
 
 Everything under `/admin` belongs to the admin panel (when it is on) and
 is not meant for other clients: its API needs the panel's session cookie,

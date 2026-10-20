@@ -47,6 +47,10 @@ h1 {
 form,
 section {
     display: grid;
+    /* minmax(0, ...): a column may be narrower than its widest content (a
+       select's longest option), which wraps or truncates instead of
+       pushing the page wider than a phone. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
 }
 
@@ -56,6 +60,7 @@ section {
 
 label {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.25rem;
     color: var(--muted);
 }
