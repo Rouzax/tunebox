@@ -312,14 +312,29 @@ function inspect(page, slack) {
             if (runs && !scrolling) {
                 problems.push(`"${line.textContent.slice(0, 30)}" runs sideways out of its line`);
             }
+            // A line cut off with "..." must have used its width first:
+            // balanced wrapping spreads long text evenly over more lines
+            // than are shown, so the visible ones end short ("MEDUZA,...").
+            if (wide && line.scrollHeight > line.clientHeight + 1) {
+                const shown = [...words.getClientRects()].filter((r) => r.bottom <= edges.bottom + 1 && r.width > 0);
+                const tops = [...new Set(shown.map((r) => Math.round(r.top)))];
+                for (const top of tops) {
+                    const used = shown.filter((r) => Math.round(r.top) === top)
+                        .reduce((a, r) => ({left: Math.min(a.left, r.left), right: Math.max(a.right, r.right)}), {left: Infinity, right: -Infinity});
+                    if (used.right - used.left < 0.6 * edges.width) {
+                        problems.push(`"${line.textContent.slice(0, 30)}" is cut off with a short line (${Math.round(used.right - used.left)} of ${Math.round(edges.width)} px)`);
+                        break;
+                    }
+                }
+            }
             if (!wide && scrolling !== (line.firstElementChild.offsetWidth > line.clientWidth + 1)) {
                 problems.push(`"${line.textContent.slice(0, 30)}" ${scrolling ? 'scrolls although it fits' : 'is cut instead of scrolling'}`);
             }
         }
-        // Only a scrolling line's text moves, and only stacked.
+        // Only a scrolling line moves (its text, and its edge fades), and only stacked.
         const onair = document.querySelector('.onair');
         if (document.getAnimations().some((a) => a.effect && a.effect.target && onair.contains(a.effect.target)
-            && (wide || !a.effect.target.matches('.scrolling > .car-line-text')))) {
+            && (wide || !a.effect.target.matches('.car-line.scrolling, .scrolling > .car-line-text')))) {
             problems.push('track text moves');
         }
         const played = document.querySelector('.car-played-line');

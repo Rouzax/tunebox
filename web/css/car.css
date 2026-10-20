@@ -7,9 +7,7 @@
     box-sizing:    border-box;
     width:         calc(100% + 2rem);
     margin:        0 -1rem;
-    /* Also the width of a scrolling line's edge fades, which sit in it. */
-    --ticker-fade: 1.25rem;
-    padding:       .95rem var(--ticker-fade) .8rem;
+    padding:       .95rem 1.25rem .8rem;
     border-radius: 1.1rem 1.1rem 0 0;
     color:         var(--car-card-ink);
     background:    var(--car-card);
@@ -74,22 +72,33 @@
     visibility: hidden;
 }
 
-/* A scrolling line reaches into the card's left padding, where its left
-   fade sits, so at rest its first letter lines up with the still lines
-   and shows in full. The right fade stays inside the text column, so the
-   text fades out short of the card's edge, as wide an inset as the left. */
-.tunebox .onair .car-line.scrolling {
-    margin-left:        calc(-1 * var(--ticker-fade));
-    text-overflow:      clip;
-    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--ticker-fade), #000 calc(100% - var(--ticker-fade)), transparent);
-    mask-image:         linear-gradient(to right, transparent, #000 var(--ticker-fade), #000 calc(100% - var(--ticker-fade)), transparent);
+/* A scrolling line fades at its edges, inside the text column, so it keeps
+   the card's padding on both sides. Each fade is there only while text is
+   hidden behind it: at the start the left fade is gone and the first
+   letter is whole, at the end the right one. Registered, so the widths
+   change smoothly with the scroll (Chromium 85+; without it they jump). */
+@property --fade-start {
+    syntax:        '<length>';
+    inherits:      false;
+    initial-value: 0px;
 }
 
-/* The padding keeps the first and last letters clear of the fades;
-   ticker.js measures it into the scroll distance. */
+@property --fade-end {
+    syntax:        '<length>';
+    inherits:      false;
+    initial-value: 20px;
+}
+
+.tunebox .onair .car-line.scrolling {
+    text-overflow:      clip;
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+    mask-image:         linear-gradient(to right, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+    animation:          car-ticker-fade var(--ticker-duration, 10s) linear infinite alternate;
+}
+
+/* Runs alongside car-ticker with the same duration, so the two stay in step. */
 .tunebox .onair .car-line.scrolling .car-line-text {
     display:   inline-block;
-    padding:   0 var(--ticker-fade);
     animation: car-ticker var(--ticker-duration, 10s) linear infinite alternate;
 }
 
@@ -100,6 +109,21 @@
     }
     85%, 100% {
         transform: translateX(var(--ticker-shift, 0));
+    }
+}
+
+@keyframes car-ticker-fade {
+    0%, 15% {
+        --fade-start: 0px;
+        --fade-end:   20px;
+    }
+    20%, 80% {
+        --fade-start: 20px;
+        --fade-end:   20px;
+    }
+    85%, 100% {
+        --fade-start: 20px;
+        --fade-end:   0px;
     }
 }
 
@@ -571,14 +595,16 @@
 }
 
 /* Beside the cover the card's height moves nothing, so the lines wrap, two
-   at most, and a glance reads them whole without waiting for a scroll. */
+   at most, and a glance reads them whole without waiting for a scroll.
+   Plain wrapping, not balanced: Firefox balances text over all the lines
+   it needs before the clamp cuts it, which leaves a word or two per
+   visible line ("MEDUZA,..."). */
 .tunebox[data-layout="wide"] .onair .car-line {
     display:            -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
     white-space:        normal;
     overflow-wrap:      anywhere;
-    text-wrap:          balance;
 }
 
 .tunebox[data-layout="wide"] .onair .car-line[hidden] {

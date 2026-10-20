@@ -19,7 +19,8 @@ export function bindTicker(root) {
         if (text.offsetWidth <= line.clientWidth) {
             return;
         }
-        // Measured with the fade padding in place, so the last letter clears the fade.
+        // Measured as it scrolls (inline-block): the sweep ends with the last
+        // letter at the line's end, where the right fade is gone by then.
         line.classList.add('scrolling');
         const shift = line.clientWidth - text.offsetWidth;
         const sweep = -shift / SPEED_PX_PER_S / MOVING_SHARE;
