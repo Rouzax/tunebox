@@ -618,9 +618,9 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 - **Update** to the latest release. Copy `data/tunebox.db` first: a newer
   tunebox may upgrade the database, and an older one then refuses to start
   on it (`settings_unavailable` in the log), so going back means putting
-  the copy back. This release asks every browser for the PIN again (when one is set) and
-  makes the admin login ask for a code again on browsers it knew; the PIN
-  itself stays valid.
+  the copy back. This release asks every browser for the PIN again (when
+  one is set) and makes the admin login ask for a code again on browsers
+  it knew; the PIN itself stays valid.
 
   ```sh
   cp data/tunebox.db data/tunebox.db.before-update

@@ -84,6 +84,9 @@ function silentStream(folder) {
     const cert = join(folder, 'stream.crt');
     const made = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
         '-subj', '/CN=localhost', '-keyout', key, '-out', cert], {encoding: 'utf8'});
+    if (made.error) {
+        throw new Error(`openssl is needed to make the throwaway certificate for the local stream (${made.error.code === 'ENOENT' ? 'not found on PATH' : made.error.message})`);
+    }
     if (made.status !== 0) {
         throw new Error(`could not make a certificate for the local stream: ${made.stderr}`);
     }
@@ -895,48 +898,51 @@ async function run() {
                     window.__audios.push(made);
                     return made;
                 };`});
-            await send('Page.navigate', {url: `${base}/`});
-            if (!(await until(`document.querySelector('.play') && document.querySelector('.current-channel').textContent`))) {
-                return 'player not shown';
+            try {
+                await send('Page.navigate', {url: `${base}/`});
+                if (!(await until(`document.querySelector('.play') && document.querySelector('.current-channel').textContent`))) {
+                    return 'player not shown';
+                }
+                // A real mouse press: playing needs a user gesture.
+                const box = await evaluate(`(() => {
+                    const r = document.querySelector('.play').getBoundingClientRect();
+                    return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+                })()`);
+                for (const type of ['mousePressed', 'mouseReleased']) {
+                    await send('Input.dispatchMouseEvent', {type, x: box.x, y: box.y, button: 'left', clickCount: 1});
+                }
+                const playing = `window.__audios.some((a) => !a.paused && a.currentTime > 0)`;
+                if (!(await until(playing, 10000))) {
+                    return 'the local stream did not start playing';
+                }
+                const locked = await adminCall('POST', 'pin', {mode: 'site', pin: '97531246'});
+                if (locked !== 200) {
+                    return `locking the site answered ${locked}`;
+                }
+                const stopShown = `${pinShown} && document.querySelector('.pin-stop') && !document.querySelector('.pin-stop').hidden`;
+                if (!(await until(stopShown, 15000))) {
+                    return 'the keypad shows no Stop while the audio plays';
+                }
+                // Tab from the last control wraps to the first key.
+                await evaluate(`document.querySelector('.pin-stop').focus()`);
+                for (const type of ['keyDown', 'keyUp']) {
+                    await send('Input.dispatchKeyEvent', {type, key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9});
+                }
+                const landed = await evaluate(`document.activeElement.dataset.key`);
+                if (landed !== '1') {
+                    return `Tab from Stop landed on key "${landed}", expected the first key`;
+                }
+                await click('.pin-stop');
+                return (await until(`window.__audios.every((a) => a.paused)`)) ? null : 'Stop did not stop the audio';
+            } finally {
+                // Whatever happened, later steps start from an open player on the panel.
+                await send('Page.removeScriptToEvaluateOnNewDocument', {identifier: hook.result.identifier});
+                const off = await adminCall('POST', 'pin', {mode: 'off'});
+                await send('Page.navigate', {url: `${base}/admin/#stations`});
+                if (off !== 200) {
+                    throw new Error(`switching off answered ${off}`);
+                }
             }
-            // A real mouse press: playing needs a user gesture.
-            const box = await evaluate(`(() => {
-                const r = document.querySelector('.play').getBoundingClientRect();
-                return {x: r.left + r.width / 2, y: r.top + r.height / 2};
-            })()`);
-            for (const type of ['mousePressed', 'mouseReleased']) {
-                await send('Input.dispatchMouseEvent', {type, x: box.x, y: box.y, button: 'left', clickCount: 1});
-            }
-            const playing = `window.__audios.some((a) => !a.paused && a.currentTime > 0)`;
-            if (!(await until(playing, 10000))) {
-                return 'the local stream did not start playing';
-            }
-            const locked = await adminCall('POST', 'pin', {mode: 'site', pin: '97531246'});
-            if (locked !== 200) {
-                return `locking the site answered ${locked}`;
-            }
-            const stopShown = `${pinShown} && document.querySelector('.pin-stop') && !document.querySelector('.pin-stop').hidden`;
-            if (!(await until(stopShown, 15000))) {
-                return 'the keypad shows no Stop while the audio plays';
-            }
-            // Tab from the last control wraps to the first key.
-            await evaluate(`document.querySelector('.pin-stop').focus()`);
-            for (const type of ['keyDown', 'keyUp']) {
-                await send('Input.dispatchKeyEvent', {type, key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9});
-            }
-            const landed = await evaluate(`document.activeElement.dataset.key`);
-            if (landed !== '1') {
-                return `Tab from Stop landed on key "${landed}", expected the first key`;
-            }
-            await click('.pin-stop');
-            const stopped = await until(`window.__audios.every((a) => a.paused)`);
-            await send('Page.removeScriptToEvaluateOnNewDocument', {identifier: hook.result.identifier});
-            const off = await adminCall('POST', 'pin', {mode: 'off'});
-            await send('Page.navigate', {url: `${base}/admin/#stations`});
-            if (!stopped) {
-                return 'Stop did not stop the audio';
-            }
-            return off === 200 ? null : `switching off answered ${off}`;
         });
 
         await step('the account page lists this browser', async () => {
