@@ -61,3 +61,12 @@ def test_scenario_reasons_are_reasons_tunebox_gives() -> None:
         assert set(re.findall(r"evt\.Meta\.reason == '([a-z]+)'", text)) <= allowed
     totp = (EXAMPLES / "scenarios" / "tunebox-admin-totp-bf.yaml").read_text(encoding="utf-8")
     assert "'recovery'" in totp
+
+
+def test_wrong_pins_have_a_scenario() -> None:
+    scenario = EXAMPLES / "scenarios" / "tunebox-listener-pin-bf.yaml"
+    text = scenario.read_text(encoding="utf-8")
+    assert "tunebox_listener_pin_failed" in text
+    assert "capacity: 19" in text
+    samples = (EXAMPLES / "sample.log").read_text(encoding="utf-8")
+    assert '"event": "listener_pin_failed"' in samples

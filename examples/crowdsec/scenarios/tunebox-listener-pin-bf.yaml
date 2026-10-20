@@ -1,0 +1,16 @@
+# Twenty wrong listening PINs (or tries while locked out) from one address
+# within about ten minutes. tunebox already locks an address after ten
+# wrong PINs for fifteen minutes; this bans the address at the proxy for
+# whoever keeps going.
+type: leaky
+name: tunebox/listener-pin-bf
+description: "Repeated wrong PINs on the tunebox player"
+filter: evt.Meta.log_type == 'tunebox_listener_pin_failed'
+groupby: evt.Meta.source_ip
+capacity: 19
+leakspeed: 30s
+blackhole: 5m
+labels:
+  service: tunebox
+  type: bruteforce
+  remediation: true

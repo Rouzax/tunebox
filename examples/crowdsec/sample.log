@@ -3,3 +3,4 @@
 {"ts": "2026-10-18T20:00:06.000Z", "level": "warning", "logger": "tunebox.admin", "event": "admin_rate_limited", "ctx": "admin-0a1b2c3f", "client": "203.0.113.9", "why": "address"}
 {"ts": "2026-10-18T20:00:07.000Z", "level": "warning", "logger": "tunebox.admin", "event": "admin_csrf_rejected", "ctx": "admin-0a1b2c40", "client": "203.0.113.9", "why": "origin"}
 {"ts": "2026-10-18T20:00:08.000Z", "level": "warning", "logger": "tunebox.admin", "event": "admin_setup_token_rejected", "ctx": "admin-0a1b2c41", "client": "203.0.113.9"}
+{"ts": "2026-10-18T20:00:09.000Z", "level": "warning", "logger": "tunebox.server", "event": "listener_pin_failed", "ctx": "pin-0a1b2c42", "client": "203.0.113.9", "reason": "wrong"}
