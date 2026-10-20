@@ -7,11 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from tunebox.accounts import Accounts
 from tunebox.app import WEB_ADMIN_DIR, StopSignal, main, open_settings, shut_down
 from tunebox.config import state_from_toml
 from tunebox.runtime import EMPTY, Runtime
 from tunebox.server import TuneboxServer
-from tunebox.settings import Settings
+from tunebox.settings import Settings, SettingsWriteError
 from tunebox.store import CoverDecision, Store
 
 
@@ -192,3 +193,28 @@ def test_with_the_panel_on_changed_defaults_and_player_are_named(
 
 def test_admin_needs_its_web_folder() -> None:
     assert (WEB_ADMIN_DIR / "index.html").is_file()
+
+
+def test_a_signing_key_that_cannot_be_stored_stops_startup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def refuse(_self: Accounts) -> bytes:
+        raise SettingsWriteError("disk full")
+
+    monkeypatch.setattr(Accounts, "server_key", refuse)
+    # A taken port ends start-up at the listen step if the key is not read
+    # before it; read first, the key's error comes first.
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        config = tmp_path / "tunebox.toml"
+        config.write_text(
+            f'[server]\nhost = "127.0.0.1"\nport = {port}\n\n{CHANNEL_TOML}', encoding="utf-8"
+        )
+        monkeypatch.setenv("LOG_LEVEL", "info")
+        monkeypatch.setenv("TUNEBOX_CONFIG", str(config))
+        # Before serving, not on the first PIN request: the PIN must never
+        # touch the database on the player's path.
+        assert main() == 2
+    assert "disk full" in capsys.readouterr().err

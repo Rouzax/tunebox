@@ -70,6 +70,16 @@ def main() -> int:
     runtime = Runtime(settings, make_channel, logos)
     # Both exist with the panel off too: a PIN switched on stays on.
     accounts = Accounts(settings)
+    try:
+        # Read (or made) now, so checking a PIN grant never touches the
+        # database on the player's path, and a failure stops start-up here.
+        accounts.server_key()
+    except (SettingsUnavailable, SettingsWriteError) as error:
+        event(log, logging.ERROR, "settings_unavailable", error=str(error))
+        print(f"tunebox: {error}", file=sys.stderr)
+        store.close()
+        settings.close()
+        return 2
     pin = Pin(settings, accounts.server_key)
     admin = None
     if config.admin.enabled:
