@@ -739,6 +739,22 @@ def test_a_large_body_from_a_session_is_read(
     assert status == (403 if path.endswith("/import") else 400)
 
 
+def test_a_large_import_without_a_fresh_code_is_refused_before_its_body(
+    admin_parts: tuple[TuneboxServer, Accounts],
+) -> None:
+    httpd, accounts = admin_parts
+    cookie, csrf = log_in(httpd, accounts)
+    big = json.dumps({"pad": " " * MAX_BODY}).encode()
+    headers = {
+        "Origin": ORIGIN,
+        "Content-Type": "application/json",
+        "Cookie": cookie,
+        "X-Tunebox-CSRF": csrf,
+    }
+    status, body = post(httpd, "/admin/api/import", big, headers)
+    assert (status, json.loads(body)) == (403, {"error": "reauth_required"})
+
+
 def test_post_outside_admin_is_not_allowed(server: TuneboxServer) -> None:
     status, _ = post(server, "/api/channels", b"{}", {"Content-Type": "application/json"})
     assert status == 405

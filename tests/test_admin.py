@@ -1489,9 +1489,13 @@ def test_a_large_body_needs_a_live_session_and_token(world: World) -> None:
     assert limit_of(world, head_only(world, path, "wrong")) == (MAX_BODY, 403)
     assert limit_of(world, head_only(world, path, csrf, "https://evil.example")) == (MAX_BODY, 403)
     assert limit_of(world, head_only(world, path, csrf)) == (MAX_STATE_BODY, None)
-    for name in ("import", "import/preview"):
-        large = head_only(world, f"/admin/api/{name}", csrf)
-        assert limit_of(world, large) == (MAX_STATE_BODY, None)
+    preview = head_only(world, "/admin/api/import/preview", csrf)
+    assert limit_of(world, preview) == (MAX_STATE_BODY, None)
+    # A route that needs a code grants its size only to a session that has one.
+    large = head_only(world, "/admin/api/import", csrf)
+    assert limit_of(world, large) == (MAX_BODY, 403)
+    fresh(world, csrf)
+    assert limit_of(world, large) == (MAX_STATE_BODY, None)
     # Only the routes that need it; the size refusal is the server's 413.
     assert limit_of(world, head_only(world, "/admin/api/pin", csrf)) == (MAX_BODY, None)
 
@@ -2069,20 +2073,30 @@ def test_routes_that_need_a_code_ask_before_reading_the_body(world: World) -> No
         if not route.code:
             continue
         asked += 1
-        answer = world.call(method, "/admin/api/" + template, {}, csrf=csrf)
+        path = "/admin/api/" + template.replace("{id}", "1").replace("{part}", "x")
+        answer = world.call(method, path, {}, csrf=csrf)
         assert json_of(answer) == {"error": "reauth_required"}, template
     assert asked
 
 
 def test_a_known_path_with_another_method_is_not_found(world: World) -> None:
-    world.login()
+    csrf = world.login()
     assert world.call("DELETE", "/admin/api/config").status == 404
     assert world.call("GET", "/admin/api/history/1/restore").status == 404
     assert world.call("GET", "/admin/api/history/x").status == 404
     assert world.call("GET", "/admin/api/logos/a/b").status == 404
+    assert world.call("GET", "/admin/api/history/{id}").status == 404
+    assert world.call("POST", "/admin/api/history/{id}/restore", {}, csrf=csrf).status == 404
 
 
 def test_only_upload_routes_take_images(world: World) -> None:
     csrf = world.login()
     answer = world.call("POST", "/admin/api/config", {}, csrf=csrf, content_type="image/png")
     assert json_of(answer) == {"error": "json_only"}
+
+
+def test_a_route_sets_exactly_one_of_run_and_open() -> None:
+    with pytest.raises(ValueError):
+        Route()
+    with pytest.raises(ValueError):
+        Route(run=lambda _r, _s: Response(204), open=lambda _r: Response(204))

@@ -217,6 +217,10 @@ class Route:
     # A fresh code (re-auth) before the handler runs.
     code: bool = False
 
+    def __post_init__(self) -> None:
+        if (self.run is None) == (self.open is None):
+            raise ValueError("a route sets exactly one of run and open")
+
 
 class Admin:
     def __init__(
@@ -325,9 +329,6 @@ class Admin:
 
     def route(self, method: str, name: str) -> Route | None:
         """The route a method and a path below /admin/api/ name, if any."""
-        exact = self.routes.get((method, name))
-        if exact is not None:
-            return exact
         for (wanted, template), found in self.routes.items():
             if wanted == method and _matches(template, name):
                 return found
@@ -371,9 +372,11 @@ class Admin:
             refused = self._refusal(request, route)
         except SettingsUnavailable:
             refused = _error(503, "read_only")
-        if isinstance(refused, Session):
-            return route.body, None
-        return MAX_BODY, _with_admin_headers(refused)
+        if isinstance(refused, Response):
+            return MAX_BODY, _with_admin_headers(refused)
+        if route.code and not self._accounts.fresh(refused):
+            return MAX_BODY, _with_admin_headers(_error(403, "reauth_required"))
+        return route.body, None
 
     def _screen(self, request: Request, route: Route) -> Response | None:
         """The origin and content type checks every POST must pass; a
