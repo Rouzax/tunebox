@@ -372,6 +372,9 @@ tunebox refuses a pattern that could take long on some title:
 
 The message names the field, for example
 `channels[3] (owr).rules.played_by: nested repetition ... is not allowed`.
+One save or import may bring at most 100 title rules that are not stored
+yet (a pattern used by several stations counts once); more are refused as
+a whole, so import a larger file in parts.
 
 **History** lists every change, newest first, with what it changed. "Restore
 the version before this change" shows what restoring would change compared

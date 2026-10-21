@@ -32,6 +32,11 @@ PER_SEARCH_S = 0.05
 # The whole check, the child's start-up included; most of it is start-up.
 CHECK_TIMEOUT_S = 2.0
 MAX_SAMPLES = 200
+# Distinct new patterns one state may bring. The lint runs each on the
+# request thread and the timed check runs them all in one child within
+# CHECK_TIMEOUT_S, so the count bounds both. A file of 50 stations with
+# its own rules on both keys stays inside.
+MAX_NEW_PATTERNS = 100
 # Long, repetitive titles: what makes backtracking blow up.
 SYNTHETIC = (
     "a" * MAX_TITLE,
@@ -351,12 +356,25 @@ def _unseen(candidate: ConfigState, stored: ConfigState) -> list[tuple[str, str]
     return [(field, pattern) for field, pattern in patterns(candidate) if pattern not in known]
 
 
+def _too_many(new: list[tuple[str, str]]) -> str | None:
+    if len({pattern for _, pattern in new}) > MAX_NEW_PATTERNS:
+        return (
+            f"rules: at most {MAX_NEW_PATTERNS} new title rules at once;"
+            " import in parts or reuse rules"
+        )
+    return None
+
+
 def lint_new(candidate: ConfigState, stored: ConfigState) -> str | None:
     """Why the lint refuses the first of the candidate's new patterns, as
     "<field>: <reason>", or None; no child process runs. Patterns already
     stored are left alone: they have run on live titles, and a lint that
     grew stricter must not block every save until they are edited."""
-    for field, pattern in _unseen(candidate, stored):
+    new = _unseen(candidate, stored)
+    too_many = _too_many(new)
+    if too_many:
+        return too_many
+    for field, pattern in new:
         reason = lint(pattern)
         if reason:
             return f"{field}: {reason}"
@@ -370,8 +388,12 @@ def check_new(
     None. Runs after lint_new has passed them. samples gives the titles to
     try new patterns on; gathering them reads every channel, so it is asked
     only when there is a new pattern."""
+    unseen = _unseen(candidate, stored)
+    too_many = _too_many(unseen)
+    if too_many:
+        return too_many
     new: dict[str, str] = {}
-    for field, pattern in _unseen(candidate, stored):
+    for field, pattern in unseen:
         new.setdefault(pattern, field)
     if not new:
         return None

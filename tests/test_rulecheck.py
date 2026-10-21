@@ -6,6 +6,7 @@ import pytest
 
 from tunebox.config import PATTERN_RULES, ChannelRow, ConfigState, load
 from tunebox.rulecheck import (
+    MAX_NEW_PATTERNS,
     SYNTHETIC,
     check,
     check_new,
@@ -214,3 +215,28 @@ def test_patterns_finds_every_key_config_compiles() -> None:
     doc = {"rules": {key: "(x)" for key in PATTERN_RULES}}
     state = ConfigState({}, {}, (), (ChannelRow("a", None, True, doc),))
     assert {field.rsplit(".", 1)[1] for field, _ in patterns(state)} == set(PATTERN_RULES)
+
+
+def test_too_many_new_title_rules_are_refused_before_any_lint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def never(*_args: object) -> None:
+        raise AssertionError("ran a pattern")
+
+    monkeypatch.setattr("tunebox.rulecheck.lint", never)
+    monkeypatch.setattr("tunebox.rulecheck.check", never)
+    stored = state_with("(s1)", "(s2)")
+    over = state_with("(s1)", "(s2)", *(f"(n{i})" for i in range(MAX_NEW_PATTERNS + 1)))
+    expected = (
+        f"rules: at most {MAX_NEW_PATTERNS} new title rules at once; import in parts or reuse rules"
+    )
+    assert lint_new(over, stored) == expected
+    assert check_new(over, stored, list) == expected
+
+
+def test_exactly_the_cap_of_new_title_rules_passes_the_count() -> None:
+    stored = state_with("(s1)", "(s2)")
+    new = [f"(n{i})" for i in range(MAX_NEW_PATTERNS)]
+    # A pattern used twice counts once.
+    at_cap = state_with("(s1)", "(s2)", *new, new[0])
+    assert lint_new(at_cap, stored) is None

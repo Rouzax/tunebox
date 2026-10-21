@@ -17,6 +17,7 @@ from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Reques
 from tunebox.blobs import MAX_BLOB, Blobs
 from tunebox.config import AdminConfig
 from tunebox.pin import Pin
+from tunebox.rulecheck import MAX_NEW_PATTERNS
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
 
 ORIGIN = "https://radio.example"
@@ -800,6 +801,25 @@ def test_preview_and_import_refuse_the_same_files_alike(world: World, text: str)
     assert (preview.status, stored.status) == (400, 400)
     assert json_of(preview) == json_of(stored)
     assert world.settings.load()[1] == 1
+
+
+def test_a_preview_with_too_many_new_title_rules_is_refused(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
+
+    def never(_pattern: str) -> str:
+        raise AssertionError("linted")
+
+    monkeypatch.setattr("tunebox.rulecheck.lint", never)
+    text = "".join(
+        f'[[channels]]\nid = "s{i}"\nname = "S"\nstream_url = "https://example.invalid/s"\n'
+        f'source = {{ type = "triton", mount = "X" }}\nrules = {{ played_by = "(n{i})" }}\n'
+        for i in range(MAX_NEW_PATTERNS + 1)
+    )
+    answer = world.call("POST", "/admin/api/import/preview", {"toml": text}, csrf=csrf)
+    assert answer.status == 400
+    assert json_of(answer)["message"].startswith(f"rules: at most {MAX_NEW_PATTERNS} new")
 
 
 def test_a_refused_import_names_the_station_by_id(world: World) -> None:
