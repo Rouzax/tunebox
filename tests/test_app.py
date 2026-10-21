@@ -16,7 +16,7 @@ from tunebox.config import state_from_toml
 from tunebox.pin import Pin
 from tunebox.runtime import EMPTY, Runtime
 from tunebox.server import TuneboxServer
-from tunebox.settings import Settings, SettingsWriteError
+from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
 from tunebox.store import CoverDecision, Store
 
 
@@ -250,6 +250,21 @@ def test_start_up_removes_old_unnamed_blobs_and_keeps_named_ones(
     lines = [json.loads(x) for x in (tmp_path / "tunebox.log").read_text("utf-8").splitlines()]
     collected = [line for line in lines if line["event"] == "logo_blobs_collected"]
     assert [line["removed"] for line in collected] == [1]
+
+
+def test_a_database_that_fails_while_listing_blobs_stops_startup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def broken(_self: Settings) -> set[str]:
+        raise SettingsUnavailable("disk I/O error")
+
+    monkeypatch.setattr(Settings, "referenced_blobs", broken)
+    config = tmp_path / "tunebox.toml"
+    config.write_text(CHANNEL_TOML, encoding="utf-8")
+    monkeypatch.setenv("LOG_LEVEL", "info")
+    monkeypatch.setenv("TUNEBOX_CONFIG", str(config))
+    assert main() == 2
+    assert "disk I/O error" in capsys.readouterr().err
 
 
 def test_admin_needs_its_web_folder() -> None:

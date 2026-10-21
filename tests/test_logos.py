@@ -231,11 +231,25 @@ def test_a_missing_blob_keeps_the_old_logo(
     assert fetched == []
 
 
-def test_a_blob_logo_without_blobs_is_never_downloaded(tmp_path: Path) -> None:
+def test_a_blob_logo_without_blobs_is_never_downloaded(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     fetched: list[str] = []
     logos = Logos(tmp_path, FakeHttp(lambda url: fetched.append(url) or b""))
     logos.refresh(channel_config(logo="blob:" + "2" * 64))
     assert fetched == []
+    assert "logo_missing" in [r.getMessage() for r in caplog.records]
+
+
+def test_a_blob_logo_gives_way_to_an_address_again(tmp_path: Path) -> None:
+    blobs = Blobs(tmp_path / "blobs")
+    ref, _ = blobs.save(SVG)
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), blobs)
+    logos.refresh(channel_config(logo=ref))
+    logos.refresh(channel_config(logo=URL))
+    assert (tmp_path / "owr.png").read_bytes() == PNG
+    assert not (tmp_path / "owr.svg").exists()
+    assert (tmp_path / "owr.url").read_text(encoding="utf-8") == URL
 
 
 def test_a_refresh_leaves_the_blob_folder_alone(tmp_path: Path) -> None:

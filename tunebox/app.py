@@ -75,10 +75,16 @@ def main() -> int:
         event(log, logging.ERROR, "settings_unavailable", error=str(error))
         print(f"tunebox: {error}", file=sys.stderr)
         return 2
-    for field, reason in stored_refusals(settings.load()[0]):
-        event(log, logging.WARNING, "rule_refused", field=field, reason=reason)
     blobs = Blobs(config.server.data_dir / "logos" / "blobs")
-    removed = blobs.collect(keep=settings.referenced_blobs(), older_than_s=BLOB_GRACE_S)
+    try:
+        for field, reason in stored_refusals(settings.load()[0]):
+            event(log, logging.WARNING, "rule_refused", field=field, reason=reason)
+        removed = blobs.collect(keep=settings.referenced_blobs(), older_than_s=BLOB_GRACE_S)
+    except (SettingsUnavailable, SettingsWriteError) as error:
+        event(log, logging.ERROR, "settings_unavailable", error=str(error))
+        print(f"tunebox: {error}", file=sys.stderr)
+        settings.close()
+        return 2
     if removed:
         event(log, logging.INFO, "logo_blobs_collected", removed=removed)
     store = Store(config.server.data_dir / "tunebox.db")

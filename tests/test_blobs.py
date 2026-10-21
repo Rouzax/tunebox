@@ -112,3 +112,15 @@ def test_a_failed_rename_removes_the_partial_file(
     with pytest.raises(BlobUnavailable):
         Blobs(tmp_path).save(PNG)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_saving_a_stored_image_again_restarts_its_grace(tmp_path: Path) -> None:
+    clock = [10 * 86_400.0]
+    blobs = Blobs(tmp_path, clock=lambda: clock[0])
+    ref, _ = blobs.save(PNG)
+    stored = blobs.path(ref)
+    assert stored is not None
+    os.utime(stored, (0, 0))
+    assert blobs.save(PNG)[0] == ref
+    assert blobs.collect(keep=set(), older_than_s=86_400) == 0
+    assert stored.is_file()

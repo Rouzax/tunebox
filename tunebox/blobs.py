@@ -6,7 +6,9 @@ upload whose station has not been saved yet survives a restart."""
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
 import secrets
 import time
 from collections.abc import Callable
@@ -57,6 +59,11 @@ class Blobs:
             except OSError as error:
                 partial.unlink(missing_ok=True)
                 raise BlobUnavailable(error.errno) from error
+        else:
+            # The grace before collection counts from the latest upload.
+            with contextlib.suppress(OSError):
+                now = self._clock()
+                os.utime(target, (now, now))
         return f"blob:{digest}", kind
 
     def path(self, ref: str) -> Path | None:
