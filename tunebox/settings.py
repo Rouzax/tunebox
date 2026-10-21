@@ -222,6 +222,12 @@ class Settings:
             except sqlite3.Error as error:
                 raise SettingsUnavailable(str(error)) from error
 
+    def version(self) -> int:
+        """The latest committed version, without reading the state."""
+        with self.read() as db:
+            row = db.execute("SELECT version FROM config_version").fetchone()
+            return cast(int, row[0])
+
     def adopt_file(self, state: ConfigState) -> int | None:
         """Takes the stations from tunebox.toml when they differ from the
         stored ones; returns the new version, or None when nothing changed.

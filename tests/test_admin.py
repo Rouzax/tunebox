@@ -2162,3 +2162,17 @@ def test_a_route_sets_exactly_one_of_run_and_open() -> None:
         Route()
     with pytest.raises(ValueError):
         Route(run=lambda _r, _s: Response(204), open=lambda _r: Response(204))
+
+
+def test_an_apply_that_crashes_answers_stored_not_live(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    csrf = world.login()
+
+    def broken() -> int:
+        raise RuntimeError("can't start new thread")
+
+    world.admin._apply = broken  # pyright: ignore[reportPrivateUsage]
+    answer = save(world, csrf, 0, state_of(station("a")))
+    assert json_of(answer) == {"version": 1, "changed": True, "applied": False}
+    assert any(r.getMessage() == "apply_failed" for r in caplog.records)

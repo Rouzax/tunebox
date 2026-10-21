@@ -88,6 +88,8 @@ class Runtime:
         commit itself, so two saves applied in either order end the same."""
         with self._lock:
             try:
+                if self._settings.version() <= self.snapshot.version:
+                    return self.snapshot.version
                 state, version = self._settings.load()
                 resolved = validate_state(state)
             except (SettingsUnavailable, ConfigError) as error:
@@ -112,23 +114,37 @@ class Runtime:
                 event(log, logging.ERROR, "apply_failed", error=str(error), version=version)
                 return self.snapshot.version
             live: dict[str, _Live] = {}
-            for config in resolved.channels:
-                old = self._live.pop(config.id, None)
-                previous = old.channel.config if old else None
-                if config.id in made:
-                    if old is not None:
-                        # Retired first, so a poll it has in flight cannot
-                        # save after the replacement has started.
-                        self._retire(old)
-                    live[config.id] = self._start(made[config.id])
-                else:
-                    assert old is not None
-                    old.channel.replace_config(config)
-                    live[config.id] = old
-                if self._logos is not None and (previous is None or previous.logo != config.logo):
-                    self._logos.request(config)
-            for gone in self._live.values():
-                self._retire(gone)
+            started: list[_Live] = []
+            try:
+                for config in resolved.channels:
+                    old = self._live.get(config.id)
+                    previous = old.channel.config if old else None
+                    if config.id in made:
+                        if old is not None:
+                            # Retired first, so a poll it has in flight cannot
+                            # save after the replacement has started. An old
+                            # channel retired before a later failure stays in
+                            # the snapshot until the next apply rebuilds it.
+                            self._retire(old)
+                        entry = self._start(made[config.id])
+                        started.append(entry)
+                        live[config.id] = entry
+                    else:
+                        assert old is not None
+                        old.channel.replace_config(config)
+                        live[config.id] = old
+                    if self._logos is not None and (
+                        previous is None or previous.logo != config.logo
+                    ):
+                        self._logos.request(config)
+            except Exception as error:  # noqa: BLE001 - a thread that cannot start keeps the live set
+                for entry in started:
+                    self._retire(entry)
+                event(log, logging.ERROR, "apply_failed", error=str(error), version=version)
+                return self.snapshot.version
+            for channel_id, gone in self._live.items():
+                if channel_id not in live:
+                    self._retire(gone)
             self._live = live
             self._retired = [thread for thread in self._retired if thread.is_alive()]
             channels = MappingProxyType({cid: entry.channel for cid, entry in live.items()})

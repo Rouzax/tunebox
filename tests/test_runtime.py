@@ -8,9 +8,10 @@ from typing import Any
 import pytest
 
 from tests.fakes import FakeHttp, FakeSource, NoJitter
+from tunebox import runtime as runtime_module
 from tunebox.blobs import Blobs
 from tunebox.channel import Channel
-from tunebox.config import ChannelConfig, ChannelRow, ConfigState
+from tunebox.config import ChannelConfig, ChannelRow, ConfigState, Resolved
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
 from tunebox.runtime import LIVE_FIELDS, POLLER_FIELDS, Runtime, needs_restart
@@ -56,6 +57,9 @@ class Harness:
             raise ValueError("cannot build this source")
         self.made.append((config.id, carry))
         return Channel(config, FakeSource(), self.covers, self.store, rng=NoJitter(), carry=carry)
+
+    def live_threads(self) -> list[threading.Thread]:
+        return [entry.thread for entry in self.runtime._live.values()]  # pyright: ignore[reportPrivateUsage]
 
     def commit(self, state: ConfigState) -> int:
         _, version = self.settings.load()
@@ -192,6 +196,56 @@ def test_a_failed_apply_keeps_the_running_channels(harness: Harness) -> None:
     assert dict(harness.runtime.snapshot.channels) == before
     assert [made for made, _carry in harness.made] == ["owr", "new"]
     assert harness.runtime.apply() == 1
+
+
+def test_a_thread_that_cannot_start_keeps_the_running_channels(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.commit(rows(doc("a"), doc("b")))
+    assert harness.runtime.apply() == 1
+    before = dict(harness.runtime.snapshot.channels)
+    real_start = threading.Thread.start
+    started: list[threading.Thread] = []
+
+    def refuse(thread: threading.Thread) -> None:
+        if thread.name == "channel-c":
+            raise RuntimeError("can't start new thread")
+        real_start(thread)
+        started.append(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", refuse)
+    harness.commit(rows(doc("a"), doc("b", poll_interval_s=30), doc("c")))
+    assert harness.runtime.apply() == 1
+    assert dict(harness.runtime.snapshot.channels) == before
+    assert [thread.name for thread in started] == ["channel-b"]
+    for thread in started:
+        thread.join(5)
+        assert not thread.is_alive()
+    monkeypatch.setattr(threading.Thread, "start", real_start)
+    assert harness.runtime.apply() == 2
+    assert set(harness.runtime.snapshot.channels) == {"a", "b", "c"}
+    for thread in threading.enumerate():
+        if thread.name.startswith("channel-") and thread not in harness.live_threads():
+            thread.join(5)
+    live = [t for t in threading.enumerate() if t.name.startswith("channel-")]
+    assert sorted(t.name for t in live) == ["channel-a", "channel-b", "channel-c"]
+
+
+def test_apply_without_a_new_version_skips_the_load(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.commit(rows(doc("a")))
+    harness.runtime.apply()
+    calls: list[int] = []
+    real = runtime_module.validate_state
+
+    def counted(state: ConfigState) -> Resolved:
+        calls.append(1)
+        return real(state)
+
+    monkeypatch.setattr(runtime_module, "validate_state", counted)
+    assert harness.runtime.apply() == 1
+    assert calls == []
 
 
 def test_apply_recovers_once_the_bad_source_is_fixed(harness: Harness) -> None:

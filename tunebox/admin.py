@@ -674,7 +674,11 @@ class Admin:
             return _json(409, {"error": "stale", "version": error.current})
         # An unchanged save still asks for the apply: after a failed one the
         # stored version is ahead of the live one, and this is the retry.
-        applied = self._apply() >= version
+        try:
+            applied = self._apply() >= version
+        except Exception:
+            log.error("apply_failed", exc_info=True, extra={"fields": {"version": version}})
+            applied = False
         if not changed:
             return _json(200, {"version": version, "changed": False, "applied": applied})
         if not applied:

@@ -49,6 +49,13 @@ def test_a_new_database_is_empty_at_version_0(settings: Settings) -> None:
     assert settings.load() == (ConfigState(), 0)
 
 
+def test_version_is_0_when_new_and_moves_with_every_commit(settings: Settings) -> None:
+    assert settings.version() == 0
+    state = ConfigState(channels=(ChannelRow("a", None, True, doc("a")),))
+    assert settings.commit(state, 0, "test") == 1
+    assert settings.version() == 1
+
+
 def test_commit_round_trips_and_bumps_the_version(settings: Settings) -> None:
     wanted = ConfigState(
         defaults={"delay_s": 8.0},
