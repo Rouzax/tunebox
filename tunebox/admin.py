@@ -37,6 +37,7 @@ from tunebox.config import (
     AdminConfig,
     ConfigError,
     ConfigState,
+    keeps_a_channel,
     state_from_import,
     state_to_toml,
     validate_state,
@@ -46,14 +47,13 @@ from tunebox.logos import CONTENT_TYPES
 from tunebox.logs import event
 from tunebox.paths import inside
 from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, PinStale, read_cookie
-from tunebox.rulecheck import lint_new, refused
+from tunebox.rulecheck import check_new, lint_new
 from tunebox.sessions import KNOWN_S, Gate
 from tunebox.settings import (
     Settings,
     SettingsUnavailable,
     SettingsWriteError,
     StaleVersion,
-    keeps_a_channel,
     state_from_dict,
     state_to_json,
 )
@@ -585,25 +585,38 @@ class Admin:
         target = payload.get("target")
         if isinstance(target, str) and len(target) > MAX_TARGET:
             return _error(400, "bad_request")
+        try:
+            state = state_from_dict(payload.get("state"))
+        except ConfigError as error:
+            return _invalid(str(error), None)
         return self._commit(
-            payload.get("state"),
-            based_on,
-            "edit",
-            target if isinstance(target, str) else None,
-            request.client,
+            state, based_on, "edit", target if isinstance(target, str) else None, request.client
         )
 
-    def _commit(
-        self, raw: object, based_on: int, kind: str, target: str | None, client: str
-    ) -> Response:
-        state: ConfigState | None = None
+    def _judge(self, state: ConfigState, stored: ConfigState) -> str | None:
+        """Why state may not replace stored, short of the timed rule check,
+        or None. The import preview and every commit ask this one question,
+        so a file the preview accepts meets no other refusal when it is
+        imported than a stale version or a slow new pattern."""
         try:
-            state = state_from_dict(raw)
             validate_state(state)
+            keeps_a_channel(stored, state)
+        except ConfigError as error:
+            return str(error)
+        return lint_new(state, stored) or self._blobs.missing(state)
+
+    def _commit(
+        self, state: ConfigState, based_on: int, kind: str, target: str | None, client: str
+    ) -> Response:
+        try:
             stored, version = self._settings.load()
+            reason = self._judge(state, stored)
+            if reason:
+                return _invalid(reason, state)
+            # The timed check starts a child process: never for a stale change.
             if version != based_on:
                 return _json(409, {"error": "stale", "version": version})
-            reason = refused(state, stored, self._samples) or self._blobs.missing(state)
+            reason = check_new(state, stored, self._samples)
             if reason:
                 return _invalid(reason, state)
             version, changed = self._settings.commit_changed(state, based_on, kind, target)
@@ -685,15 +698,11 @@ class Admin:
         body = _body(request, ("toml",))
         if body is None:
             return _error(400, "bad_request")
-        state: ConfigState | None = None
         try:
             state, notes = state_from_import(body["toml"])
-            validate_state(state)
-            stored, _ = self._settings.load()
-            keeps_a_channel(stored, state)
         except ConfigError as error:
-            return _invalid(str(error), state)
-        reason = lint_new(state, stored) or self._blobs.missing(state)
+            return _invalid(str(error), None)
+        reason = self._judge(state, self._settings.load()[0])
         if reason:
             return _invalid(reason, state)
         return _json(200, {"state": json.loads(state_to_json(state)), "notes": notes})
@@ -707,15 +716,11 @@ class Admin:
         stale = self._fresh(session)
         if stale is not None:
             return stale
-        state: ConfigState | None = None
         try:
             state, _notes = state_from_import(text)
-            validate_state(state)
         except ConfigError as error:
-            return _invalid(str(error), state)
-        return self._commit(
-            json.loads(state_to_json(state)), based_on, "import", "panel", request.client
-        )
+            return _invalid(str(error), None)
+        return self._commit(state, based_on, "import", "panel", request.client)
 
     def _history_entry(self, request: Request, _session: Session) -> Response:
         found = self._settings.history_entry(_history_id(request.path))
@@ -740,8 +745,7 @@ class Admin:
         if found is None:
             return _error(404, "not_found")
         _, before, _ = found
-        raw = json.loads(state_to_json(before))
-        return self._commit(raw, based_on, "restore", f"history {entry_id}", request.client)
+        return self._commit(before, based_on, "restore", f"history {entry_id}", request.client)
 
     def _fresh(self, session: Session) -> Response | None:
         """The answer to give when the session has not typed a code

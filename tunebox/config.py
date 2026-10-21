@@ -378,6 +378,13 @@ def validate_state(state: ConfigState) -> Resolved:
     return Resolved(tuple(ordered), _player(dict(state.player), {c.id for c in ordered}))
 
 
+def keeps_a_channel(before: ConfigState, after: ConfigState) -> None:
+    """Refuses a state that switches off the last enabled channel of the
+    stored one. A stored state with none enabled can be replaced by any."""
+    if any(c.enabled for c in before.channels) and not any(c.enabled for c in after.channels):
+        raise ConfigError("channels: at least one enabled channel is required")
+
+
 def _text(value: object, where: str) -> None:
     """Refuses a string that cannot be stored as UTF-8: JSON allows a lone
     surrogate such as \\ud800, SQLite does not."""

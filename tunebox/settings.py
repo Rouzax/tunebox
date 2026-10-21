@@ -20,7 +20,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from tunebox.config import BLOB_REF, ChannelRow, ConfigError, ConfigState, validate_state
+from tunebox.config import (
+    BLOB_REF,
+    ChannelRow,
+    ConfigError,
+    ConfigState,
+    keeps_a_channel,
+    validate_state,
+)
 from tunebox.logs import event
 
 log = logging.getLogger(__name__)
@@ -89,13 +96,6 @@ MIGRATIONS: tuple[str, ...] = (
     )
     """,
 )
-
-
-def keeps_a_channel(before: ConfigState, after: ConfigState) -> None:
-    """Refuses a state that switches off the last enabled channel of the
-    stored one. A stored state with none enabled can be replaced by any."""
-    if any(c.enabled for c in before.channels) and not any(c.enabled for c in after.channels):
-        raise ConfigError("channels: at least one enabled channel is required")
 
 
 class SettingsUnavailable(Exception):

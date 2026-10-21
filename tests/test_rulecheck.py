@@ -8,10 +8,10 @@ from tunebox.config import PATTERN_RULES, ChannelRow, ConfigState, load
 from tunebox.rulecheck import (
     SYNTHETIC,
     check,
+    check_new,
     lint,
     lint_new,
     patterns,
-    refused,
     samples_for,
     stored_refusals,
 )
@@ -174,16 +174,27 @@ def state_with(*patterns: str) -> ConfigState:
     return ConfigState({}, {}, (), rows)
 
 
-def test_refused_skips_stored_patterns_and_names_the_field() -> None:
-    stored = state_with("(a+)+$")  # refused by the lint, but already stored
-    candidate = state_with("(a+)+$", "(b+)+$")
-    reason = refused(candidate, stored, list)
-    assert reason is not None and reason.startswith("channels[1].rules.played_by: ")
+def test_check_new_runs_only_new_patterns_and_names_the_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ran: list[list[str]] = []
+
+    def slow(listed: list[str], _samples: list[str]) -> tuple[int | None, str]:
+        ran.append(listed)
+        return 0, "too slow"
+
+    monkeypatch.setattr("tunebox.rulecheck.check", slow)
+    reason = check_new(state_with("(x)", "(y)"), state_with("(x)"), list)
+    assert ran == [["(y)"]]
+    assert reason == "channels[1].rules.played_by: too slow"
 
 
-def test_refused_lets_a_state_of_stored_patterns_through() -> None:
+def test_check_new_lets_a_state_of_stored_patterns_through_unasked() -> None:
+    def no_samples() -> list[str]:
+        raise AssertionError("samples asked without a new pattern")
+
     stored = state_with("(a+)+$")
-    assert refused(stored, stored, list) is None
+    assert check_new(stored, stored, no_samples) is None
 
 
 def test_stored_refusals_lists_what_the_lint_now_refuses() -> None:

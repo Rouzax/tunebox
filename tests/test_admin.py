@@ -775,6 +775,33 @@ def test_the_last_enabled_station_cannot_go_by_import_nor_preview(world: World) 
     assert world.settings.load()[1] == 1
 
 
+ONLY_LATE = "[[channels]]" + STATIONS_TOML.split("[[channels]]")[2]
+NONE_ON = ONLY_LATE.replace('id = "late"', 'id = "late"\nenabled = false')
+LINT_REFUSED = "rules = { played_by = '(a+)+$' }"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        NONE_ON,
+        "surprise = 1\n" + STATIONS_TOML,
+        SLOW_RULE,
+        STATIONS_TOML.replace('name = "Late"', f'name = "Late"\nlogo = "blob:{"1" * 64}"'),
+        NONE_ON.replace('name = "Late"', f'name = "Late"\n{LINT_REFUSED}'),
+    ],
+    ids=["none-on", "unknown-key", "lint", "missing-blob", "none-on-and-lint"],
+)
+def test_preview_and_import_refuse_the_same_files_alike(world: World, text: str) -> None:
+    csrf = world.login()
+    assert save(world, csrf, 0, state_of(station("owr"))).status == 200
+    fresh(world, csrf)
+    preview = world.call("POST", "/admin/api/import/preview", {"toml": text}, csrf=csrf)
+    stored = world.call("POST", "/admin/api/import", {"toml": text, "based_on": 1}, csrf=csrf)
+    assert (preview.status, stored.status) == (400, 400)
+    assert json_of(preview) == json_of(stored)
+    assert world.settings.load()[1] == 1
+
+
 def test_a_refused_import_names_the_station_by_id(world: World) -> None:
     csrf = world.login()
     fresh(world, csrf)

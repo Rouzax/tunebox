@@ -353,8 +353,9 @@ def _unseen(candidate: ConfigState, stored: ConfigState) -> list[tuple[str, str]
 
 def lint_new(candidate: ConfigState, stored: ConfigState) -> str | None:
     """Why the lint refuses the first of the candidate's new patterns, as
-    "<field>: <reason>", or None. Patterns already stored are left alone
-    (see refused); no child process runs."""
+    "<field>: <reason>", or None; no child process runs. Patterns already
+    stored are left alone: they have run on live titles, and a lint that
+    grew stricter must not block every save until they are edited."""
     for field, pattern in _unseen(candidate, stored):
         reason = lint(pattern)
         if reason:
@@ -362,17 +363,13 @@ def lint_new(candidate: ConfigState, stored: ConfigState) -> str | None:
     return None
 
 
-def refused(
+def check_new(
     candidate: ConfigState, stored: ConfigState, samples: Callable[[], list[str]]
 ) -> str | None:
-    """Why the candidate's new patterns may not be stored, or None. Patterns
-    already stored are left alone: they have run on live titles, and a lint
-    that grew stricter must not block every save until they are edited.
-    samples gives the titles to try new patterns on; gathering them reads
-    every channel, so it is asked only when there is a new pattern."""
-    reason = lint_new(candidate, stored)
-    if reason:
-        return reason
+    """Why the timed check refuses one of the candidate's new patterns, or
+    None. Runs after lint_new has passed them. samples gives the titles to
+    try new patterns on; gathering them reads every channel, so it is asked
+    only when there is a new pattern."""
     new: dict[str, str] = {}
     for field, pattern in _unseen(candidate, stored):
         new.setdefault(pattern, field)
