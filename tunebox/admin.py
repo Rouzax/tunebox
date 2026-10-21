@@ -37,6 +37,7 @@ from tunebox.config import (
     AdminConfig,
     ConfigError,
     ConfigState,
+    encodable,
     keeps_a_channel,
     state_from_import,
     state_to_toml,
@@ -595,7 +596,7 @@ class Admin:
         if payload is None or based_on is None:
             return _error(400, "bad_request")
         target = payload.get("target")
-        if isinstance(target, str) and len(target) > MAX_TARGET:
+        if isinstance(target, str) and (len(target) > MAX_TARGET or not encodable(target)):
             return _error(400, "bad_request")
         try:
             state = state_from_dict(payload.get("state"))

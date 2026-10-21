@@ -1562,6 +1562,15 @@ def test_a_long_target_is_refused(world: World) -> None:
     assert world.call("POST", "/admin/api/config", body, csrf=csrf).status == 400
 
 
+def test_a_target_that_is_not_valid_text_is_refused(world: World) -> None:
+    csrf = world.login()
+    body = {"based_on": 0, "state": state_of(station("owr")), "target": "x\ud800"}
+    answer = world.call("POST", "/admin/api/config", body, csrf=csrf)
+    assert answer.status == 400
+    assert json_of(answer) == {"error": "bad_request"}
+    assert world.settings.load()[1] == 0
+
+
 def test_a_wrong_password_and_a_wrong_code_take_the_same_floor(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:

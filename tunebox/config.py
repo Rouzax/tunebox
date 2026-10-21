@@ -388,11 +388,11 @@ def keeps_a_channel(before: ConfigState, after: ConfigState) -> None:
 def _text(value: object, where: str) -> None:
     """Refuses a string that cannot be stored as UTF-8: JSON allows a lone
     surrogate such as \\ud800, SQLite does not."""
-    if isinstance(value, str) and not _encodable(value):
+    if isinstance(value, str) and not encodable(value):
         raise ConfigError(f"{where}: not valid text")
     if isinstance(value, dict):
         for key, item in cast("dict[str, object]", value).items():
-            if not _encodable(key):
+            if not encodable(key):
                 raise ConfigError(f"{where}: a key that is not valid text")
             _text(item, f"{where}.{key}")
     elif isinstance(value, list):
@@ -400,7 +400,9 @@ def _text(value: object, where: str) -> None:
             _text(item, f"{where}[{index}]")
 
 
-def _encodable(text: str) -> bool:
+def encodable(text: str) -> bool:
+    """True when the text can be stored: SQLite keeps UTF-8, which has no
+    lone surrogates."""
     try:
         text.encode()
     except UnicodeEncodeError:

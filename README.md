@@ -406,7 +406,8 @@ Import takes such a file, or a `tunebox.toml`, and first only shows it:
    `[server]` and `[admin]` tables are left out, with a note: they only
    apply to the file tunebox starts from. Another note names each station
    that needs the listening PIN now but has no `needs_pin = true` in the
-   file: after Replace, devices without the PIN see it.
+   file: while the PIN hides chosen stations, devices without the PIN see
+   it after Replace.
 2. **Replace the stations with this file** replaces the stations, groups,
    defaults and player settings as a whole: a station that is not in the
    file is removed. If you have not typed an authenticator code in the
@@ -449,13 +450,13 @@ its edit form:
   (`blob:` followed by 64 characters). The station uses it after you press
   Save, like any other change in the form.
 
-Uploads are kept in `data/blobs/`, named by their contents, as long
-as the stations or any entry in the History name them, so restoring an
-older version brings its logo back. An upload that nothing names any more
-is removed at a later start, once it is more than a day old. After a
-database reset (see [Update, back up and reset](#update-back-up-and-reset))
-uploads are kept for at least a day, so an export can be imported back
-with its logos.
+Uploads are kept in `data/blobs/`, named by their contents, as long as the
+stations or any entry in the History name them, so restoring an older
+version brings its logo back. An upload that nothing names any more is
+removed at a later start, once it is more than a day old. After a database
+reset (see [Update, back up and reset](#update-back-up-and-reset)) uploads
+are kept for at least a day, so an export can be imported back with its
+logos.
 
 ### Settings and the listening PIN
 
@@ -719,8 +720,8 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   still used as the cover of a station without `default_image`. JPEG, WebP,
   SVG and interlaced PNG logos are used as they are (`logo_not_shrunk` says
   why). The player loads list logos the first time a listener opens the
-  station list, once per browser. Delete `data/logos/` to download all logos
-  again at the next start.
+  station list, once per browser. Delete `data/logos/` to download the logo
+  links and copy the uploads (from `data/blobs/`) again at the next start.
 
 ## Troubleshooting
 
