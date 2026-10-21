@@ -3,6 +3,7 @@ import json
 import logging
 import threading
 import time
+import tomllib
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -642,6 +643,29 @@ def test_history_pages_with_before(world: World) -> None:
     first = json_of(world.call("GET", "/admin/api/history"))["entries"]
     older = json_of(world.call("GET", f"/admin/api/history?before={first[0]['id']}"))
     assert [e["id"] for e in older["entries"]] == [e["id"] for e in first[1:]]
+
+
+def test_export_is_the_stored_state_as_toml(world: World) -> None:
+    csrf = world.login()
+    off = station("late")
+    off["enabled"] = False
+    save(world, csrf, 0, state_of(station("owr"), off))
+    answer = world.call("GET", "/admin/api/export")
+    assert answer.status == 200
+    assert answer.content_type == "application/toml; charset=utf-8"
+    assert (
+        dict(answer.headers)["Content-Disposition"]
+        == 'attachment; filename="tunebox-1970-01-12.toml"'
+    )
+    text = answer.body.decode()
+    assert text.startswith("# tunebox configuration, version 1\n")
+    data = tomllib.loads(text)
+    assert [c["id"] for c in data["channels"]] == ["owr", "late"]
+    assert data["channels"][1]["enabled"] is False
+
+
+def test_export_needs_a_session(world: World) -> None:
+    assert world.call("GET", "/admin/api/export").status == 401
 
 
 @pytest.mark.parametrize(

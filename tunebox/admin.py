@@ -35,6 +35,7 @@ from tunebox.config import (
     SOURCE_SETTINGS,
     AdminConfig,
     ConfigError,
+    state_to_toml,
     validate_state,
 )
 from tunebox.http_headers import single
@@ -51,6 +52,7 @@ from tunebox.settings import (
     state_from_dict,
     state_to_json,
 )
+from tunebox.tomlout import dumps
 
 log = logging.getLogger(__name__)
 
@@ -316,6 +318,7 @@ class Admin:
             ("GET", "config"): self._config,
             ("POST", "config"): self._save,
             ("GET", "history"): self._history,
+            ("GET", "export"): self._export,
             ("GET", "account"): self._account,
             ("POST", "account/reauth"): self._reauth,
             ("POST", "account/password"): self._password,
@@ -593,6 +596,17 @@ class Admin:
             return _error(400, "bad_request")
         entries, more = self._settings.history(before)
         return _json(200, {"entries": [dataclasses.asdict(e) for e in entries], "more": more})
+
+    def _export(self, _request: Request, _session: Session) -> Response:
+        state, version = self._settings.load()
+        day = time.strftime("%Y-%m-%d", time.gmtime(self._clock()))
+        text = f"# tunebox configuration, version {version}\n" + dumps(state_to_toml(state))
+        return Response(
+            200,
+            text.encode(),
+            "application/toml; charset=utf-8",
+            (("Content-Disposition", f'attachment; filename="tunebox-{day}.toml"'),),
+        )
 
     def _history_entry(self, request: Request, _session: Session) -> Response:
         found = self._settings.history_entry(_history_id(request.path))
