@@ -389,6 +389,66 @@ the change is stored but not live and the stations keep running as they
 were; the log has `apply_failed` with the reason. Fix the station and save
 again.
 
+**Export and import.** Export, on the History page, downloads the stored
+stations as `tunebox-<date>.toml` (the date in UTC): the stations, groups,
+station defaults and player settings, in the same form as `tunebox.toml`,
+with the version number in its first line. It is a copy to keep or to move
+to another tunebox. It does not contain the admin account, its sessions, the
+listening PIN, the change history or the covers.
+
+Import takes such a file, or a `tunebox.toml`, and first only shows it:
+
+1. Choose **Import** and pick the file. Nothing is stored yet. The page says
+   how many differences there are with what is stored now and lists them.
+   `[server]` and `[admin]` tables are left out, with a note: they only
+   apply to the file tunebox starts from.
+2. **Replace the stations with this file** replaces the stations, groups,
+   defaults and player settings as a whole: a station that is not in the
+   file is removed. If you have not typed an authenticator code in the
+   last five minutes, the page asks for one first.
+3. The import is a change in the History ("Imported from a file"), so
+   "Restore the version before this change" undoes it.
+
+A file that cannot be used is refused before anything is stored, and the
+message says why: broken TOML names the line, and an unknown key, an
+invalid station or a refused title rule names the field. The preview does
+not time new title rules; Replace does, so a slow rule can still be refused
+at that step. If the stations changed elsewhere in the meantime, Replace
+says so and shows the differences again, against what is stored now.
+
+An export names uploaded logos rather than containing them (see
+[Logos](#logos)). Imported on the same tunebox, they come back with it.
+Another tunebox that does not have those uploads refuses the file and names
+the station, for example
+`channels[2].logo: no uploaded logo blob:3f2a...`. Put a logo link in that
+station's `logo` in the file (or remove the line), import, and upload the
+logo again there.
+
+### Logos
+
+A station's logo comes from a link or an upload, set in the Logo field of
+its edit form:
+
+- **A link** (`https://...`): tunebox downloads the image and serves it
+  from its own data folder, so listeners' browsers never contact that
+  address. The form shows "Shown after saving." instead of a preview,
+  because the panel only shows images tunebox serves itself.
+- **Upload**: a PNG, JPEG, WebP or SVG image of at most 2 MB (2,000,000
+  bytes). tunebox judges the type by the file's contents, not its name, and
+  refuses anything else ("That file is not a PNG, JPEG, WebP or SVG
+  image."). After the upload the form shows the logo at full size and at
+  the size of the station list, and the Logo field holds the upload's name
+  (`blob:` followed by 64 characters). The station uses it after you press
+  Save, like any other change in the form.
+
+Uploads are kept in `data/logos/blobs/`, named by their contents, as long
+as the stations or any entry in the History name them, so restoring an
+older version brings its logo back. An upload that nothing names any more
+is removed at a later start, once it is more than a day old. After a
+database reset (see [Update, back up and reset](#update-back-up-and-reset))
+uploads are kept for at least a day, so an export can be imported back
+with its logos.
+
 ### Settings and the listening PIN
 
 **Settings** (in the panel's menu) holds what every station inherits unless
@@ -633,22 +693,27 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   change history (with the admin panel on, the only copy of them), the
   admin account and its sessions, the listening PIN, the covers and the
   recent lists. Copy it while tunebox is stopped, or copy
-  `tunebox.db-wal` along with it.
+  `tunebox.db-wal` along with it. `data/logos/blobs/` holds the logos
+  uploaded in the panel, the only copy of those images, so back it up with
+  the database.
 - **Reset** the recent lists and covers: stop tunebox, delete
   `data/tunebox.db`, `data/tunebox.db-wal` and `data/tunebox.db-shm`, and
   start it again. History refills from the stations and covers are looked
   up again. This also deletes everything else the database holds: with the
   admin panel on, the stations start again from `tunebox.toml`, and the
   settings, the history, the admin account (set it up again with
-  `python -m tunebox admin setup`) and the listening PIN are gone.
+  `python -m tunebox admin setup`) and the listening PIN are gone. To keep
+  the stations, export them first and import the file after the reset (see
+  [Export and import](#manage-the-stations)).
 - **Logos** are kept in `data/logos/`, as downloaded. A PNG logo larger than
   128 px also gets a small copy in `data/logos/small/`, made at start-up
   (`logo_shrunk` in the log), which the station list shows; the original is
   still used as the cover of a station without `default_image`. JPEG, WebP,
   SVG and interlaced PNG logos are used as they are (`logo_not_shrunk` says
   why). The player loads list logos the first time a listener opens the
-  station list, once per browser. Delete `data/logos/` to download all logos
-  again at the next start.
+  station list, once per browser. Delete everything in `data/logos/` except
+  `blobs/` to download all logo links again at the next start; `blobs/`
+  holds the uploaded logos, which cannot be downloaded again.
 
 ## Troubleshooting
 
@@ -720,6 +785,12 @@ is reported at startup instead of being ignored.
 | `latitude`, `longitude` | none | Where day/night "automatic" takes the sun's height from (dark below 4 degrees). Give both or neither. Without them "automatic" follows the browser's dark mode setting. |
 | `default_channel` | the first channel | The channel a first-time listener starts on. |
 
+`[[groups]]` (optional)
+
+| Key | Required | Meaning |
+|---|---|---|
+| `name` | yes | A group heading. Without `[[groups]]` the groups are the ones the stations name, in the order they first appear. With it, list every group a station names, in the order to show them; a group may have no stations yet. An export always lists them. |
+
 `[[channels]]`
 
 | Key | Required | Meaning |
@@ -731,7 +802,8 @@ is reported at startup instead of being ignored.
 | `default_image` | no | An image address for the player to show when a song has no cover. |
 | `source` | yes | `{ type = "triton", mount = "<feed mount>" }`, `{ type = "qmusic", station = "<station id>" }` or `{ type = "npo", site = "nporadio1" \| "nporadio2" \| "npo3fm" }`. |
 | `group` | no | Heading on the channel page. |
-| `logo` | no | `https://` address of the station logo. tunebox downloads it once into the data folder and serves it from there, so listeners' browsers never contact that address. PNG, JPEG, WebP or SVG, up to 2 MB. |
+| `logo` | no | `https://` address of the station logo, or an upload from the admin panel (`blob:` and 64 characters; see [Logos](#logos)). tunebox downloads a link once into the data folder and serves it from there, so listeners' browsers never contact that address. PNG, JPEG, WebP or SVG, up to 2 MB. |
+| `enabled` | no, default `true` | `false` keeps the station stored but off the player, as the admin panel's switch does. |
 | `always` | no, default `false` | Check the station even while nobody listens. |
 | `needs_pin` | no, default `false` | With the listening PIN on "Chosen stations": hide this station from devices that have not typed the PIN. |
 
