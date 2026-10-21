@@ -1510,6 +1510,27 @@ def test_a_locked_reauth_is_not_a_ban_signal(
     assert limited[0].__dict__["fields"]["why"] == "reauth"
 
 
+def test_an_address_rate_limit_logs_one_warning_a_second(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    address = "2001:db8:1:2:3:4:5:6"
+    body = {"password": "wrong", "code": "000000"}
+    with caplog.at_level(logging.DEBUG):
+        for _ in range(5):
+            world.call("POST", "/admin/api/login", body, client=address)
+            world.clock.now += 1.1
+        for _ in range(30):
+            world.call("POST", "/admin/api/login", body, client=address)
+    limited = [r for r in caplog.records if r.getMessage() == "admin_rate_limited"]
+    assert limited
+    assert {r.__dict__["fields"]["why"] for r in limited} == {"address"}
+    assert [r.levelno for r in limited] == [logging.WARNING] + [logging.DEBUG] * (len(limited) - 1)
+    failed = [r for r in caplog.records if r.getMessage() == "admin_login_failed"]
+    assert failed
+    for record in [*limited, *failed]:
+        assert record.__dict__["fields"]["range"] == "2001:db8:1:2::/64"
+
+
 def test_a_repeated_header_counts_as_absent() -> None:
     request = Request("POST", "/admin/api/login", (("Origin", "a"), ("origin", "b")), b"", "x")
     assert request.header("Origin") is None

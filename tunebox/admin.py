@@ -46,6 +46,7 @@ from tunebox.config import (
 )
 from tunebox.disk import has_room
 from tunebox.http_headers import single
+from tunebox.limits import Once, network
 from tunebox.logos import CONTENT_TYPES
 from tunebox.logs import event
 from tunebox.paths import inside
@@ -267,6 +268,7 @@ class Admin:
         self._web = web_dir.resolve()
         self._clock = clock
         self._monotonic = monotonic
+        self._lockouts = Once(1.0, monotonic)
         self.gate = Gate(accounts.server_key, self.plain_http, clock, monotonic, sleep)
         self._setup_token: str | None = None
         self._setup_until = 0.0
@@ -502,6 +504,7 @@ class Admin:
                 logging.WARNING,
                 "admin_login_failed",
                 client=request.client,
+                range=network(request.client),
                 reason=outcome.reason,
             )
             if outcome.reason != "password" and self._accounts.totp_suspected():
@@ -538,7 +541,17 @@ class Admin:
         return self.gate.known(request.cookie(self.known_cookie), self._accounts.generation())
 
     def _limited(self, request: Request, why: str) -> Response:
-        event(log, logging.WARNING, "admin_rate_limited", client=request.client, why=why)
+        # An address that is locked out keeps trying at its own pace; one
+        # WARNING a second per address group, the rest at DEBUG.
+        quiet = why == "address" and not self._lockouts.first(request.client)
+        event(
+            log,
+            logging.DEBUG if quiet else logging.WARNING,
+            "admin_rate_limited",
+            client=request.client,
+            range=network(request.client),
+            why=why,
+        )
         return _error(429, "slow_down")
 
     def _setup_open(self) -> bool:
@@ -564,7 +577,13 @@ class Admin:
         if self._setup_open() and _same(token, self._setup_token or ""):
             release()
             return True
-        event(log, logging.WARNING, "admin_setup_token_rejected", client=request.client)
+        event(
+            log,
+            logging.WARNING,
+            "admin_setup_token_rejected",
+            client=request.client,
+            range=network(request.client),
+        )
         return False
 
     def _setup_start(self, request: Request) -> Response:

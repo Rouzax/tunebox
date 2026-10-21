@@ -9,7 +9,7 @@ import socket
 import struct
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import cast
 
@@ -60,7 +60,10 @@ def make_pin(tmp_path: Path) -> Pin:
 
 
 def make_server(
-    tmp_path: Path, pin: Pin | None = None, extra: tuple[ChannelConfig, ...] = ()
+    tmp_path: Path,
+    pin: Pin | None = None,
+    extra: tuple[ChannelConfig, ...] = (),
+    clock: Callable[[], float] = time.monotonic,
 ) -> TuneboxServer:
     pin = pin or make_pin(tmp_path)
     web = tmp_path / "web"
@@ -98,7 +101,7 @@ def make_server(
         (logo_dir / f"{config.id}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     snapshot = Snapshot(1, channels, PlayerConfig(52.0, 5.0, extra[0].id if extra else None))
     httpd = TuneboxServer(
-        ("127.0.0.1", 0), lambda: snapshot, web, pin, logos=logos, bursts=FakeBursts()
+        ("127.0.0.1", 0), lambda: snapshot, web, pin, logos=logos, bursts=FakeBursts(), clock=clock
     )
     serve(httpd)
     return httpd
@@ -859,11 +862,13 @@ LOCKED = [
 
 
 class PinWorld:
-    def __init__(self, tmp_path: Path, mode: str) -> None:
+    def __init__(
+        self, tmp_path: Path, mode: str, clock: Callable[[], float] = time.monotonic
+    ) -> None:
         self.settings = Settings(tmp_path / "pin.db")
         self.pin = Pin(self.settings, lambda: b"k" * 32)
         self.pin.change(mode, "123456")
-        self.httpd = make_server(tmp_path, pin=self.pin, extra=(SECRET_STATION,))
+        self.httpd = make_server(tmp_path, pin=self.pin, extra=(SECRET_STATION,), clock=clock)
 
     def close(self) -> None:
         self.httpd.shutdown()
@@ -940,8 +945,30 @@ def test_a_wrong_pin_is_refused_and_logged(
     assert (status, json.loads(body)) == (401, {"error": "pin_wrong"})
     assert headers["cache-control"] == "no-store"
     failed = [r for r in caplog.records if r.getMessage() == "listener_pin_failed"]
-    assert failed[0].__dict__["fields"] == {"client": "127.0.0.1", "reason": "wrong"}
+    assert failed[0].__dict__["fields"] == {
+        "client": "127.0.0.1",
+        "range": "127.0.0.1/32",
+        "reason": "wrong",
+    }
     assert "654321" not in caplog.text
+
+
+def test_a_locked_address_logs_one_warning_a_second(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    world = PinWorld(tmp_path, "site", clock=lambda: 0.0)
+    try:
+        with caplog.at_level(logging.DEBUG):
+            for _ in range(60):
+                give_pin(world.httpd, "000000")
+        failed = [r for r in caplog.records if r.getMessage() == "listener_pin_failed"]
+        locked = [r for r in failed if r.__dict__["fields"]["reason"] == "locked"]
+        assert len(locked) == 50
+        assert [r.levelno for r in locked] == [logging.WARNING] + [logging.DEBUG] * 49
+        assert all(r.__dict__["fields"]["range"] == "127.0.0.1/32" for r in failed)
+        assert {r.levelno for r in failed if r not in locked} == {logging.WARNING}
+    finally:
+        world.close()
 
 
 def test_ten_wrong_pins_lock_the_address(site: PinWorld) -> None:

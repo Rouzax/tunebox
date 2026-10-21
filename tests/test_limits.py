@@ -1,4 +1,6 @@
-from tunebox.limits import FailureLimit, Once, Pace, group
+import pytest
+
+from tunebox.limits import FailureLimit, Once, Pace, group, network
 
 
 class Clock:
@@ -7,6 +9,19 @@ class Clock:
 
     def __call__(self) -> float:
         return self.now
+
+
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        ("198.51.100.7", "198.51.100.7/32"),
+        ("2001:db8:1:2:3:4:5:6", "2001:db8:1:2::/64"),
+        ("::ffff:198.51.100.7", "198.51.100.7/32"),
+        ("not an address", "not an address"),
+    ],
+)
+def test_network_is_the_range_a_ban_covers(address: str, expected: str) -> None:
+    assert network(address) == expected
 
 
 def test_ipv6_is_grouped_per_64_and_ipv4_per_address() -> None:

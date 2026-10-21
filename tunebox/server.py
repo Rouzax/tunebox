@@ -18,7 +18,7 @@ from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import Network, StreamConfig
 from tunebox.http_headers import single
-from tunebox.limits import Once
+from tunebox.limits import Once, network
 from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
 from tunebox.logos import Logos
 from tunebox.logs import bound, event
@@ -161,6 +161,7 @@ class TuneboxServer(ThreadingHTTPServer):
         bursts: Bursts | None = None,
         admin: Admin | None = None,
         trusted: tuple[Network, ...] = (),
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.current = snapshot
         self.admin = admin
@@ -168,6 +169,7 @@ class TuneboxServer(ThreadingHTTPServer):
         self.trusted = trusted
         self.forwarding = Once(3600)
         self.refusals = Once(600)
+        self.lockouts = Once(1.0, clock)
         self.bursts = bursts
         self.web_dir = web_dir.resolve()
         self.logos = logos
@@ -464,7 +466,18 @@ class Handler(BaseHTTPRequestHandler):
             event(log, logging.DEBUG, "listener_pin_paced", client=client)
             retry = {**NO_STORE, "Retry-After": "2"}
             return self._send_json(429, {"error": "busy"}, head, retry)
-        event(log, logging.WARNING, "listener_pin_failed", client=client, reason=result.reason)
+        # A locked address keeps trying at whatever rate it likes; one
+        # WARNING a second per address group is enough for CrowdSec and the
+        # rest is kept at DEBUG under the same event name.
+        quiet = result.reason == "locked" and not self.app.lockouts.first(client)
+        event(
+            log,
+            logging.DEBUG if quiet else logging.WARNING,
+            "listener_pin_failed",
+            client=client,
+            range=network(client),
+            reason=result.reason,
+        )
         if result.reason == "locked":
             return self._send_json(429, {"error": "slow_down"}, head, NO_STORE)
         return self._send_json(401, {"error": "pin_wrong"}, head, NO_STORE)

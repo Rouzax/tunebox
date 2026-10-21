@@ -24,6 +24,16 @@ def group(address: str) -> str:
     return str(ip)
 
 
+def network(address: str) -> str:
+    """The range a ban on this address covers, as CIDR text: the address
+    itself for IPv4, its /64 for IPv6, the same unit group() counts in."""
+    grouped = group(address)
+    try:
+        return str(ipaddress.ip_network(grouped if "/" in grouped else f"{grouped}/32"))
+    except ValueError:
+        return address
+
+
 class _Entry:
     __slots__ = ("attempts", "locked_until")
 

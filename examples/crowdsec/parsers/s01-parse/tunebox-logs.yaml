@@ -12,6 +12,8 @@ statics:
     expression: "'tunebox_' + JsonExtract(evt.Parsed.message, 'event')"
   - meta: source_ip
     expression: JsonExtract(evt.Parsed.message, "client")
+  - meta: client_range
+    expression: JsonExtract(evt.Parsed.message, "range")
   - meta: reason
     expression: JsonExtract(evt.Parsed.message, "reason")
   - meta: why

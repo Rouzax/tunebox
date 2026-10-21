@@ -84,3 +84,29 @@ def test_a_locked_reauth_is_not_counted_for_a_ban() -> None:
     # says why=reauth (the owner typing codes wrong in a live session).
     assert "'reauth'" not in bf
     assert "evt.Meta.why == 'address'" in bf
+
+
+def test_scenarios_group_and_ban_by_the_range() -> None:
+    scenarios = list((EXAMPLES / "scenarios").glob("*.yaml"))
+    assert scenarios
+    for scenario in scenarios:
+        text = scenario.read_text(encoding="utf-8")
+        assert "groupby: evt.Meta.client_range" in text, scenario.name
+        assert "scope:\n  type: Range\n  expression: evt.Meta.client_range\n" in text, scenario.name
+    parser = (EXAMPLES / "parsers" / "s01-parse" / "tunebox-logs.yaml").read_text(encoding="utf-8")
+    assert (
+        '- meta: client_range\n    expression: JsonExtract(evt.Parsed.message, "range")' in parser
+    )
+
+
+def test_counted_sample_lines_carry_the_range() -> None:
+    counted = {
+        "admin_login_failed",
+        "admin_setup_token_rejected",
+        "admin_rate_limited",
+        "listener_pin_failed",
+    }
+    lines = (EXAMPLES / "sample.log").read_text(encoding="utf-8").splitlines()
+    for sample in map(json.loads, lines):
+        if sample["event"] in counted:
+            assert sample["range"] == "203.0.113.9/32", sample["event"]

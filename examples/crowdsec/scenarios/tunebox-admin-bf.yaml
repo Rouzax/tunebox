@@ -9,7 +9,10 @@ description: "Repeated failed logins on the tunebox admin panel"
 filter: >-
   evt.Meta.log_type in ['tunebox_admin_login_failed', 'tunebox_admin_setup_token_rejected']
   || (evt.Meta.log_type == 'tunebox_admin_rate_limited' && evt.Meta.why == 'address')
-groupby: evt.Meta.source_ip
+groupby: evt.Meta.client_range
+scope:
+  type: Range
+  expression: evt.Meta.client_range
 capacity: 4
 leakspeed: 2m
 blackhole: 5m

@@ -36,7 +36,8 @@ few typos.
    ```
 
    Each line should come out parsed, with `log_type` `tunebox_<event>`
-   and a `source_ip`.
+   and a `source_ip`; the lines that count toward a ban also have a
+   `client_range`.
 
 ## What gets banned
 
@@ -59,9 +60,16 @@ Refused cross-site requests (`admin_csrf_rejected`) are logged but never
 counted: any web page can make a visitor's browser send one, so counting
 them would let a stranger's page get your own address banned.
 
-The scenarios count per address. tunebox itself counts IPv6 visitors per
-/64, so a visitor who rotates addresses inside one /64 is still locked by
-tunebox after five failures, but does not fill a CrowdSec bucket.
+The scenarios count and ban per range: the address itself for IPv4, its
+/64 for IPv6, the same unit tunebox counts in. tunebox writes the range as
+`range` on every event the scenarios count, and the parser keeps it as
+`client_range`, so a visitor who rotates addresses inside one /64 fills one
+bucket and is banned as a whole. A locked-out address writes at most one
+WARNING a second per address group (the rest are at DEBUG), so the log
+stays quiet however fast it retries.
+
+These examples have not been run against a live CrowdSec. Check them on the
+host with `cscli explain` (step 5) before they replace a working setup.
 
 The ban length comes from your CrowdSec profiles: 4 hours with the default
 profile. To ban the second scenario for 24 hours, add this profile before
