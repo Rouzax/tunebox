@@ -1,6 +1,6 @@
 // Every change, newest first, with what it changed and a way back.
 import {askCode, button, el, icon, when} from './dom.js';
-import {diffStates, importSummary} from './state.js';
+import {diffStates, importSummary, tickets} from './state.js';
 
 const KINDS = {
     file: 'Taken from tunebox.toml',
@@ -113,9 +113,13 @@ async function list(root, ctx) {
     const items = el('ul', {class: 'history'});
     const more = button('history', 'Older', null, {class: 'quiet', hidden: true});
     let last = null;
+    // Only the latest list request draws: a refresh empties the list while
+    // an older page may still be on its way.
+    const take = tickets();
     async function page() {
+        const mine = take.take();
         const {ok, status, data} = await ctx.request('GET', last === null ? 'history' : `history?before=${last}`);
-        if (!current()) {
+        if (!current() || !mine()) {
             return;
         }
         if (!ok) {

@@ -679,7 +679,7 @@ async function run() {
                 form.elements['rules.played_by'].value = '(a+)+$';
                 form.requestSubmit();
             })()`);
-            if (!(await until(`document.querySelector('form.edit [role=alert]') && document.querySelector('form.edit [role=alert]').textContent.indexOf('nested repetition') >= 0`))) {
+            if (!(await until(`document.querySelector('form.edit p.message') && document.querySelector('form.edit p.message').textContent.indexOf('nested repetition') >= 0`))) {
                 return `no refusal shown (message: ${await message()})`;
             }
             const stored = await evaluate(`fetch('/admin/api/config').then((r) => r.json()).then((d) => JSON.stringify(d.state.channels.map((c) => c.doc.rules || null)))`);
