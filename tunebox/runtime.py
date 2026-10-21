@@ -97,7 +97,8 @@ class Runtime:
                 return self.snapshot.version
             if version <= self.snapshot.version:
                 return self.snapshot.version
-            # Every channel that needs making is made first: a source that
+            # A stopped old entry (retired before an earlier apply failed) is
+            # made again too. Every channel that needs making is made first: a source that
             # cannot be built fails here, before any running one is touched.
             # A channel made with carry copies the old one's recent list a
             # moment before the old one is retired; a poll landing in between
@@ -108,7 +109,7 @@ class Runtime:
                     old = self._live.get(config.id)
                     if old is None:
                         made[config.id] = self._make(config, None)
-                    elif needs_restart(old.channel.config, config):
+                    elif old.stop.is_set() or needs_restart(old.channel.config, config):
                         made[config.id] = self._make(config, old.channel)
             except Exception as error:  # noqa: BLE001 - any build failure keeps the live set
                 event(log, logging.ERROR, "apply_failed", error=str(error), version=version)

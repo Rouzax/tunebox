@@ -102,6 +102,36 @@ def test_apply_starts_swaps_restarts_and_stops(harness: Harness) -> None:
     assert list(harness.runtime.snapshot.channels) == ["c"]
 
 
+def test_reverting_after_a_failed_apply_restarts_the_retired_channel(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = rows(doc("a"), doc("b"))
+    harness.commit(first)
+    assert harness.runtime.apply() == 1
+    real_start = threading.Thread.start
+
+    def refuse(thread: threading.Thread) -> None:
+        if thread.name == "channel-c":
+            raise RuntimeError("can't start new thread")
+        real_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", refuse)
+    harness.commit(rows(doc("a"), doc("b", poll_interval_s=30), doc("c")))
+    assert harness.runtime.apply() == 1
+    monkeypatch.setattr(threading.Thread, "start", real_start)
+    harness.commit(first)
+    assert harness.runtime.apply() == 3
+    for entry in harness.runtime._live.values():  # pyright: ignore[reportPrivateUsage]
+        assert not entry.stop.is_set()
+        assert entry.thread.is_alive()
+    for thread in threading.enumerate():
+        if thread.name.startswith("channel-") and thread not in harness.live_threads():
+            thread.join(5)
+    names = [t.name for t in threading.enumerate() if t.name.startswith("channel-")]
+    assert sorted(names) == ["channel-a", "channel-b"]
+    assert set(harness.runtime.snapshot.channels) == {"a", "b"}
+
+
 def test_apply_without_a_new_version_does_nothing(harness: Harness) -> None:
     assert harness.runtime.apply() == 0
     harness.commit(rows(doc("a")))

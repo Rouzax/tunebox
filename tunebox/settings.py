@@ -224,9 +224,8 @@ class Settings:
 
     def version(self) -> int:
         """The latest committed version, without reading the state."""
-        with self.read() as db:
-            row = db.execute("SELECT version FROM config_version").fetchone()
-            return cast(int, row[0])
+        with self.read():
+            return self._version()
 
     def adopt_file(self, state: ConfigState) -> int | None:
         """Takes the stations from tunebox.toml when they differ from the

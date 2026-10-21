@@ -677,6 +677,7 @@ class Admin:
         try:
             applied = self._apply() >= version
         except Exception:
+            # The change is stored whatever the apply raised; only "live" is in doubt.
             log.error("apply_failed", exc_info=True, extra={"fields": {"version": version}})
             applied = False
         if not changed:
