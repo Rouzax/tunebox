@@ -374,3 +374,41 @@ def test_every_pattern_rule_is_compiled() -> None:
     compiled = config._rules(rules, "rules")  # pyright: ignore[reportPrivateUsage]
     for key in config.PATTERN_RULES:
         assert getattr(compiled, key) is not None
+
+
+def test_groups_and_enabled_load_from_a_file(tmp_path: Path) -> None:
+    data = minimal(group="B", enabled=False)
+    data["groups"] = [{"name": "Empty"}, {"name": "B"}]
+    data["channels"].append(dict(data["channels"][0], id="other", enabled=True, group="B"))
+    loaded = parse(data, tmp_path)
+    assert loaded.state.groups == ("Empty", "B")
+    assert [(c.id, c.enabled) for c in loaded.state.channels] == [("owr", False), ("other", True)]
+    assert [c.id for c in loaded.channels] == ["other"]
+
+
+BAD_GROUPS: list[tuple[Any, str]] = [
+    ([{}], "groups[0].name"),
+    ([{"name": 3}], "groups[0].name"),
+    (["B"], "groups[0]"),
+    ({"name": "B"}, "groups"),
+]
+
+
+@pytest.mark.parametrize(("groups", "message"), BAD_GROUPS)
+def test_bad_groups_name_the_key(groups: Any, message: str, tmp_path: Path) -> None:
+    data = minimal()
+    data["groups"] = groups
+    with pytest.raises(ConfigError, match=re.escape(message)):
+        parse(data, tmp_path)
+
+
+def test_enabled_must_be_a_boolean(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=re.escape("channels[0].enabled")):
+        parse(minimal(enabled="no"), tmp_path)
+
+
+def test_a_station_in_an_unlisted_group_is_refused(tmp_path: Path) -> None:
+    data = minimal(group="B")
+    data["groups"] = [{"name": "A"}]
+    with pytest.raises(ConfigError, match=re.escape("channels[0].group")):
+        parse(data, tmp_path)

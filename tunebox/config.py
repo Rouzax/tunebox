@@ -171,7 +171,7 @@ def load(path: Path) -> Config:
 
 
 def parse(data: dict[str, Any], base_dir: Path) -> Config:
-    _no_unknown(data, {"server", "defaults", "channels", "player", "admin"}, "")
+    _no_unknown(data, {"server", "defaults", "channels", "groups", "player", "admin"}, "")
     server_table = _table(data, "server", "server")
     _no_unknown(server_table, {"host", "port", "data_dir", "trusted_proxies", "log_file"}, "server")
     port = _int(server_table, "port", "server.port", 8080)
@@ -249,7 +249,8 @@ def state_from_toml(data: dict[str, Any]) -> ConfigState:
     raw_channels: object = data.get("channels", [])
     if not isinstance(raw_channels, list):
         raise ConfigError("channels: expected [[channels]] tables")
-    groups: list[str] = []
+    listed = _group_names(data.get("groups"))
+    groups: list[str] = [] if listed is None else listed
     rows: list[ChannelRow] = []
     for index, raw in enumerate(cast("list[object]", raw_channels)):
         where = f"channels[{index}]"
@@ -258,10 +259,14 @@ def state_from_toml(data: dict[str, Any]) -> ConfigState:
         doc = dict(cast("dict[str, Any]", raw))
         group = _optional_str(doc, "group", f"{where}.group")
         doc.pop("group", None)
-        if group is not None and group not in groups:
+        # With a [[groups]] list the order is the file's; a station naming a
+        # group outside it is left for validate_state to refuse.
+        if listed is None and group is not None and group not in groups:
             groups.append(group)
+        enabled = _bool(doc, "enabled", f"{where}.enabled", True)
+        doc.pop("enabled", None)
         raw_id: object = doc.get("id", "")
-        rows.append(ChannelRow(raw_id if isinstance(raw_id, str) else "", group, True, doc))
+        rows.append(ChannelRow(raw_id if isinstance(raw_id, str) else "", group, enabled, doc))
     _numbers(defaults_table, "defaults")
     # Stored as written: _numbers turns history_size into a float, which a
     # second validation would refuse.
@@ -271,6 +276,42 @@ def state_from_toml(data: dict[str, Any]) -> ConfigState:
         tuple(groups),
         tuple(rows),
     )
+
+
+def _group_names(raw: object) -> list[str] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ConfigError("groups: expected [[groups]] tables")
+    names: list[str] = []
+    for index, item in enumerate(cast("list[object]", raw)):
+        name: object = cast("dict[str, Any]", item).get("name") if isinstance(item, dict) else None
+        if not isinstance(name, str):
+            raise ConfigError(f"groups[{index}].name: expected a string")
+        names.append(name)
+    return names
+
+
+def state_to_toml(state: ConfigState) -> dict[str, object]:
+    """The export shape: tunebox.toml's own, plus the group order (with
+    groups that have no station) and the stations that are off."""
+    channels: list[dict[str, object]] = []
+    for row in state.channels:
+        doc: dict[str, object] = {"id": row.id, **{k: v for k, v in row.doc.items() if k != "id"}}
+        if row.group is not None:
+            doc["group"] = row.group
+        if not row.enabled:
+            doc["enabled"] = False
+        channels.append(doc)
+    out: dict[str, object] = {}
+    if state.defaults:
+        out["defaults"] = dict(state.defaults)
+    if state.player:
+        out["player"] = dict(state.player)
+    if state.groups:
+        out["groups"] = [{"name": name} for name in state.groups]
+    out["channels"] = channels
+    return out
 
 
 def validate_state(state: ConfigState) -> Resolved:
