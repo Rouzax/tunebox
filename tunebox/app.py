@@ -79,7 +79,14 @@ def main() -> int:
     try:
         for field, reason in stored_refusals(settings.load()[0]):
             event(log, logging.WARNING, "rule_refused", field=field, reason=reason)
-        removed = blobs.collect(keep=settings.referenced_blobs(), older_than_s=BLOB_GRACE_S)
+        # A reset database knows no uploads yet; an export imported back
+        # needs them, so they wait until the database itself is past the grace.
+        oldest = settings.oldest_change()
+        if oldest is None or time.time() - oldest <= BLOB_GRACE_S:
+            removed = 0
+            event(log, logging.DEBUG, "logo_blobs_kept", reason="database_young")
+        else:
+            removed = blobs.collect(keep=settings.referenced_blobs(), older_than_s=BLOB_GRACE_S)
     except (SettingsUnavailable, SettingsWriteError) as error:
         event(log, logging.ERROR, "settings_unavailable", error=str(error))
         print(f"tunebox: {error}", file=sys.stderr)

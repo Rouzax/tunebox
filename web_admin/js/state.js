@@ -298,3 +298,17 @@ export function importSummary(changes, notes) {
     }
     return [first, ...notes];
 }
+
+const HISTORY_LABELS = {
+    file: 'Taken from tunebox.toml',
+    edit: 'Changed in the panel',
+    restore: 'Restored',
+};
+
+// An import from the panel names a file; the first-start import has no target.
+export function historyLabel(kind, target) {
+    if (kind === 'import') {
+        return target === 'panel' ? 'Imported from a file' : 'Imported from tunebox.toml';
+    }
+    return HISTORY_LABELS[kind] || kind;
+}

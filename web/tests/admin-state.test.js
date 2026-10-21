@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
-    addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, importSummary, logoPreview, moveGroup,
+    addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, historyLabel, importSummary, logoPreview, moveGroup,
     moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setSettings, stationsByGroup, tickets, validId,
 } from '../../web_admin/js/state.js';
 
@@ -176,4 +176,14 @@ test('the import summary counts the changes and repeats the notes', () => {
     assert.deepEqual(lines, ['2 differences with what is stored now.', '[server] is a start-up setting and was left out']);
     assert.deepEqual(importSummary([{path: 'a'}], []), ['1 difference with what is stored now.']);
     assert.deepEqual(importSummary([], []), ['The file matches what is stored now.']);
+});
+
+test('historyLabel names a panel import apart from the first-start import', () => {
+    assert.equal(historyLabel('import', 'panel'), 'Imported from a file');
+    assert.equal(historyLabel('import', null), 'Imported from tunebox.toml');
+    assert.equal(historyLabel('import', undefined), 'Imported from tunebox.toml');
+    assert.equal(historyLabel('edit', 'panel'), 'Changed in the panel');
+    assert.equal(historyLabel('file', null), 'Taken from tunebox.toml');
+    assert.equal(historyLabel('restore', 'x'), 'Restored');
+    assert.equal(historyLabel('other', null), 'other');
 });

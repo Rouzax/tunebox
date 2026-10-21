@@ -1,13 +1,6 @@
 // Every change, newest first, with what it changed and a way back.
 import {askCode, button, el, icon, when} from './dom.js';
-import {diffStates, importSummary, tickets} from './state.js';
-
-const KINDS = {
-    file: 'Taken from tunebox.toml',
-    import: 'Imported from tunebox.toml',
-    edit: 'Changed in the panel',
-    restore: 'Restored',
-};
+import {diffStates, historyLabel, importSummary, tickets} from './state.js';
 
 function show(value) {
     return value === undefined ? '' : value;
@@ -133,7 +126,7 @@ async function list(root, ctx) {
         for (const entry of data.entries) {
             items.append(el('li', null, el('a', {href: `#history/${entry.id}`},
                 el('span', {class: 'when'}, when(entry.at)),
-                el('span', null, KINDS[entry.kind] || entry.kind),
+                el('span', null, historyLabel(entry.kind, entry.target)),
                 entry.target ? el('span', {class: 'id'}, entry.target) : null)));
             last = entry.id;
         }
@@ -189,7 +182,7 @@ async function detail(root, ctx, id) {
                 button('close', 'Cancel', () => confirmBox.replaceChildren(), {class: 'quiet'})) : null);
     }));
     root.replaceChildren(
-        el('h2', null, KINDS[data.entry.kind] || data.entry.kind),
+        el('h2', null, historyLabel(data.entry.kind, data.entry.target)),
         el('p', {class: 'hint'}, when(data.entry.at), data.entry.target ? ` · ${data.entry.target}` : ''),
         diffTable(diffStates(data.before, data.after)),
         el('div', {class: 'actions'},

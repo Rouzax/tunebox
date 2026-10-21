@@ -268,6 +268,12 @@ class Settings:
             state_from_dict(json.loads(after)),
         )
 
+    def oldest_change(self) -> float | None:
+        """When the first change was stored; None while there is none."""
+        with self.read() as db:
+            row = db.execute("SELECT MIN(at) FROM history").fetchone()
+        return cast("float | None", row[0])
+
     def referenced_blobs(self) -> set[str]:
         """Every uploaded-logo reference in the stored stations and in all
         history, which keeps a restore able to find its logos."""

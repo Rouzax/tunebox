@@ -5,6 +5,7 @@ import signal
 import socket
 import threading
 import time
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -218,9 +219,9 @@ def test_start_up_names_stored_rules_the_lint_refuses(
     assert [line["field"] for line in refusals] == ["channels[0].rules.played_by"]
 
 
-def test_start_up_removes_old_unnamed_blobs_and_keeps_named_ones(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def _blob_start(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, database_age_s: float) -> Path:
+    """Starts tunebox (it exits 2 on a taken port) over a database whose first
+    history entry is database_age_s old, with an old upload nothing names."""
     blobs = tmp_path / "logos" / "blobs"
     blobs.mkdir(parents=True)
     named = "a" * 64
@@ -241,15 +242,34 @@ def test_start_up_removes_old_unnamed_blobs_and_keeps_named_ones(
             f'log_file = "tunebox.log"\n\n{CHANNEL_TOML}logo = "blob:{named}"\n',
             encoding="utf-8",
         )
+        seeded = Settings(tmp_path / "tunebox.db", clock=lambda: time.time() - database_age_s)
+        seeded.adopt_file(state_from_toml(tomllib.loads(config.read_text("utf-8"))))
+        seeded.close()
         monkeypatch.setenv("LOG_LEVEL", "info")
         monkeypatch.setenv("TUNEBOX_CONFIG", str(config))
         assert main() == 2
-    assert not orphan.exists()
-    assert young.exists()
-    assert kept.exists()
+    return blobs
+
+
+def test_start_up_removes_old_unnamed_blobs_and_keeps_named_ones(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    blobs = _blob_start(monkeypatch, tmp_path, 3 * 86_400)
+    assert not (blobs / f"{'b' * 64}.png").exists()
+    assert (blobs / f"{'c' * 64}.png").exists()
+    assert (blobs / f"{'a' * 64}.png").exists()
     lines = [json.loads(x) for x in (tmp_path / "tunebox.log").read_text("utf-8").splitlines()]
     collected = [line for line in lines if line["event"] == "logo_blobs_collected"]
     assert [line["removed"] for line in collected] == [1]
+
+
+def test_start_up_keeps_uploads_while_the_database_is_young(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    blobs = _blob_start(monkeypatch, tmp_path, 60)
+    assert (blobs / f"{'b' * 64}.png").exists()
+    lines = [json.loads(x) for x in (tmp_path / "tunebox.log").read_text("utf-8").splitlines()]
+    assert not [line for line in lines if line["event"] == "logo_blobs_collected"]
 
 
 def test_a_database_that_fails_while_listing_blobs_stops_startup(
@@ -258,7 +278,11 @@ def test_a_database_that_fails_while_listing_blobs_stops_startup(
     def broken(_self: Settings) -> set[str]:
         raise SettingsUnavailable("disk I/O error")
 
+    def old(_self: Settings) -> float:
+        return 0.0
+
     monkeypatch.setattr(Settings, "referenced_blobs", broken)
+    monkeypatch.setattr(Settings, "oldest_change", old)
     config = tmp_path / "tunebox.toml"
     config.write_text(CHANNEL_TOML, encoding="utf-8")
     monkeypatch.setenv("LOG_LEVEL", "info")
