@@ -2,8 +2,8 @@
 apart from the logo cache in logos/ (which can be deleted). The file is
 the record: a station's logo names blob:<sha256>, and the blob exists when
 its file does, also after the database was reset (export, reset, import).
-Unreferenced blobs are removed at start-up once they are a day old, so an
-upload whose station has not been saved yet survives a restart."""
+Unreferenced blobs are removed at start-up (tidy) once they are a day old,
+so an upload whose station has not been saved yet survives a restart."""
 
 from __future__ import annotations
 
@@ -16,13 +16,26 @@ from collections.abc import Callable
 from pathlib import Path
 
 from tunebox.config import BLOB_REF, ConfigState
+from tunebox.disk import free_bytes, has_room
 from tunebox.logos import EXTENSIONS, sniff
 
 MAX_BLOB = 2_000_000
+# All uploads together; the cap a stolen session can fill, not the disk.
+MAX_STORE = 100_000_000
+BLOB_GRACE_S = 86_400
 
 
 class BlobError(Exception):
     pass
+
+
+class BlobStoreFull(Exception):
+    """An upload refused for room: reason is "logo_store_full" (MAX_STORE)
+    or "disk_low" (less than disk.MIN_FREE would be left)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class BlobUnavailable(Exception):
@@ -40,6 +53,13 @@ def _holds(path: Path, body: bytes) -> bool:
         return False
 
 
+def _existing(path: Path) -> Path:
+    """The nearest folder that exists: blobs/ is made at the first upload."""
+    while not path.exists() and path.parent != path:
+        path = path.parent
+    return path
+
+
 def _sync(path: Path) -> None:
     """Flushes the file to disk before it is renamed into place, so a power
     loss cannot leave an empty file under the content's name."""
@@ -51,9 +71,15 @@ def _sync(path: Path) -> None:
 
 
 class Blobs:
-    def __init__(self, directory: Path, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        clock: Callable[[], float] = time.time,
+        free_space: Callable[[], int | None] | None = None,
+    ) -> None:
         self._dir = directory
         self._clock = clock
+        self._free = free_space or (lambda: free_bytes(_existing(directory)))
 
     def save(self, body: bytes) -> tuple[str, str]:
         """Store the image and answer (reference, kind). The kind comes from
@@ -71,6 +97,12 @@ class Blobs:
                 now = self._clock()
                 os.utime(target, (now, now))
         else:
+            # Two uploads at once can both pass the cap and overshoot it by one
+            # image: the cap bounds growth, it is not an exact quota.
+            if self._used() + len(body) > MAX_STORE:
+                raise BlobStoreFull("logo_store_full")
+            if not has_room(self._free(), len(body)):
+                raise BlobStoreFull("disk_low")
             # A unique temp name: two uploads of the same file at once must
             # not write one half-file over the other. An existing file under
             # this name that differs was cut short by a crash and is replaced.
@@ -87,6 +119,18 @@ class Blobs:
                     partial.unlink(missing_ok=True)
                 raise BlobUnavailable(error.errno) from error
         return f"blob:{digest}", kind
+
+    def _used(self) -> int:
+        """Bytes stored now, temp files included."""
+        total = 0
+        try:
+            files = list(self._dir.iterdir())
+        except OSError:
+            return 0
+        for path in files:
+            with contextlib.suppress(OSError):
+                total += path.stat().st_size
+        return total
 
     def path(self, ref: str) -> Path | None:
         """The stored file of a reference, None when it is not a reference
@@ -130,3 +174,11 @@ class Blobs:
             except OSError:
                 continue
         return removed
+
+    def tidy(self, oldest_change: float | None, keep: Callable[[], set[str]]) -> int | None:
+        """The start-up collection: None while the database itself is not
+        past BLOB_GRACE_S (a reset database knows no uploads yet, and an
+        export imported back needs them), else the count removed."""
+        if oldest_change is None or self._clock() - oldest_change <= BLOB_GRACE_S:
+            return None
+        return self.collect(keep(), BLOB_GRACE_S)

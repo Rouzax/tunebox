@@ -28,7 +28,7 @@ from tunebox.accounts import (
     SessionEnded,
     session_id,
 )
-from tunebox.blobs import MAX_BLOB, BlobError, Blobs, BlobUnavailable
+from tunebox.blobs import MAX_BLOB, BlobError, Blobs, BlobStoreFull, BlobUnavailable
 from tunebox.config import (
     CODECS,
     DEFAULTS,
@@ -43,6 +43,7 @@ from tunebox.config import (
     state_to_toml,
     validate_state,
 )
+from tunebox.disk import has_room
 from tunebox.http_headers import single
 from tunebox.logos import CONTENT_TYPES
 from tunebox.logs import event
@@ -202,6 +203,7 @@ class Admin:
         samples: Callable[[], list[str]],
         *,
         blobs: Blobs,
+        free_space: Callable[[], int | None],
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -215,6 +217,7 @@ class Admin:
         self._apply = apply
         self._samples = samples
         self._blobs = blobs
+        self._free = free_space
         self._origin = config.public_origin
         # Over plain http a browser drops Secure cookies and refuses the
         # __Secure- prefix; the server then serves the panel only to the
@@ -629,6 +632,10 @@ class Admin:
             # The timed check starts a child process: never for a stale change.
             if version != based_on:
                 return _json(409, {"error": "stale", "version": version})
+            # The history row holds the state before and after.
+            if not has_room(self._free(), 2 * len(state_to_json(state))):
+                event(log, logging.WARNING, "admin_disk_low", client=client)
+                return _error(507, "disk_low")
             reason = check_new(state, stored, self._samples)
             if reason:
                 return _invalid(reason, state)
@@ -660,6 +667,11 @@ class Admin:
             ref, kind = self._blobs.save(request.body)
         except BlobError:
             return _error(400, "not_an_image")
+        except BlobStoreFull as error:
+            event(
+                log, logging.WARNING, "logo_store_full", client=request.client, reason=error.reason
+            )
+            return _error(507, error.reason)
         except BlobUnavailable as error:
             event(
                 log, logging.WARNING, "logo_store_failed", client=request.client, errno=error.errno

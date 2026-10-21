@@ -445,6 +445,7 @@ def admin_parts(tmp_path: Path) -> Generator[tuple[TuneboxServer, Accounts]]:
         settings=settings,
         pin=pin,
         blobs=Blobs(tmp_path / "blobs"),
+        free_space=lambda: None,
         apply=lambda: 0,
         samples=list,
     )
@@ -502,6 +503,7 @@ def plain_server(tmp_path: Path) -> Generator[TuneboxServer]:
         settings=settings,
         pin=pin,
         blobs=Blobs(tmp_path / "blobs"),
+        free_space=lambda: None,
         apply=lambda: 0,
         samples=list,
     )
@@ -561,6 +563,7 @@ def test_plain_http_believes_a_trusted_proxy_about_the_client(tmp_path: Path) ->
         settings=settings,
         pin=pin,
         blobs=Blobs(tmp_path / "blobs"),
+        free_space=lambda: None,
         apply=lambda: 0,
         samples=list,
     )
@@ -804,6 +807,7 @@ class Recorder(Admin):
             settings=settings,
             pin=pin,
             blobs=Blobs(web.parent / "blobs"),
+            free_space=lambda: None,
             apply=lambda: 0,
             samples=list,
         )

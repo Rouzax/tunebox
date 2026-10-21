@@ -11,11 +11,13 @@ from typing import Any
 
 import pytest
 
+from tunebox import blobs as blobs_module
 from tunebox import crypto
 from tunebox.accounts import AccountError, Accounts, Session, SessionEnded
 from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Request, Response
 from tunebox.blobs import MAX_BLOB, Blobs
 from tunebox.config import AdminConfig
+from tunebox.disk import MIN_FREE
 from tunebox.pin import Pin
 from tunebox.rulecheck import MAX_NEW_PATTERNS
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
@@ -44,7 +46,8 @@ class World:
         self.origin = origin
         self.clock = Clock()
         self.tmp = tmp_path
-        self.blobs = Blobs(tmp_path / "blobs")
+        self.free: int | None = None
+        self.blobs = Blobs(tmp_path / "blobs", free_space=lambda: self.free)
         self.settings = Settings(tmp_path / "t.db")
         self.accounts = Accounts(self.settings, clock=self.clock)
         if account:
@@ -64,6 +67,7 @@ class World:
             settings=self.settings,
             pin=self.pin,
             blobs=self.blobs,
+            free_space=lambda: self.free,
             apply=self.apply,
             samples=self.samples,
             clock=self.clock,
@@ -184,6 +188,7 @@ def test_a_known_browser_grant_from_plain_http_gets_no_lane_on_https(tmp_path: P
         settings=world.settings,
         pin=world.pin,
         blobs=world.blobs,
+        free_space=lambda: None,
         apply=world.apply,
         samples=list,
         clock=world.clock,
@@ -2001,3 +2006,32 @@ def test_history_keeps_its_blobs(world: World) -> None:
     restored = world.call("POST", "/admin/api/history/2/restore", {"based_on": 2}, csrf=csrf)
     assert restored.status == 200
     assert json_of(restored)["changed"] is True
+
+
+def test_a_change_under_the_free_space_floor_is_refused(world: World) -> None:
+    csrf = world.login()
+    world.free = MIN_FREE
+    answer = save(world, csrf, 0, state_of(station("a")))
+    assert (answer.status, json_of(answer)) == (507, {"error": "disk_low"})
+    assert world.settings.load()[1] == 0
+    assert world.applied == []
+
+
+def test_a_stale_change_under_the_floor_is_stale(world: World) -> None:
+    csrf = world.login()
+    world.free = MIN_FREE
+    assert save(world, csrf, 5, state_of(station("a"))).status == 409
+
+
+def test_an_upload_past_the_cap_says_so(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(blobs_module, "MAX_STORE", 10)
+    csrf = world.login()
+    answer = upload(world, csrf, PNG)
+    assert (answer.status, json_of(answer)) == (507, {"error": "logo_store_full"})
+
+
+def test_an_upload_under_the_floor_says_so(world: World) -> None:
+    csrf = world.login()
+    world.free = MIN_FREE
+    answer = upload(world, csrf, PNG)
+    assert (answer.status, json_of(answer)) == (507, {"error": "disk_low"})

@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from tunebox.blobs import MAX_BLOB, BlobError, Blobs, BlobUnavailable
+from tunebox import blobs as blobs_module
+from tunebox.blobs import BLOB_GRACE_S, MAX_BLOB, BlobError, Blobs, BlobStoreFull, BlobUnavailable
 from tunebox.config import ChannelRow, ConfigState
+from tunebox.disk import MIN_FREE
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
@@ -150,3 +152,58 @@ def test_saving_an_image_again_repairs_a_short_file(tmp_path: Path, left: bytes)
     stored = blobs.path(ref)
     assert stored is not None and stored.read_bytes() == PNG
     assert [p.name for p in tmp_path.iterdir()] == [stored.name]
+
+
+def png(size: int) -> bytes:
+    """A PNG-signed body of the given size (the store sniffs only the start)."""
+    return PNG + b"\x00" * (size - len(PNG))
+
+
+def test_an_upload_past_the_store_cap_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(blobs_module, "MAX_STORE", 3_000)
+    store = Blobs(tmp_path, free_space=lambda: None)
+    store.save(png(2_000))
+    with pytest.raises(BlobStoreFull) as refused:
+        store.save(png(1_500))
+    assert refused.value.reason == "logo_store_full"
+
+
+def test_a_stored_image_saves_again_at_the_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(blobs_module, "MAX_STORE", 2_100)
+    store = Blobs(tmp_path, free_space=lambda: None)
+    body = png(2_000)
+    first = store.save(body)
+    assert store.save(body) == first
+
+
+def test_an_upload_under_the_free_space_floor_is_refused(tmp_path: Path) -> None:
+    store = Blobs(tmp_path, free_space=lambda: MIN_FREE + 100)
+    with pytest.raises(BlobStoreFull) as refused:
+        store.save(png(500))
+    assert refused.value.reason == "disk_low"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_default_free_space_reads_the_nearest_existing_folder(tmp_path: Path) -> None:
+    store = Blobs(tmp_path / "not" / "yet")
+    assert store.save(PNG)[1] == "png"
+
+
+def test_tidy_waits_while_the_database_is_young(tmp_path: Path) -> None:
+    now = 10_000_000.0
+    store = Blobs(tmp_path, clock=lambda: now, free_space=lambda: None)
+    asked: list[int] = []
+
+    def keep() -> set[str]:
+        asked.append(1)
+        return set()
+
+    assert store.tidy(None, keep) is None
+    assert store.tidy(now - BLOB_GRACE_S, keep) is None
+    assert asked == []
+    assert store.tidy(now - BLOB_GRACE_S - 1, keep) == 0
+    assert asked == [1]

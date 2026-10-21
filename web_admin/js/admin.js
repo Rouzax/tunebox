@@ -26,6 +26,8 @@ const ERRORS = {
     too_large: 'That is too large to send.',
     not_an_image: 'That file is not a PNG, JPEG, WebP or SVG image.',
     unsupported_type: 'Upload a PNG, JPEG, WebP or SVG image.',
+    logo_store_full: 'Uploaded logos have reached their 100 MB limit. A logo that no station and no history entry uses is removed at a restart once it is a day old.',
+    disk_low: 'The disk tunebox keeps its data on is almost full, so nothing was saved. Free some space and try again.',
     logo_store_failed: 'tunebox cannot store the image right now. Check the free disk space.',
 };
 

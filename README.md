@@ -458,6 +458,19 @@ reset (see [Update, back up and reset](#update-back-up-and-reset)) uploads
 are kept for at least a day, so an export can be imported back with its
 logos.
 
+Two limits keep uploads from filling the disk:
+
+- All uploads together may take 100 MB. Past that, an upload is refused
+  ("Uploaded logos have reached their 100 MB limit."). Uploading an image
+  that is already stored still works. To make room, wait for a restart to
+  remove uploads that no station and no History entry names once they are a
+  day old; uploads that a past version in the History names stay.
+- A save, import, restore or upload is refused while less than 256 MB
+  would stay free on the disk that holds `data/` ("The disk tunebox keeps
+  its data on is almost full, so nothing was saved."). This keeps room for
+  the database and the log. Free some space and try again; nothing was
+  changed. If tunebox cannot read the free space, it does not refuse.
+
 ### Settings and the listening PIN
 
 **Settings** (in the panel's menu) holds what every station inherits unless
@@ -735,6 +748,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | `/admin/` answers 404 although the panel is on, and the log says `admin_not_nearby` | `public_origin` is plain http and the request did not come from the home network: from the internet, or through a proxy that is not in `trusted_proxies`. | Open the panel directly at `public_origin` from the home network or the VPN. Through a proxy, set up https instead. |
 | `config_file_ignored` in the log | The admin panel is on, so tunebox does not read the `parts` it names from `tunebox.toml` (`channels`, `defaults`, `player`); the database has its own, and they differ. | Change stations in the panel. For `defaults` or `player`, see [Set up the admin panel](#set-up-the-admin-panel). To stop the warning, make the file match or remove those parts from it. |
 | Saving in the admin panel says "Changed elsewhere" | Someone saved in another tab or browser first. | On the station list, check the stations it now shows and make your change again if it is still needed. In the edit form, check it and save again. |
+| Saving or uploading says "The disk tunebox keeps its data on is almost full" (`admin_disk_low` or `logo_store_full` in the log) | Less than 256 MB would stay free on the disk that holds `data/`, or the uploads have reached 100 MB (the log's `reason` field says which). Nothing was saved. | Free disk space and save again. For the 100 MB limit, see [Logos](#logos). |
 | The edit form says "tunebox cannot store the image right now" after an upload (`logo_store_failed` in the log) | `data/blobs/` cannot be written: the disk is full or the folder is not owned by user id 1000. | Free disk space or fix the owner (`sudo chown -R 1000:1000 data`), then upload the image again. |
 | `logo_missing` in the log; a station shows no logo | The station names an uploaded logo (`blob:...`) whose file is gone from `data/blobs/`, for example after that folder was deleted or the database was restored without it. | Edit the station, upload the logo again and save. Back up `data/blobs/` together with `tunebox.db`. |
 | Saving a title rule is refused | The pattern could stall tunebox (see [Manage the stations](#manage-the-stations)). | Simplify it as the message says: no repeat inside a repeated group, such as `(\w+\s?)*`, and no three repeats in a row that take the same characters, such as `.*-.*-.*` (use `[^-]*` for the parts between separators). |

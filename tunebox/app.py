@@ -21,6 +21,7 @@ from tunebox.catalogs import Catalogs
 from tunebox.channel import Channel
 from tunebox.config import ChannelConfig, ConfigError, ConfigState, load
 from tunebox.covers import CoverService
+from tunebox.disk import free_bytes
 from tunebox.logos import Logos
 from tunebox.logs import add_file, configure, event
 from tunebox.netguard import Guard
@@ -39,7 +40,6 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # Outside web/, so the player's static files can never serve the admin pages.
 WEB_ADMIN_DIR = Path(__file__).resolve().parent.parent / "web_admin"
 # An upload waits this long for its station to be saved before a restart may remove it.
-BLOB_GRACE_S = 86_400
 
 
 def main() -> int:
@@ -77,18 +77,17 @@ def main() -> int:
         return 2
     # Beside the logo cache, not in it: data/logos/ can be deleted, while an
     # upload has no other copy.
-    blobs = Blobs(config.server.data_dir / "blobs")
+
+    def free_space() -> int | None:
+        return free_bytes(config.server.data_dir)
+
+    blobs = Blobs(config.server.data_dir / "blobs", free_space=free_space)
     try:
         for field, reason in stored_refusals(settings.load()[0]):
             event(log, logging.WARNING, "rule_refused", field=field, reason=reason)
-        # A reset database knows no uploads yet; an export imported back
-        # needs them, so they wait until the database itself is past the grace.
-        oldest = settings.oldest_change()
-        if oldest is None or time.time() - oldest <= BLOB_GRACE_S:
-            removed = 0
+        removed = blobs.tidy(settings.oldest_change(), settings.referenced_blobs)
+        if removed is None:
             event(log, logging.DEBUG, "logo_blobs_kept", reason="database_young")
-        else:
-            removed = blobs.collect(keep=settings.referenced_blobs(), older_than_s=BLOB_GRACE_S)
     except (SettingsUnavailable, SettingsWriteError) as error:
         event(log, logging.ERROR, "settings_unavailable", error=str(error))
         print(f"tunebox: {error}", file=sys.stderr)
@@ -129,6 +128,7 @@ def main() -> int:
             settings=settings,
             pin=pin,
             blobs=blobs,
+            free_space=free_space,
             apply=runtime.apply,
             samples=lambda: [
                 title
