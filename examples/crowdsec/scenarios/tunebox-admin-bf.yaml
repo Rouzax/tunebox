@@ -1,5 +1,5 @@
-# Five failed admin logins or wrong setup tokens from one address within
-# about ten minutes. Refused cross-site requests are not counted: any web
+# Five failed admin logins or wrong setup tokens from one address (for IPv6,
+# one /64) within about ten minutes. Refused cross-site requests are not counted: any web
 # page can make a visitor's browser send one. Rate-limit refusals count
 # only when this address is the one locked, not when someone else's flood
 # fills the shared pace.

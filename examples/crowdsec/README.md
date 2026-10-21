@@ -43,9 +43,9 @@ few typos.
 
 | Scenario | Trigger |
 |---|---|
-| `tunebox/admin-bf` | 5 failed logins, wrong setup tokens or refusals for an address that is locked, from one address within about 10 minutes |
-| `tunebox/admin-totp-bf` | 3 wrong codes (from the app or recovery codes) after a correct password within about 10 minutes |
-| `tunebox/listener-pin-bf` | Twenty wrong listening PINs (or tries while locked out) from one address at once, or a steady stream faster than one every 30 seconds (a leaky bucket of 20 that drains one every 30 s) |
+| `tunebox/admin-bf` | 5 failed logins, wrong setup tokens or refusals for an address that is locked, from one address (an IPv6 visitor: one /64) within about 10 minutes |
+| `tunebox/admin-totp-bf` | 3 wrong codes (from the app or recovery codes) after a correct password from one address (an IPv6 visitor: one /64) within about 10 minutes |
+| `tunebox/listener-pin-bf` | Twenty wrong listening PINs (or tries while locked out) from one address (an IPv6 visitor: one /64) at once, or a steady stream faster than one every 30 seconds (a leaky bucket of 20 that drains one every 30 s) |
 
 Wrong codes typed to confirm a change in the panel (`admin_reauth_failed`,
 and `admin_rate_limited` with `why` `reauth` once the address is locked)

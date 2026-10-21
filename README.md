@@ -535,11 +535,15 @@ code from your authenticator app (or a recovery code) before it is saved,
 unless you typed one in the last 5 minutes. So does unticking **Needs the
 PIN** on a station that has it, whether you save the station, restore an
 older version in the History or import a file, and also while the PIN is
-off. Both decide what every device can see, and unticking the box is the
-one station change that shows something to all of them, so being logged in
-is not enough for these changes. Removing a hidden station, adding a
-station or ticking the box needs no code. Cancel at the code prompt and
-nothing is saved; an open edit form keeps what you typed.
+off. Both decide what every device can see, so being logged in is not
+enough for these changes. For stations the code is a check against
+unhiding one by mistake, not a lock: someone logged in can still delete a
+hidden station and add it again without the box, or point a visible
+station at its stream, because ordinary station edits need no code. The
+PIN itself cannot be changed or switched off without a code. Removing a
+hidden station, adding a station or ticking the box needs no code. Cancel
+at the code prompt and nothing is saved; an open edit form keeps what you
+typed.
 
 ### Your account
 
@@ -765,7 +769,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | Saving, importing, restoring or uploading says "The disk tunebox keeps its data on is almost full" (`admin_disk_low` in the log) | Less than 256 MB would stay free on the disk that holds `data/`. Nothing was saved. | Free disk space and try again. |
 | An upload says "Uploaded logos have reached their 100 MB limit" (`logo_store_full` in the log) | The uploads in `data/blobs/` add up to 100 MB. | Wait for a restart to remove uploads that no station and no History entry names once they are a day old; see [Logos](#logos). |
 | The edit form says "tunebox cannot store the image right now" after an upload (`logo_store_failed` in the log) | `data/blobs/` cannot be written: the disk is full or the folder is not owned by user id 1000. | Free disk space or fix the owner (`sudo chown -R 1000:1000 data`), then upload the image again. |
-| `logo_missing` in the log; a station shows no logo | The station names an uploaded logo (`blob:...`) whose file is gone from `data/blobs/`, for example after that folder was deleted or the database was restored without it. | Edit the station, upload the logo again and save. Back up `data/blobs/` together with `tunebox.db`. |
+| `logo_missing` or `logo_blob_missing` in the log; a station shows no logo | The station names an uploaded logo (`blob:...`) whose file is gone from `data/blobs/`, for example after that folder was deleted or the database was restored without it. | Edit the station, upload the logo again and save. Back up `data/blobs/` together with `tunebox.db`. |
 | Saving a title rule is refused | The pattern could stall tunebox (see [Manage the stations](#manage-the-stations)). | Simplify it as the message says: no repeat inside a repeated group, such as `(\w+\s?)*`, and no three repeats in a row that take the same characters, such as `.*-.*-.*` (use `[^-]*` for the parts between separators). |
 | The admin page says "No admin account yet" | No account was set up. | Run the setup command in [Set up the admin panel](#set-up-the-admin-panel). |
 | The log says `tunebox: cannot listen on 0.0.0.0:<port>` | `port` in `[server]` was changed to one that is not free inside the container. | Remove `port` from `[server]` (8080 is the default) and change the published port in `compose.yaml` instead. |
