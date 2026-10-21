@@ -391,6 +391,7 @@ BAD_GROUPS: list[tuple[Any, str]] = [
     ([{"name": 3}], "groups[0].name"),
     (["B"], "groups[0]"),
     ({"name": "B"}, "groups"),
+    ([{"name": "B", "colour": "red"}], "groups[0].colour: unknown key"),
 ]
 
 

@@ -285,7 +285,9 @@ def _group_names(raw: object) -> list[str] | None:
         raise ConfigError("groups: expected [[groups]] tables")
     names: list[str] = []
     for index, item in enumerate(cast("list[object]", raw)):
-        name: object = cast("dict[str, Any]", item).get("name") if isinstance(item, dict) else None
+        table = cast("dict[str, Any]", item) if isinstance(item, dict) else {}
+        _no_unknown(table, {"name"}, f"groups[{index}]")
+        name: object = table.get("name")
         if not isinstance(name, str):
             raise ConfigError(f"groups[{index}].name: expected a string")
         names.append(name)

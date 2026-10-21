@@ -28,13 +28,18 @@ def dumps(data: Mapping[str, object]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def _key(key: str) -> str:
+def _key(key: object) -> str:
+    if not isinstance(key, str):
+        raise ValueError(f"TOML keys are strings, not {type(key).__name__}")
     return key if _BARE.fullmatch(key) else _string(key)
 
 
 def _string(text: str) -> str:
     out: list[str] = []
     for ch in text:
+        # A lone surrogate cannot be encoded as UTF-8, so the text could not be written.
+        if "\ud800" <= ch <= "\udfff":
+            raise ValueError("TOML text cannot hold a lone surrogate")
         if ch in _ESCAPES:
             out.append(_ESCAPES[ch])
         elif ord(ch) < 0x20 or ord(ch) == 0x7F:
