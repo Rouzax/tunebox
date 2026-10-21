@@ -668,9 +668,8 @@ class Admin:
         except BlobError:
             return _error(400, "not_an_image")
         except BlobStoreFull as error:
-            event(
-                log, logging.WARNING, "logo_store_full", client=request.client, reason=error.reason
-            )
+            name = "logo_store_full" if error.reason == "logo_store_full" else "admin_disk_low"
+            event(log, logging.WARNING, name, client=request.client)
             return _error(507, error.reason)
         except BlobUnavailable as error:
             event(

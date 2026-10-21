@@ -22,6 +22,8 @@ from tunebox.logos import EXTENSIONS, sniff
 MAX_BLOB = 2_000_000
 # All uploads together; the cap a stolen session can fill, not the disk.
 MAX_STORE = 100_000_000
+# An upload waits this long for its station to be saved before a restart may
+# remove it.
 BLOB_GRACE_S = 86_400
 
 

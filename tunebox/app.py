@@ -39,7 +39,6 @@ DEFAULT_CONFIG = "/data/tunebox.toml"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # Outside web/, so the player's static files can never serve the admin pages.
 WEB_ADMIN_DIR = Path(__file__).resolve().parent.parent / "web_admin"
-# An upload waits this long for its station to be saved before a restart may remove it.
 
 
 def main() -> int:
@@ -75,12 +74,12 @@ def main() -> int:
         event(log, logging.ERROR, "settings_unavailable", error=str(error))
         print(f"tunebox: {error}", file=sys.stderr)
         return 2
-    # Beside the logo cache, not in it: data/logos/ can be deleted, while an
-    # upload has no other copy.
 
     def free_space() -> int | None:
         return free_bytes(config.server.data_dir)
 
+    # Beside the logo cache, not in it: data/logos/ can be deleted, while an
+    # upload has no other copy.
     blobs = Blobs(config.server.data_dir / "blobs", free_space=free_space)
     try:
         for field, reason in stored_refusals(settings.load()[0]):

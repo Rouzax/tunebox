@@ -2035,3 +2035,17 @@ def test_an_upload_under_the_floor_says_so(world: World) -> None:
     world.free = MIN_FREE
     answer = upload(world, csrf, PNG)
     assert (answer.status, json_of(answer)) == (507, {"error": "disk_low"})
+
+
+def test_a_change_refused_for_disk_space_never_starts_the_rule_check(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def never(*_args: object) -> str | None:
+        raise AssertionError("the timed rule check ran")
+
+    monkeypatch.setattr("tunebox.admin.check_new", never)
+    csrf = world.login()
+    world.free = MIN_FREE
+    fresh = station("a", rules={"played_by": "(n1)"})
+    answer = save(world, csrf, 0, state_of(fresh))
+    assert (answer.status, json_of(answer)) == (507, {"error": "disk_low"})
