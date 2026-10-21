@@ -413,3 +413,23 @@ def test_a_station_in_an_unlisted_group_is_refused(tmp_path: Path) -> None:
     data["groups"] = [{"name": "A"}]
     with pytest.raises(ConfigError, match=re.escape("channels[0].group")):
         parse(data, tmp_path)
+
+
+def test_state_from_import_leaves_start_up_tables_out_with_a_note() -> None:
+    text = '[server]\nport = 1\n[admin]\nenabled = true\n[[groups]]\nname = "g"\n'
+    state, notes = config.state_from_import(text)
+    assert state.groups == ("g",)
+    assert notes == [
+        "[server] is a start-up setting and was left out",
+        "[admin] is a start-up setting and was left out",
+    ]
+
+
+def test_state_from_import_refuses_an_unknown_top_level_key() -> None:
+    with pytest.raises(config.ConfigError, match="surprise: unknown key"):
+        config.state_from_import("surprise = 1\n")
+
+
+def test_state_from_import_names_the_toml_error() -> None:
+    with pytest.raises(config.ConfigError, match="line"):
+        config.state_from_import("[[channels]\n")

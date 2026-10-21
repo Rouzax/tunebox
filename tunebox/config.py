@@ -243,6 +243,27 @@ def _origin(value: str) -> str:
     return f"{parts.scheme}://{host}" + (f":{port}" if port not in (None, default) else "")
 
 
+_START_UP_ONLY = ("server", "admin")
+
+
+def state_from_import(text: str) -> tuple[ConfigState, list[str]]:
+    """The stations, groups, defaults and player of a tunebox.toml or an
+    export. Start-up settings are left out with a note: they belong to the
+    file tunebox starts from, not to the stored configuration. The state is
+    not validated; the caller does that."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        raise ConfigError(str(error)) from error
+    notes = [
+        f"[{key}] is a start-up setting and was left out" for key in _START_UP_ONLY if key in data
+    ]
+    for key in _START_UP_ONLY:
+        data.pop(key, None)
+    _no_unknown(data, {"defaults", "channels", "player", "groups"}, "")
+    return state_from_toml(data), notes
+
+
 def state_from_toml(data: dict[str, Any]) -> ConfigState:
     defaults_table = _table(data, "defaults", "defaults")
     _no_unknown(defaults_table, set(DEFAULTS), "defaults")

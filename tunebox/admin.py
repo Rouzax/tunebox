@@ -35,6 +35,7 @@ from tunebox.config import (
     SOURCE_SETTINGS,
     AdminConfig,
     ConfigError,
+    state_from_import,
     state_to_toml,
     validate_state,
 )
@@ -42,7 +43,7 @@ from tunebox.http_headers import single
 from tunebox.logs import event
 from tunebox.paths import inside
 from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, PinStale, read_cookie
-from tunebox.rulecheck import refused
+from tunebox.rulecheck import lint_all, refused
 from tunebox.sessions import KNOWN_S, Gate
 from tunebox.settings import (
     Settings,
@@ -64,7 +65,11 @@ MAX_BODY = 65_536
 MAX_STATE_BODY = 524_288
 # Longest history target a save may carry.
 MAX_TARGET = 200
-LARGE_ROUTES = {"config": MAX_STATE_BODY}
+LARGE_ROUTES = {
+    "config": MAX_STATE_BODY,
+    "import/preview": MAX_STATE_BODY,
+    "import": MAX_STATE_BODY,
+}
 SESSION_COOKIE = "tunebox_admin"
 KNOWN_COOKIE = "tunebox_known"
 SETUP_TOKEN_S = 900
@@ -319,6 +324,8 @@ class Admin:
             ("POST", "config"): self._save,
             ("GET", "history"): self._history,
             ("GET", "export"): self._export,
+            ("POST", "import/preview"): self._import_preview,
+            ("POST", "import"): self._import,
             ("GET", "account"): self._account,
             ("POST", "account/reauth"): self._reauth,
             ("POST", "account/password"): self._password,
@@ -606,6 +613,37 @@ class Admin:
             text.encode(),
             "application/toml; charset=utf-8",
             (("Content-Disposition", f'attachment; filename="tunebox-{day}.toml"'),),
+        )
+
+    def _import_preview(self, request: Request, _session: Session) -> Response:
+        body = _body(request, ("toml",))
+        if body is None:
+            return _error(400, "bad_request")
+        try:
+            state, notes = state_from_import(body["toml"])
+            validate_state(state)
+        except ConfigError as error:
+            return _json(400, {"error": "invalid", "message": str(error)})
+        reason = lint_all(state)
+        if reason:
+            return _json(400, {"error": "invalid", "message": reason})
+        return _json(200, {"state": json.loads(state_to_json(state)), "notes": notes})
+
+    def _import(self, request: Request, session: Session) -> Response:
+        payload = _object(request)
+        based_on = _version(payload)
+        text = payload.get("toml") if payload else None
+        if based_on is None or not isinstance(text, str):
+            return _error(400, "bad_request")
+        stale = self._fresh(session)
+        if stale is not None:
+            return stale
+        try:
+            state, _notes = state_from_import(text)
+        except ConfigError as error:
+            return _json(400, {"error": "invalid", "message": str(error)})
+        return self._commit(
+            json.loads(state_to_json(state)), based_on, "import", "panel", request.client
         )
 
     def _history_entry(self, request: Request, _session: Session) -> Response:

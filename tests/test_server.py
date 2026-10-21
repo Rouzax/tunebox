@@ -712,7 +712,12 @@ def test_a_refused_large_body_is_not_read(admin_parts: tuple[TuneboxServer, Acco
     assert status == 401
 
 
-def test_a_large_body_from_a_session_is_read(admin_parts: tuple[TuneboxServer, Accounts]) -> None:
+@pytest.mark.parametrize(
+    "path", ["/admin/api/config", "/admin/api/import", "/admin/api/import/preview"]
+)
+def test_a_large_body_from_a_session_is_read(
+    admin_parts: tuple[TuneboxServer, Accounts], path: str
+) -> None:
     httpd, accounts = admin_parts
     cookie, csrf = log_in(httpd, accounts)
     big = json.dumps({"pad": " " * MAX_BODY}).encode()
@@ -722,7 +727,7 @@ def test_a_large_body_from_a_session_is_read(admin_parts: tuple[TuneboxServer, A
         "Cookie": cookie,
         "X-Tunebox-CSRF": csrf,
     }
-    status, _ = post(httpd, "/admin/api/config", big, headers)
+    status, _ = post(httpd, path, big, headers)
     assert status == 400  # read and judged, not refused for its size
 
 

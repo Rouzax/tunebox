@@ -662,6 +662,118 @@ def test_export_is_the_stored_state_as_toml(world: World) -> None:
     data = tomllib.loads(text)
     assert [c["id"] for c in data["channels"]] == ["owr", "late"]
     assert data["channels"][1]["enabled"] is False
+    for name, value in ADMIN_HEADERS.items():
+        assert dict(answer.headers)[name] == value
+
+
+STATIONS_TOML = """
+[[channels]]
+id = "owr"
+name = "OWR"
+stream_url = "https://example.invalid/owr.aac"
+source = { type = "triton", mount = "OWR_INTERNATIONAL" }
+
+[[channels]]
+id = "late"
+name = "Late"
+stream_url = "https://example.invalid/late.aac"
+source = { type = "triton", mount = "OWR_INTERNATIONAL" }
+"""
+
+PLAIN_TOML = (
+    '[server]\nport = 8083\n\n[admin]\nenabled = true\npublic_origin = "https://radio.example"\n'
+    + STATIONS_TOML
+)
+
+TWO_SAME_IDS = STATIONS_TOML.replace('id = "late"', 'id = "owr"')
+
+SLOW_RULE = STATIONS_TOML.replace(
+    'name = "Late"', "name = \"Late\"\nrules = { played_by = '(a+)+$' }"
+)
+
+
+def test_export_then_import_changes_nothing(world: World) -> None:
+    csrf = world.login()
+    save(world, csrf, 0, state_of(station("owr")))
+    text = world.call("GET", "/admin/api/export").body.decode()
+    fresh(world, csrf)
+    answer = world.call("POST", "/admin/api/import", {"toml": text, "based_on": 1}, csrf=csrf)
+    assert json_of(answer)["changed"] is False
+    assert len(world.settings.history(None)[0]) == 1
+
+
+def test_import_stores_a_plain_file_as_history_kind_import(world: World) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+    answer = world.call("POST", "/admin/api/import", {"toml": PLAIN_TOML, "based_on": 0}, csrf=csrf)
+    assert json_of(answer)["changed"] is True
+    entry = world.settings.history(None)[0][0]
+    assert (entry.kind, entry.target) == ("import", "panel")
+    assert [row.id for row in world.settings.load()[0].channels] == ["owr", "late"]
+
+
+def test_import_needs_a_fresh_code(world: World) -> None:
+    csrf = world.login()
+    body = {"toml": STATIONS_TOML, "based_on": 0}
+    answer = world.call("POST", "/admin/api/import", body, csrf=csrf)
+    assert answer.status == 403
+    assert json_of(answer) == {"error": "reauth_required"}
+    assert world.settings.load()[1] == 0
+
+
+def test_preview_shows_the_state_and_notes_without_storing(world: World) -> None:
+    csrf = world.login()
+    answer = world.call("POST", "/admin/api/import/preview", {"toml": PLAIN_TOML}, csrf=csrf)
+    assert answer.status == 200
+    data = json_of(answer)
+    assert [c["id"] for c in data["state"]["channels"]] == ["owr", "late"]
+    assert any("[server]" in note for note in data["notes"])
+    assert any("[admin]" in note for note in data["notes"])
+    assert world.settings.load()[1] == 0
+
+
+@pytest.mark.parametrize(
+    ("text", "names"),
+    [
+        ("[[channels]\n", "line"),
+        ("surprise = 1\n", "surprise"),
+        (TWO_SAME_IDS, "duplicate"),
+        (SLOW_RULE, "rules.played_by"),
+    ],
+)
+def test_a_broken_import_is_refused_with_its_reason(world: World, text: str, names: str) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+    preview = world.call("POST", "/admin/api/import/preview", {"toml": text}, csrf=csrf)
+    stored = world.call("POST", "/admin/api/import", {"toml": text, "based_on": 0}, csrf=csrf)
+    for answer in (preview, stored):
+        assert answer.status == 400
+        assert names in json_of(answer)["message"]
+    assert world.settings.load()[1] == 0
+
+
+@pytest.mark.parametrize("path", ["/admin/api/import", "/admin/api/import/preview"])
+@pytest.mark.parametrize("body", [None, [], {"based_on": 0}, {"toml": 5, "based_on": 0}])
+def test_a_malformed_import_body_is_a_bad_request(world: World, path: str, body: object) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+    answer = world.call("POST", path, body, csrf=csrf)
+    assert answer.status == 400
+    assert json_of(answer) == {"error": "bad_request"}
+
+
+def test_an_import_without_an_int_version_is_a_bad_request(world: World) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+    for based_on in ("0", True, None):
+        body = {"toml": STATIONS_TOML, "based_on": based_on}
+        answer = world.call("POST", "/admin/api/import", body, csrf=csrf)
+        assert (answer.status, json_of(answer)) == (400, {"error": "bad_request"})
+
+
+@pytest.mark.parametrize("path", ["/admin/api/import", "/admin/api/import/preview"])
+def test_import_needs_a_session(world: World, path: str) -> None:
+    assert world.call("POST", path, {"toml": "", "based_on": 0}).status == 401
 
 
 def test_export_needs_a_session(world: World) -> None:
@@ -1139,6 +1251,9 @@ def test_a_large_body_needs_a_live_session_and_token(world: World) -> None:
     assert limit_of(world, head_only(world, path, "wrong")) == (MAX_BODY, 403)
     assert limit_of(world, head_only(world, path, csrf, "https://evil.example")) == (MAX_BODY, 403)
     assert limit_of(world, head_only(world, path, csrf)) == (MAX_STATE_BODY, None)
+    for name in ("import", "import/preview"):
+        large = head_only(world, f"/admin/api/{name}", csrf)
+        assert limit_of(world, large) == (MAX_STATE_BODY, None)
     # Only the routes that need it; the size refusal is the server's 413.
     assert limit_of(world, head_only(world, "/admin/api/pin", csrf)) == (MAX_BODY, None)
 

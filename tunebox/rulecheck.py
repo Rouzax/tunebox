@@ -372,6 +372,17 @@ def refused(
     return f"{new[listed[at]] if at is not None else 'rules'}: {reason}"
 
 
+def lint_all(state: ConfigState) -> str | None:
+    """Why the lint refuses the first of the state's patterns, as
+    "<field>: <reason>", or None. Every pattern is linted, stored or not;
+    no child process runs."""
+    for field, pattern in patterns(state):
+        reason = lint(pattern)
+        if reason:
+            return f"{field}: {reason}"
+    return None
+
+
 def stored_refusals(state: ConfigState) -> list[tuple[str, str]]:
     """The stored patterns the current lint refuses, as (field, reason)."""
     return [(field, reason) for field, pattern in patterns(state) if (reason := lint(pattern))]
