@@ -32,6 +32,23 @@ class BlobUnavailable(Exception):
         self.errno = errno
 
 
+def _holds(path: Path, body: bytes) -> bool:
+    try:
+        return path.stat().st_size == len(body) and path.read_bytes() == body
+    except OSError:
+        return False
+
+
+def _sync(path: Path) -> None:
+    """Flushes the file to disk before it is renamed into place, so a power
+    loss cannot leave an empty file under the content's name."""
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 class Blobs:
     def __init__(self, directory: Path, clock: Callable[[], float] = time.time) -> None:
         self._dir = directory
@@ -47,13 +64,20 @@ class Blobs:
             raise BlobError("not an image")
         digest = hashlib.sha256(body).hexdigest()
         target = self._dir / f"{digest}.{kind}"
-        if not target.is_file():
+        if _holds(target, body):
+            # The grace before collection counts from the latest upload.
+            with contextlib.suppress(OSError):
+                now = self._clock()
+                os.utime(target, (now, now))
+        else:
             # A unique temp name: two uploads of the same file at once must
-            # not write one half-file over the other.
+            # not write one half-file over the other. An existing file under
+            # this name that differs was cut short by a crash and is replaced.
             partial = self._dir / f".{digest}.{secrets.token_hex(4)}.tmp"
             try:
                 self._dir.mkdir(parents=True, exist_ok=True)
                 partial.write_bytes(body)
+                _sync(partial)
                 partial.replace(target)
             except OSError as error:
                 # On a read-only folder the cleanup fails too; a leftover dot
@@ -61,11 +85,6 @@ class Blobs:
                 with contextlib.suppress(OSError):
                     partial.unlink(missing_ok=True)
                 raise BlobUnavailable(error.errno) from error
-        else:
-            # The grace before collection counts from the latest upload.
-            with contextlib.suppress(OSError):
-                now = self._clock()
-                os.utime(target, (now, now))
         return f"blob:{digest}", kind
 
     def path(self, ref: str) -> Path | None:

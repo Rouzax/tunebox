@@ -266,3 +266,17 @@ def test_a_refresh_leaves_the_blob_folder_alone(tmp_path: Path) -> None:
     logos.refresh(channel_config())
     assert sorted(p.name for p in (tmp_path / "blobs").iterdir()) == before
     assert logos.file("blobs.png") is None
+
+
+def test_a_blob_that_is_not_its_kind_is_not_copied(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING)
+    blobs = Blobs(tmp_path / "blobs")
+    ref, _ = blobs.save(PNG)
+    stored = blobs.path(ref)
+    assert stored is not None
+    stored.write_bytes(b"")
+    Logos(tmp_path, FakeHttp(lambda _url: b""), blobs).refresh(channel_config(logo=ref))
+    assert not (tmp_path / "owr.png").exists()
+    assert "logo_rejected" in caplog.text

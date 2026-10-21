@@ -172,7 +172,11 @@ class Logos:
         except OSError as error:
             event(log, logging.WARNING, "logo_failed", channel=channel_id, error=str(error))
             return
-        self._store(channel_id, body, source.suffix.removeprefix("."), ref)
+        kind = source.suffix.removeprefix(".")
+        if sniff(body) != kind:
+            event(log, logging.WARNING, "logo_rejected", channel=channel_id, bytes=len(body))
+            return
+        self._store(channel_id, body, kind, ref)
 
     def _fetch(self, channel_id: str, url: str) -> None:
         try:

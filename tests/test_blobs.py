@@ -1,4 +1,5 @@
 import errno
+import hashlib
 import os
 from pathlib import Path
 
@@ -138,3 +139,14 @@ def test_an_upload_to_a_read_only_folder_is_a_store_failure(
     with pytest.raises(BlobUnavailable) as raised:
         Blobs(tmp_path).save(PNG)
     assert raised.value.errno == errno.EROFS
+
+
+@pytest.mark.parametrize("left", [b"", PNG[: len(PNG) // 2]])
+def test_saving_an_image_again_repairs_a_short_file(tmp_path: Path, left: bytes) -> None:
+    blobs = Blobs(tmp_path)
+    digest = hashlib.sha256(PNG).hexdigest()
+    (tmp_path / f"{digest}.png").write_bytes(left)
+    ref, _ = blobs.save(PNG)
+    stored = blobs.path(ref)
+    assert stored is not None and stored.read_bytes() == PNG
+    assert [p.name for p in tmp_path.iterdir()] == [stored.name]
