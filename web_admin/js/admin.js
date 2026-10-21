@@ -188,6 +188,10 @@ async function once(send, done, retry, early) {
                 return {ok: false};
             }
             if (!typed) {
+                // Logging out cancels the prompt; the login says nothing of saving.
+                if (!ctx.config) {
+                    return {ok: false};
+                }
                 if (!onForm()) {
                     route();
                 }
@@ -433,7 +437,12 @@ async function startSetup(token) {
     const {ok, data} = await call('POST', 'setup/start', {token});
     if (!ok) {
         fail(data);
-        show(data.error === 'already_set_up' ? 'login' : 'none');
+        if (data.error === 'already_set_up') {
+            window.history.replaceState(null, '', '/admin/');
+            show('login');
+        } else {
+            show('none');
+        }
         return;
     }
     document.querySelector('.qr-box').replaceChildren(qrSvg(document, qrMatrix(qrcode, data.uri)));

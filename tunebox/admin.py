@@ -698,8 +698,10 @@ class Admin:
             # device: the one edit that exposes something needs a code.
             if _exposed(stored, state) and not self._accounts.fresh(session):
                 return _error(403, "reauth_required")
-            # The history row holds the state before and after.
-            if not has_room(self._free(), 2 * len(state_to_json(state))):
+            # The history row holds the state before and after. An unchanged
+            # save stores nothing and is the retry for a failed apply.
+            after = state_to_json(state)
+            if after != state_to_json(stored) and not has_room(self._free(), 2 * len(after)):
                 event(log, logging.WARNING, "admin_disk_low", client=client)
                 return _error(507, "disk_low")
             reason = check_new(state, stored, self._samples)

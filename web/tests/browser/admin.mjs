@@ -1415,6 +1415,108 @@ async function run() {
             return off === 200 ? null : `switching off answered ${off}`;
         });
 
+        // Unticks Needs the PIN on the second station in a session that ends
+        // before the save, logs in again and presses Save it now: a new
+        // login holds no fresh code, so the shell asks for one.
+        const keptUntick = async () => {
+            await evaluate(`window.location.hash = '#edit/second'`);
+            if (!(await until(`document.querySelector('form.edit [name=needs_pin]')`))) {
+                return 'no "Needs the PIN" box';
+            }
+            await evaluate(`document.querySelector('form.edit').elements.needs_pin.checked = false`);
+            await endPageSession();
+            await evaluate(`document.querySelector('form.edit').requestSubmit()`);
+            if (!(await until(`!document.querySelector('#login').hidden`))) {
+                return `the login form did not show (message: ${await message()})`;
+            }
+            const problem = await pageLogin();
+            if (problem) {
+                return problem;
+            }
+            if (!(await until(`document.querySelector('#shell .pending') && !document.querySelector('#shell .pending').hidden`))) {
+                return 'no box offering the change';
+            }
+            await buttonNamed('Save it now');
+            if (!(await until(`document.querySelector('.shell-code form.confirm-code')`))) {
+                return `no code asked in the shell (message: ${await message()})`;
+            }
+            return (await hidden()) ? null : 'stored without needs_pin before the code';
+        };
+
+        await step('a kept edit that unhides a station asks for a code after login', async () => {
+            const chosen = await pinCall({mode: 'stations'});
+            if (chosen !== 200) {
+                return `choosing stations answered ${chosen}`;
+            }
+            if (!(await hidden())) {
+                return 'the second station is not marked "Needs the PIN" before the step';
+            }
+            const problem = await keptUntick();
+            if (problem) {
+                return problem;
+            }
+            await typeCode();
+            if (!(await until(`location.hash === '#stations' && document.querySelector('#shell .pending').hidden`))) {
+                return `not saved (message: ${await message()})`;
+            }
+            if (await hidden()) {
+                return 'still stored with needs_pin';
+            }
+            // Hidden again for the next step; ticking the box needs no code.
+            await evaluate(`window.location.hash = '#edit/second'`);
+            if (!(await until(`document.querySelector('form.edit [name=needs_pin]')`))) {
+                return 'no "Needs the PIN" box';
+            }
+            await evaluate(`(() => {
+                const form = document.querySelector('form.edit');
+                form.elements.needs_pin.checked = true;
+                form.requestSubmit();
+            })()`);
+            const mark = `document.querySelector('.station[data-id="second"] .id')`;
+            return (await until(`location.hash === '#stations' && ${mark} && ${mark}.textContent.includes('PIN')`))
+                ? null : `not hidden again (message: ${await message()})`;
+        });
+
+        await step('a code prompt that cannot reach tunebox stays open, and logging out there says nothing of saving', async () => {
+            const problem = await keptUntick();
+            if (problem) {
+                return problem;
+            }
+            const offline = (on) => send('Network.emulateNetworkConditions', {offline: on, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
+            await offline(true);
+            let said = false;
+            try {
+                await typeCode();
+                said = await until(`document.querySelector('.message').textContent === 'Could not reach tunebox.'`);
+            } finally {
+                await offline(false);
+            }
+            if (!said) {
+                return `message: ${await message()}`;
+            }
+            if (!(await evaluate(`Boolean(document.querySelector('.shell-code form.confirm-code'))`))) {
+                return 'the code form closed when tunebox could not be reached';
+            }
+            await click('.logout');
+            if (!(await until(`!document.querySelector('#login').hidden`))) {
+                return 'log out did not show the login';
+            }
+            await sleep(300);
+            const after = await message();
+            if (after.indexOf('Not saved') >= 0) {
+                return `the login says: ${after}`;
+            }
+            const again = await pageLogin();
+            if (again) {
+                return again;
+            }
+            if (!(await hidden())) {
+                return 'stored without needs_pin';
+            }
+            const off = await pinCall({mode: 'off'});
+            return off === 200 ? null : `switching off answered ${off}`;
+        });
+
         await step('a stale PIN form is refused', async () => {
             await send('Page.navigate', {url: `${base}/admin/#settings`});
             if (!(await until(`document.querySelector('form.pin [name=pin_mode]')`))) {

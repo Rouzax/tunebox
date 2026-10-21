@@ -2131,6 +2131,16 @@ def test_a_change_under_the_free_space_floor_is_refused(world: World) -> None:
     assert world.applied == []
 
 
+def test_an_unchanged_save_under_the_floor_still_asks_the_apply(world: World) -> None:
+    csrf = world.login()
+    assert save(world, csrf, 0, state_of(station("a"))).status == 200
+    world.free = MIN_FREE
+    again = save(world, csrf, 1, state_of(station("a")))
+    assert again.status == 200
+    assert json_of(again) == {"version": 1, "changed": False, "applied": True}
+    assert world.applied == [1, 1]
+
+
 def test_a_stale_change_under_the_floor_is_stale(world: World) -> None:
     csrf = world.login()
     world.free = MIN_FREE

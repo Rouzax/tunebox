@@ -74,7 +74,14 @@ export function askCode(ctx, area) {
             // area may sit inside the form whose change this confirms, and
             // a submit bubbles: that form must not send its change again.
             event.stopPropagation();
-            const answer = await ctx.request('POST', 'account/reauth', {code: input.value});
+            let answer;
+            try {
+                answer = await ctx.request('POST', 'account/reauth', {code: input.value});
+            } catch (error) {
+                // No answer: the prompt stays for another try or Cancel.
+                ctx.message('Could not reach tunebox.');
+                return;
+            }
             input.value = '';
             if (answer.status === 204) {
                 form.remove();
