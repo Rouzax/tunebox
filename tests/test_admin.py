@@ -1,4 +1,5 @@
 import base64
+import dataclasses
 import json
 import logging
 import threading
@@ -13,6 +14,7 @@ import pytest
 from tunebox import crypto
 from tunebox.accounts import AccountError, Accounts, Session, SessionEnded
 from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Request, Response
+from tunebox.blobs import MAX_BLOB, Blobs
 from tunebox.config import AdminConfig
 from tunebox.pin import Pin
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
@@ -40,6 +42,8 @@ class World:
     ) -> None:
         self.origin = origin
         self.clock = Clock()
+        self.tmp = tmp_path
+        self.blobs = Blobs(tmp_path / "blobs")
         self.settings = Settings(tmp_path / "t.db")
         self.accounts = Accounts(self.settings, clock=self.clock)
         if account:
@@ -58,6 +62,7 @@ class World:
             web,
             settings=self.settings,
             pin=self.pin,
+            blobs=self.blobs,
             apply=self.apply,
             samples=self.samples,
             clock=self.clock,
@@ -177,6 +182,7 @@ def test_a_known_browser_grant_from_plain_http_gets_no_lane_on_https(tmp_path: P
         tmp_path / "web_admin",
         settings=world.settings,
         pin=world.pin,
+        blobs=world.blobs,
         apply=world.apply,
         samples=list,
         clock=world.clock,
@@ -1711,3 +1717,114 @@ def test_an_ended_session_spends_no_reauth_slot(world: World) -> None:
     world.clock.now += 30
     good = {"code": world.code()}
     assert world.call("POST", "/admin/api/account/reauth", good, csrf=csrf).status == 204
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+def upload(
+    world: World, csrf: str | None, body: bytes, content_type: str = "image/png"
+) -> Response:
+    headers = [("Origin", ORIGIN), ("Content-Type", content_type)]
+    if csrf:
+        headers.append(("X-Tunebox-CSRF", csrf))
+    if world.cookies:
+        headers.append(("Cookie", "; ".join(f"{k}={v}" for k, v in world.cookies.items())))
+    return world.admin.handle(
+        Request("POST", "/admin/api/logos", tuple(headers), body, "198.51.100.7")
+    )
+
+
+def test_an_uploaded_logo_answers_its_reference(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    csrf = world.login()
+    with caplog.at_level(logging.INFO):
+        answer = upload(world, csrf, PNG)
+    assert answer.status == 200
+    ref = json_of(answer)["logo"]
+    assert json_of(answer)["kind"] == "png"
+    shown = world.call("GET", f"/admin/api/logos/{ref.removeprefix('blob:')}")
+    assert shown.status == 200 and shown.body == PNG
+    assert shown.content_type == "image/png"
+    assert ("Content-Security-Policy", "sandbox") in shown.headers
+    event = next(r for r in caplog.records if r.getMessage() == "admin_logo_uploaded")
+    assert event.__dict__["fields"] == {"client": "198.51.100.7", "kind": "png", "bytes": len(PNG)}
+
+
+def test_an_upload_that_is_not_an_image_is_refused(world: World) -> None:
+    csrf = world.login()
+    answer = upload(world, csrf, b"<html><script>alert(1)</script>", "image/png")
+    assert answer.status == 400 and json_of(answer) == {"error": "not_an_image"}
+    assert not (world.tmp / "blobs").exists()
+
+
+def test_an_upload_needs_an_image_type(world: World) -> None:
+    csrf = world.login()
+    assert upload(world, csrf, PNG, "text/plain").status == 415
+    assert upload(world, csrf, PNG, "application/json").status == 415
+    other = world.call("POST", "/admin/api/config", {}, csrf=csrf, content_type="image/png")
+    assert other.status == 415 and json_of(other) == {"error": "json_only"}
+
+
+def test_an_upload_needs_a_session_and_its_token(world: World) -> None:
+    csrf = world.login()
+    assert upload(world, None, PNG).status == 403
+    assert upload(world, "wrong", PNG).status == 403
+    world.cookies.clear()
+    assert upload(world, csrf, PNG).status == 401
+
+
+@pytest.mark.parametrize("sha", ["../x", "A" * 64, "0" * 63, "1" * 64])
+def test_a_blob_view_takes_only_a_stored_reference(world: World, sha: str) -> None:
+    world.login()
+    assert world.call("GET", f"/admin/api/logos/{sha}").status == 404
+
+
+def test_a_blob_view_needs_a_session(world: World) -> None:
+    assert world.call("GET", "/admin/api/logos/" + "1" * 64).status == 401
+
+
+def test_a_save_naming_an_absent_blob_is_refused(world: World) -> None:
+    csrf = world.login()
+    gone = "blob:" + "1" * 64
+    answer = save(world, csrf, 0, state_of(station("a", logo=gone)))
+    assert answer.status == 400
+    assert json_of(answer)["message"] == f"channels[0].logo: no uploaded logo {gone}"
+    assert world.settings.load()[1] == 0
+
+
+def test_a_save_naming_a_stored_blob_goes_through(world: World) -> None:
+    csrf = world.login()
+    ref = json_of(upload(world, csrf, PNG))["logo"]
+    assert save(world, csrf, 0, state_of(station("a", logo=ref))).status == 200
+
+
+def test_a_preview_names_an_absent_blob(world: World) -> None:
+    csrf = world.login()
+    gone = "blob:" + "1" * 64
+    text = STATIONS_TOML.replace('name = "Late"', f'name = "Late"\nlogo = "{gone}"')
+    answer = world.call("POST", "/admin/api/import/preview", {"toml": text}, csrf=csrf)
+    assert answer.status == 400
+    assert gone in json_of(answer)["message"]
+
+
+def test_a_logo_upload_is_granted_its_own_limit_to_a_live_session(world: World) -> None:
+    path = "/admin/api/logos"
+    big = MAX_BLOB // 2
+
+    def asked(csrf: str | None) -> tuple[int, int | None]:
+        request = head_only(world, path, csrf, length=big)
+        request = dataclasses.replace(
+            request,
+            headers=tuple(
+                ("Content-Type", "image/png") if k == "Content-Type" else (k, v)
+                for k, v in request.headers
+            ),
+        )
+        return limit_of(world, request)
+
+    assert asked(None) == (MAX_BODY, 401)
+    csrf = world.login()
+    assert asked("wrong") == (MAX_BODY, 403)
+    assert asked(csrf) == (MAX_BLOB, None)

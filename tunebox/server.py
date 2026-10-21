@@ -446,7 +446,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(403, {"error": "bad_request_origin"}, head, NO_STORE)
         try:
             payload: object = json.loads(body or b"null")
-        except ValueError:
+        except ValueError, RecursionError:
             payload = None
         given = cast("dict[str, object]", payload).get("pin") if isinstance(payload, dict) else None
         if not isinstance(given, str):

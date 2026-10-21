@@ -28,6 +28,7 @@ from tunebox.accounts import (
     SessionEnded,
     session_id,
 )
+from tunebox.blobs import MAX_BLOB, BlobError, Blobs
 from tunebox.config import (
     CODECS,
     DEFAULTS,
@@ -40,6 +41,7 @@ from tunebox.config import (
     validate_state,
 )
 from tunebox.http_headers import single
+from tunebox.logos import CONTENT_TYPES
 from tunebox.logs import event
 from tunebox.paths import inside
 from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, PinStale, read_cookie
@@ -69,7 +71,10 @@ LARGE_ROUTES = {
     "config": MAX_STATE_BODY,
     "import/preview": MAX_STATE_BODY,
     "import": MAX_STATE_BODY,
+    "logos": MAX_BLOB,
 }
+# The image types a logo upload may declare; the bytes decide the kind.
+UPLOAD_TYPES = ("image/png", "image/jpeg", "image/webp", "image/svg+xml")
 SESSION_COOKIE = "tunebox_admin"
 KNOWN_COOKIE = "tunebox_known"
 SETUP_TOKEN_S = 900
@@ -165,6 +170,7 @@ class Admin:
         apply: Callable[[], int],
         samples: Callable[[], list[str]],
         *,
+        blobs: Blobs,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -177,6 +183,7 @@ class Admin:
         self._settings = settings
         self._apply = apply
         self._samples = samples
+        self._blobs = blobs
         self._origin = config.public_origin
         # Over plain http a browser drops Secure cookies and refuses the
         # __Secure- prefix; the server then serves the panel only to the
@@ -288,7 +295,10 @@ class Admin:
                 )
                 return _error(403, "bad_origin")
             content_type = (request.header("Content-Type") or "").split(";")[0].strip()
-            if content_type != "application/json":
+            if request.path == "/admin/api/logos":
+                if content_type not in UPLOAD_TYPES:
+                    return _error(415, "unsupported_type")
+            elif content_type != "application/json":
                 return _error(415, "json_only")
         if needs_session:
             session = self._session(request)
@@ -326,6 +336,7 @@ class Admin:
             ("GET", "export"): self._export,
             ("POST", "import/preview"): self._import_preview,
             ("POST", "import"): self._import,
+            ("POST", "logos"): self._upload,
             ("GET", "account"): self._account,
             ("POST", "account/reauth"): self._reauth,
             ("POST", "account/password"): self._password,
@@ -338,6 +349,8 @@ class Admin:
         if (method, name) in fixed:
             return fixed[(method, name)]
         parts = name.split("/")
+        if parts[0] == "logos" and len(parts) == 2 and method == "GET":
+            return self._blob
         if parts[:2] == ["account", "sessions"] and len(parts) == 4 and parts[3] == "end":
             return self._end_session if method == "POST" else None
         if parts[0] != "history" or not parts[1:2] or _uint(parts[1]) is None:
@@ -570,7 +583,7 @@ class Admin:
             stored, version = self._settings.load()
             if version != based_on:
                 return _json(409, {"error": "stale", "version": version})
-            reason = refused(state, stored, self._samples)
+            reason = refused(state, stored, self._samples) or self._blobs.missing(state)
             if reason:
                 return _json(400, {"error": "invalid", "message": reason})
             version, changed = self._settings.commit_changed(state, based_on, kind, target)
@@ -595,6 +608,34 @@ class Admin:
             version=version,
         )
         return _json(200, {"version": version, "changed": True, "applied": applied})
+
+    def _upload(self, request: Request, _session: Session) -> Response:
+        try:
+            ref, kind = self._blobs.save(request.body)
+        except BlobError:
+            return _error(400, "not_an_image")
+        event(
+            log,
+            logging.INFO,
+            "admin_logo_uploaded",
+            client=request.client,
+            kind=kind,
+            bytes=len(request.body),
+        )
+        return _json(200, {"logo": ref, "kind": kind})
+
+    def _blob(self, request: Request, _session: Session) -> Response:
+        found = self._blobs.path(f"blob:{request.path.rsplit('/', 1)[-1]}")
+        if found is None:
+            return _error(404, "not_found")
+        # The blob is the uploader's bytes, an SVG may carry script: sandbox
+        # keeps it inert even when opened as a page of its own.
+        return Response(
+            200,
+            found.read_bytes(),
+            CONTENT_TYPES[found.suffix[1:]],
+            (("Content-Security-Policy", "sandbox"),),
+        )
 
     def _history(self, request: Request, _session: Session) -> Response:
         raw = urllib.parse.parse_qs(request.query).get("before", [""])[0]
@@ -625,7 +666,7 @@ class Admin:
             stored, _ = self._settings.load()
         except ConfigError as error:
             return _json(400, {"error": "invalid", "message": str(error)})
-        reason = lint_new(state, stored)
+        reason = lint_new(state, stored) or self._blobs.missing(state)
         if reason:
             return _json(400, {"error": "invalid", "message": reason})
         return _json(200, {"state": json.loads(state_to_json(state)), "notes": notes})

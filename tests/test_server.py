@@ -20,6 +20,7 @@ from tests.test_admin import PASSWORD, SECRET
 from tunebox import crypto
 from tunebox.accounts import Accounts
 from tunebox.admin import MAX_BODY, MAX_STATE_BODY, Admin, Request, Response
+from tunebox.blobs import Blobs
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import AdminConfig, ChannelConfig, PlayerConfig, StreamConfig
@@ -443,6 +444,7 @@ def admin_parts(tmp_path: Path) -> Generator[tuple[TuneboxServer, Accounts]]:
         web_admin,
         settings=settings,
         pin=pin,
+        blobs=Blobs(tmp_path / "blobs"),
         apply=lambda: 0,
         samples=list,
     )
@@ -499,6 +501,7 @@ def plain_server(tmp_path: Path) -> Generator[TuneboxServer]:
         web_admin,
         settings=settings,
         pin=pin,
+        blobs=Blobs(tmp_path / "blobs"),
         apply=lambda: 0,
         samples=list,
     )
@@ -557,6 +560,7 @@ def test_plain_http_believes_a_trusted_proxy_about_the_client(tmp_path: Path) ->
         tmp_path,
         settings=settings,
         pin=pin,
+        blobs=Blobs(tmp_path / "blobs"),
         apply=lambda: 0,
         samples=list,
     )
@@ -799,6 +803,7 @@ class Recorder(Admin):
             web,
             settings=settings,
             pin=pin,
+            blobs=Blobs(web.parent / "blobs"),
             apply=lambda: 0,
             samples=list,
         )
@@ -1406,3 +1411,40 @@ def test_a_trickled_body_is_cut_at_the_deadline(
     assert "request_body_incomplete" in names
     assert "request_crashed" not in names
     assert "connection_crashed" not in names
+
+
+def test_a_large_upload_needs_a_live_session(
+    admin_parts: tuple[TuneboxServer, Accounts], tmp_path: Path
+) -> None:
+    httpd, _accounts = admin_parts
+    headers = {"Origin": ORIGIN, "Content-Type": "image/png"}
+    status, _ = post(httpd, "/admin/api/logos", b"\x89PNG\r\n\x1a\n" + b"\0" * 100_000, headers)
+    assert status == 401
+    assert not (tmp_path / "blobs").exists()
+
+
+def test_an_upload_over_the_limit_is_refused_before_it_is_read(
+    admin_parts: tuple[TuneboxServer, Accounts],
+) -> None:
+    httpd, _accounts = admin_parts
+    raw = (
+        b"POST /admin/api/logos HTTP/1.1\r\nHost: x\r\nOrigin: " + ORIGIN.encode() + b"\r\n"
+        b"Content-Type: image/png\r\nContent-Length: 5000000\r\n\r\n"
+    )
+    received = exchange(httpd, raw)
+    assert received.startswith(b"HTTP/1.1 401 ")
+
+
+def test_a_pin_body_that_exhausts_the_parser_is_a_bad_request_not_a_crash(
+    server: TuneboxServer, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def too_deep(_body: bytes) -> object:
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr("tunebox.server.json.loads", too_deep)
+    with caplog.at_level(logging.DEBUG):
+        status, _, _ = request(
+            server, "/api/pin", "POST", {"Content-Type": "application/json"}, b'{"pin": "1"}'
+        )
+    assert status == 400
+    assert not any(r.getMessage() == "request_crashed" for r in caplog.records)

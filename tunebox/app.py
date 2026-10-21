@@ -15,6 +15,7 @@ from types import FrameType
 from tunebox import http
 from tunebox.accounts import Accounts
 from tunebox.admin import Admin
+from tunebox.blobs import Blobs
 from tunebox.bursts import Bursts
 from tunebox.catalogs import Catalogs
 from tunebox.channel import Channel
@@ -106,6 +107,7 @@ def main() -> int:
             admin_dir,
             settings=settings,
             pin=pin,
+            blobs=Blobs(config.server.data_dir / "logos" / "blobs"),
             apply=runtime.apply,
             samples=lambda: [
                 title

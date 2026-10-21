@@ -45,6 +45,8 @@ _CHANNEL_KEYS = {
     *DEFAULTS,
 }
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# A logo uploaded in the panel, named by the SHA-256 of its bytes.
+BLOB_REF = re.compile(r"blob:([0-9a-f]{64})")
 
 
 class ConfigError(Exception):
@@ -377,8 +379,8 @@ def _channel(table: dict[str, Any], where: str, defaults: dict[str, float]) -> C
     if group is not None and not group.strip():
         raise ConfigError(f"{where}.group: must not be empty")
     logo = _optional_str(table, "logo", f"{where}.logo")
-    if logo is not None and not logo.startswith("https://"):
-        raise ConfigError(f"{where}.logo: must be an https URL")
+    if logo is not None and not (logo.startswith("https://") or BLOB_REF.fullmatch(logo)):
+        raise ConfigError(f"{where}.logo: must be an https URL or an uploaded logo")
     return ChannelConfig(
         id=channel_id,
         name=_str(table, "name", f"{where}.name"),
