@@ -56,7 +56,10 @@ class Blobs:
                 partial.write_bytes(body)
                 partial.replace(target)
             except OSError as error:
-                partial.unlink(missing_ok=True)
+                # On a read-only folder the cleanup fails too; a leftover dot
+                # file goes at the next start-up.
+                with contextlib.suppress(OSError):
+                    partial.unlink(missing_ok=True)
                 raise BlobUnavailable(error.errno) from error
         else:
             # The grace before collection counts from the latest upload.

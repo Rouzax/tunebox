@@ -1,3 +1,4 @@
+import errno
 import os
 from pathlib import Path
 
@@ -124,3 +125,16 @@ def test_saving_a_stored_image_again_restarts_its_grace(tmp_path: Path) -> None:
     assert blobs.save(PNG)[0] == ref
     assert blobs.collect(keep=set(), older_than_s=86_400) == 0
     assert stored.is_file()
+
+
+def test_an_upload_to_a_read_only_folder_is_a_store_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def read_only(*_args: object, **_kwargs: object) -> None:
+        raise OSError(errno.EROFS, "Read-only file system")
+
+    monkeypatch.setattr(Path, "write_bytes", read_only)
+    monkeypatch.setattr(Path, "unlink", read_only)
+    with pytest.raises(BlobUnavailable) as raised:
+        Blobs(tmp_path).save(PNG)
+    assert raised.value.errno == errno.EROFS
