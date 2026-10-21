@@ -64,9 +64,11 @@ function importPart(ctx, refreshList) {
                 showPreview(toml, previewed, 'The stations changed in the meantime. Check the differences again.');
             }
         });
+        // replaceChildren turns null and arrays into text, so the parts
+        // are listed flat.
         area.replaceChildren(
-            extraNote ? el('p', {class: 'message', role: 'alert'}, extraNote) : null,
-            importSummary(changes, previewed.notes || []).map((line) => el('p', null, line)),
+            ...(extraNote ? [el('p', {class: 'message', role: 'alert'}, extraNote)] : []),
+            ...importSummary(changes, previewed.notes || []).map((line) => el('p', null, line)),
             diffTable(changes),
             el('div', {class: 'actions'},
                 button('arrow_upward', 'Replace the stations with this file', store, {class: 'danger'}),

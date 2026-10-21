@@ -2,7 +2,8 @@
 // then switch a station off, reorder, edit, have a dangerous title rule
 // refused, restore from the history, change the settings, lock the player
 // with a PIN and pass it, hide a chosen station behind it, confirm account
-// changes with a code, change the password, log out and log in with it,
+// changes with a code, export and import the stations, upload a logo,
+// change the password, log out and log in with it,
 // checking after each step
 // that the player's /api/channels follows. Also checks that the pages have no
 // sideways scroll at phone and laptop sizes, and no page or CSP errors.
@@ -27,6 +28,7 @@ import {createServer} from 'node:net';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {deflateSync} from 'node:zlib';
 
 import {connect, sleep} from './cdp.mjs';
 
@@ -1299,6 +1301,205 @@ async function run() {
             await buttonNamed('Leave without saving');
             return (await until(`location.hash === '#stations'`)) ? null : 'did not leave after the answer';
         });
+
+        // Export, import and logo upload run on the History and Edit pages
+        // with files chosen through the page's own hidden file inputs.
+        const transfer = mkdtempSync(join(tmpdir(), 'tunebox-transfer-'));
+        const setFile = async (selector, path) => {
+            const document = await send('DOM.getDocument', {depth: 0});
+            const found = await send('DOM.querySelector', {nodeId: document.result.root.nodeId, selector});
+            if (!found.result || !found.result.nodeId) {
+                throw new Error(`no ${selector}`);
+            }
+            await send('DOM.setFileInputFiles', {files: [path], nodeId: found.result.nodeId});
+        };
+        const openPage = async (hash, ready) => {
+            await evaluate(`window.location.hash = ${JSON.stringify(hash)}`);
+            return until(ready);
+        };
+        const exportText = () => evaluate(`fetch('/admin/api/export').then((r) => r.text())`);
+        // Chooses a file for the import, waits for its preview.
+        const previewImport = async (text, name) => {
+            const path = join(transfer, name);
+            writeFileSync(path, text);
+            if (!(await openPage('#history', `document.querySelector('input[name=import-file]')`))) {
+                throw new Error('no import button on the History page');
+            }
+            await setFile('input[name=import-file]', path);
+            if (!(await until(`document.querySelector('.restore .actions')`))) {
+                throw new Error(`no preview (message: ${await message()})`);
+            }
+        };
+        // Clicks Replace, gives the fresh code when asked, returns what the
+        // page says once it has answered.
+        const replaceWithFile = async () => {
+            await evaluate(`document.querySelector('.message').textContent = ''`);
+            await buttonNamed('Replace the stations with this file');
+            if (!(await until(`document.querySelector('form.confirm-code') || document.querySelector('.message').textContent !== ''`))) {
+                throw new Error('no answer to Replace');
+            }
+            if (await evaluate(`Boolean(document.querySelector('form.confirm-code'))`)) {
+                const code = await freshCode();
+                await evaluate(`(() => {
+                    const form = document.querySelector('form.confirm-code');
+                    form.code.value = ${JSON.stringify(code)};
+                    form.requestSubmit();
+                })()`);
+                if (!(await until(`document.querySelector('.message').textContent !== ''`))) {
+                    throw new Error('no answer after the code');
+                }
+            }
+            return message();
+        };
+
+        await step('export then import changes nothing', async () => {
+            const text = await exportText();
+            if (text.indexOf('[[channels]]') < 0) {
+                return `the export holds no stations: ${text.slice(0, 80)}`;
+            }
+            await previewImport(text, 'export.toml');
+            const summary = await evaluate(`document.querySelector('.restore').textContent`);
+            if (summary.indexOf('The file matches what is stored now.') < 0) {
+                return `preview says: ${summary.slice(0, 120)}`;
+            }
+            const said = await replaceWithFile();
+            return said === 'No changes to save.' ? null : `message: ${said}`;
+        });
+
+        await step('an import shows its differences', async () => {
+            const before = (await channels(base)).find((c) => c.id === 'first').name;
+            const text = await exportText();
+            const edited = text.replace(/(\[\[channels\]\][\s\S]*?\nname = ")([^"]*)"/, '$1Imported Station"');
+            if (edited === text) {
+                return 'no station name found to edit in the export';
+            }
+            await previewImport(edited, 'renamed.toml');
+            const table = await evaluate(`document.querySelector('.restore .diff') ? document.querySelector('.restore .diff').textContent : ''`);
+            if (table.indexOf('Imported Station') < 0 || table.indexOf(before) < 0) {
+                return `the preview does not list the rename: ${table.slice(0, 200)}`;
+            }
+            const said = await replaceWithFile();
+            if (said !== 'Imported.') {
+                return `message: ${said}`;
+            }
+            for (let i = 0; i < 30; i++) {
+                if ((await channels(base)).some((c) => c.id === 'first' && c.name === 'Imported Station')) {
+                    break;
+                }
+                await sleep(100);
+            }
+            if (!(await openPage('#stations', `document.querySelector('.station[data-id="first"]')`))) {
+                return 'stations not listed';
+            }
+            const listed = await evaluate(`document.querySelector('.station[data-id="first"]').textContent`);
+            return listed.indexOf('Imported Station') >= 0 ? null : `the list shows: ${listed}`;
+        });
+
+        // A small solid PNG, made here so the check needs no fixture file.
+        const crcTable = Array.from({length: 256}, (_, n) => {
+            let c = n;
+            for (let k = 0; k < 8; k++) {
+                c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+            }
+            return c >>> 0;
+        });
+        const crc = (bytes) => {
+            let c = 0xffffffff;
+            for (const byte of bytes) {
+                c = crcTable[(c ^ byte) & 0xff] ^ (c >>> 8);
+            }
+            return (c ^ 0xffffffff) >>> 0;
+        };
+        const chunk = (type, data) => {
+            const body = Buffer.concat([Buffer.from(type), data]);
+            const head = Buffer.alloc(4);
+            head.writeUInt32BE(data.length);
+            const tail = Buffer.alloc(4);
+            tail.writeUInt32BE(crc(body));
+            return Buffer.concat([head, body, tail]);
+        };
+        const smallPng = () => {
+            const size = 8;
+            const header = Buffer.alloc(13);
+            header.writeUInt32BE(size, 0);
+            header.writeUInt32BE(size, 4);
+            header.set([8, 2, 0, 0, 0], 8);
+            const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 3, 0xc8)]);
+            return Buffer.concat([
+                Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+                chunk('IHDR', header),
+                chunk('IDAT', deflateSync(Buffer.concat(Array(size).fill(row)))),
+                chunk('IEND', Buffer.alloc(0)),
+            ]);
+        };
+        const logoField = () => evaluate(`document.querySelector('form.edit').elements.logo.value`);
+
+        await step('an uploaded logo shows in the player', async () => {
+            writeFileSync(join(transfer, 'logo.png'), smallPng());
+            if (!(await openPage('#edit/first', `document.querySelector('form.edit') && document.querySelector('input[name=logo-file]')`))) {
+                return 'no edit form';
+            }
+            await setFile('input[name=logo-file]', join(transfer, 'logo.png'));
+            if (!(await until(`document.querySelector('form.edit').elements.logo.value.startsWith('blob:')`))) {
+                return `the Logo field holds ${await logoField()} (message: ${await message()})`;
+            }
+            if (!(await until(`(() => {
+                const img = document.querySelector('.logo-preview img.logo-full');
+                return img && img.naturalWidth > 0 && document.querySelector('.logo-preview img.logo-small');
+            })()`))) {
+                return 'the preview shows no image';
+            }
+            const reference = await logoField();
+            await evaluate(`document.querySelector('form.edit').requestSubmit()`);
+            if (!(await until(`location.hash === '#stations' && document.querySelector('.station')`))) {
+                return `the page stayed on the form (message: ${await message()})`;
+            }
+            // A background worker copies the logo; the player reads its path.
+            let path = null;
+            for (let i = 0; i < 80 && !path; i++) {
+                const found = (await channels(base)).find((c) => c.id === 'first');
+                path = found && found.logo;
+                if (!path) {
+                    await sleep(100);
+                }
+            }
+            if (!path) {
+                return `the player's list gives no logo for ${reference}`;
+            }
+            const served = await evaluate(`fetch(${JSON.stringify(path)}).then((r) => r.status + ' ' + r.headers.get('content-type'))`);
+            if (served !== '200 image/png') {
+                return `${path} answers ${served}`;
+            }
+            const drawn = await evaluate(`new Promise((done) => {
+                const img = new Image();
+                img.onload = () => done(img.naturalWidth);
+                img.onerror = () => done(0);
+                img.src = ${JSON.stringify(path)};
+            })`);
+            return drawn > 0 ? null : `${path} does not decode as an image`;
+        });
+
+        await step('a file that is not an image is refused', async () => {
+            writeFileSync(join(transfer, 'page.png'), '<!doctype html><title>not an image</title><script>1</script>');
+            if (!(await openPage('#edit/first', `document.querySelector('form.edit') && document.querySelector('input[name=logo-file]')`))) {
+                return 'no edit form';
+            }
+            const before = await logoField();
+            await setFile('input[name=logo-file]', join(transfer, 'page.png'));
+            const wanted = 'That file is not a PNG, JPEG, WebP or SVG image.';
+            // An upload refusal is not a form error: it is said in the
+            // page's own message line.
+            if (!(await until(`document.querySelector('.message').textContent === ${JSON.stringify(wanted)}`))) {
+                return `message: ${await message()}`;
+            }
+            const after = await logoField();
+            if (after !== before) {
+                return `the Logo field changed from ${before} to ${after}`;
+            }
+            await evaluate(`[...document.querySelectorAll('form.edit .actions button')].find((b) => b.textContent.trim() === 'Cancel').click()`);
+            return (await until(`location.hash === '#stations' && document.querySelector('.station')`)) ? null : 'could not leave the form';
+        });
+        rmSync(transfer, {recursive: true, force: true});
 
         // A first start: no account, the setup page on, the link from the log.
         await step('the setup link shows the form, keeps its secret and leaves the address bar clean', async () => {
