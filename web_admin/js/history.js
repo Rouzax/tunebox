@@ -1,6 +1,6 @@
 // Every change, newest first, with what it changed and a way back.
-import {askCode, button, el, icon, when} from './dom.js';
-import {diffStates, historyLabel, importSummary, tickets} from './state.js';
+import {askCode, button, el, when} from './dom.js';
+import {diffStates, exportName, historyLabel, historyTarget, importSummary, tickets} from './state.js';
 
 function show(value) {
     return value === undefined ? '' : value;
@@ -44,10 +44,10 @@ function importPart(ctx, refreshList) {
     function showPreview(toml, previewed, extraNote) {
         const changes = diffStates(ctx.config.state, previewed.state);
         const store = guarded(ctx, async () => {
-            let result = await ctx.importFile(toml, previewed.state);
+            let result = await ctx.importFile(toml);
             // A code that went stale before the import arrived asks again.
             while (result.reauth && current() && await askCode(ctx, codeArea)) {
-                result = await ctx.importFile(toml, previewed.state);
+                result = await ctx.importFile(toml);
             }
             if (!current()) {
                 return;
@@ -95,9 +95,27 @@ function importPart(ctx, refreshList) {
         }
     });
     chooser.addEventListener('change', choose);
+    // Fetched through the shell so an ended session goes to the login form
+    // and a refusal shows its message; only a good answer is saved as a file.
+    const download = guarded(ctx, async () => {
+        const answer = await ctx.request('GET', 'export', undefined, {asText: true});
+        if (!current() || answer.status === 401) {
+            return;
+        }
+        if (!answer.ok) {
+            ctx.fail(answer.data);
+            return;
+        }
+        const url = URL.createObjectURL(new Blob([answer.data], {type: 'application/toml'}));
+        const link = el('a', {href: url, download: exportName(answer.disposition), hidden: true});
+        document.body.append(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    });
     return el('div', {class: 'transfer'},
         el('div', {class: 'actions'},
-            el('a', {class: 'button quiet', href: '/admin/api/export', download: ''}, icon('arrow_downward'), ' Export'),
+            button('arrow_downward', 'Export', download, {class: 'quiet'}),
             button('arrow_upward', 'Import', () => chooser.click(), {class: 'quiet'}),
             chooser),
         area);
@@ -127,7 +145,7 @@ async function list(root, ctx) {
             items.append(el('li', null, el('a', {href: `#history/${entry.id}`},
                 el('span', {class: 'when'}, when(entry.at)),
                 el('span', null, historyLabel(entry.kind, entry.target)),
-                entry.target ? el('span', {class: 'id'}, entry.target) : null)));
+                historyTarget(entry.kind, entry.target) ? el('span', {class: 'id'}, entry.target) : null)));
             last = entry.id;
         }
         more.hidden = !data.more;
@@ -174,7 +192,7 @@ async function detail(root, ctx, id) {
             diffTable(changes),
             changes.length ? el('div', {class: 'actions'},
                 button('undo', 'Restore', guarded(ctx, async () => {
-                    const result = await ctx.restore(data.entry.id, data.before);
+                    const result = await ctx.restore(data.entry.id);
                     if (result.ok) {
                         ctx.go('#history', true);
                     }
@@ -183,7 +201,7 @@ async function detail(root, ctx, id) {
     }));
     root.replaceChildren(
         el('h2', null, historyLabel(data.entry.kind, data.entry.target)),
-        el('p', {class: 'hint'}, when(data.entry.at), data.entry.target ? ` · ${data.entry.target}` : ''),
+        el('p', {class: 'hint'}, when(data.entry.at), historyTarget(data.entry.kind, data.entry.target) ? ` · ${data.entry.target}` : ''),
         diffTable(diffStates(data.before, data.after)),
         el('div', {class: 'actions'},
             offer,

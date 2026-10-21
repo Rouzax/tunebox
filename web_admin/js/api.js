@@ -11,7 +11,9 @@ export function setCsrf(token) {
 const DEADLINE_MS = 20000;
 
 // Sends a body as it is (a JSON string, or the bytes of an image) under its
-// own content type, with the session's CSRF token.
+// own content type, with the session's CSRF token. options.asText answers a
+// good response's body as text, with its Content-Disposition (a file to
+// save); an error answer is JSON as always.
 export async function send(method, path, body, contentType, options) {
     const fetchFn = (options && options.fetchFn) || fetch;
     const deadlineMs = (options && options.deadlineMs) || DEADLINE_MS;
@@ -30,6 +32,10 @@ export async function send(method, path, body, contentType, options) {
             cache: 'no-store',
             signal: abort.signal,
         });
+        if (options && options.asText && response.ok) {
+            return {ok: true, status: response.status, data: await response.text(),
+                disposition: response.headers.get('Content-Disposition')};
+        }
         let data = {};
         if (response.status !== 204) {
             // A proxy's error page is not JSON; it still counts as an answer.

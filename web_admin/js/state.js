@@ -306,6 +306,18 @@ const HISTORY_LABELS = {
 };
 
 // An import from the panel names a file; the first-start import has no target.
+// Where an import came from is in its label; any other change names the
+// station or page it touched.
+export function historyTarget(kind, target) {
+    return kind === 'import' ? null : target;
+}
+
+// The name the server gave an exported file, for saving it.
+export function exportName(disposition) {
+    const found = /filename="([^"]+)"/.exec(disposition || '');
+    return found ? found[1] : 'tunebox.toml';
+}
+
 export function historyLabel(kind, target) {
     if (kind === 'import') {
         return target === 'panel' ? 'Imported from a file' : 'Imported from tunebox.toml';

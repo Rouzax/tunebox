@@ -413,14 +413,15 @@ A file that cannot be used is refused before anything is stored, and the
 message says why: broken TOML names the line, and an unknown key, an
 invalid station or a refused title rule names the field. The preview does
 not time new title rules; Replace does, so a slow rule can still be refused
-at that step. If the stations changed elsewhere in the meantime, Replace
+at that step. A file in which no station is enabled is refused, in the
+preview and at Replace alike, while a station is enabled now. If the stations changed elsewhere in the meantime, Replace
 says so and shows the differences again, against what is stored now.
 
 An export names uploaded logos rather than containing them (see
 [Logos](#logos)). Imported on the same tunebox, they come back with it.
 Another tunebox that does not have those uploads refuses the file and names
 the station, for example
-`channels[2].logo: no uploaded logo blob:3f2a...`. Put a logo link in that
+`channels[2] (owr).logo: no uploaded logo blob:3f2a...`. Put a logo link in that
 station's `logo` in the file (or remove the line), import, and upload the
 logo again there.
 
@@ -727,6 +728,8 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | `/admin/` answers 404 although the panel is on, and the log says `admin_not_nearby` | `public_origin` is plain http and the request did not come from the home network: from the internet, or through a proxy that is not in `trusted_proxies`. | Open the panel directly at `public_origin` from the home network or the VPN. Through a proxy, set up https instead. |
 | `config_file_ignored` in the log | The admin panel is on, so tunebox does not read the `parts` it names from `tunebox.toml` (`channels`, `defaults`, `player`); the database has its own, and they differ. | Change stations in the panel. For `defaults` or `player`, see [Set up the admin panel](#set-up-the-admin-panel). To stop the warning, make the file match or remove those parts from it. |
 | Saving in the admin panel says "Changed elsewhere" | Someone saved in another tab or browser first. | On the station list, check the stations it now shows and make your change again if it is still needed. In the edit form, check it and save again. |
+| The edit form says "tunebox cannot store the image right now" after an upload (`logo_store_failed` in the log) | `data/logos/blobs/` cannot be written: the disk is full or the folder is not owned by user id 1000. | Free disk space or fix the owner (`sudo chown -R 1000:1000 data`), then upload the image again. |
+| `logo_missing` in the log; a station shows no logo | The station names an uploaded logo (`blob:...`) whose file is gone from `data/logos/blobs/`, for example after that folder was deleted or the database was restored without it. | Edit the station, upload the logo again and save. Back up `data/logos/blobs/` together with `tunebox.db`. |
 | Saving a title rule is refused | The pattern could stall tunebox (see [Manage the stations](#manage-the-stations)). | Simplify it as the message says: no repeat inside a repeated group, such as `(\w+\s?)*`, and no three repeats in a row that take the same characters, such as `.*-.*-.*` (use `[^-]*` for the parts between separators). |
 | The admin page says "No admin account yet" | No account was set up. | Run the setup command in [Set up the admin panel](#set-up-the-admin-panel). |
 | The log says `tunebox: cannot listen on 0.0.0.0:<port>` | `port` in `[server]` was changed to one that is not free inside the container. | Remove `port` from `[server]` (8080 is the default) and change the published port in `compose.yaml` instead. |

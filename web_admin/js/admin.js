@@ -26,6 +26,7 @@ const ERRORS = {
     too_large: 'That is too large to send.',
     not_an_image: 'That file is not a PNG, JPEG, WebP or SVG image.',
     unsupported_type: 'Upload a PNG, JPEG, WebP or SVG image.',
+    logo_store_failed: 'tunebox cannot store the image right now. Check the free disk space.',
 };
 
 function show(id) {
@@ -49,14 +50,9 @@ function fail(data) {
     message(ERRORS[data.error] || 'Something went wrong.');
 }
 
-// The server names fields by position (channels[3].streams[0].url); the
-// station's id next to it says which one that is.
-function explain(text, state) {
-    return text.replace(/channels\[(\d+)\]/g, (whole, index) => {
-        const row = state.channels[Number(index)];
-        return row ? `${whole} (${row.id})` : whole;
-    });
-}
+// The server holds a body this long, whatever its size (BODY_DEADLINE_S); a
+// shorter wait here would cut off a slow upload it would still accept.
+const UPLOAD_DEADLINE_MS = 30000;
 
 const view = document.querySelector('#shell .view');
 let keepMessage = false;
@@ -72,7 +68,7 @@ const ctx = {
     stillOpen: () => true,
     // The server's limits, from GET state; these are what it enforces
     // before it has answered.
-    limits: {password_min: 12, pin_min: 6, pin_max: 8},
+    limits: {password_min: 12, pin_min: 6, pin_max: 8, logo_max: 2000000},
     // A page with edits of its own sets {dirty(), ask(proceed)}: ask shows
     // its question and calls proceed when the edits may go.
     unsaved: null,
@@ -109,32 +105,34 @@ const ctx = {
     // login passes the one it started from, so the stale check still holds.
     save(state, target, done, basedOn) {
         const body = {based_on: basedOn === undefined ? ctx.config.version : basedOn, state, target};
-        return once(() => call('POST', 'config', body), state, done, {state, target, done, basedOn: body.based_on});
+        return once(() => call('POST', 'config', body), done, {state, target, done, basedOn: body.based_on});
     },
     // Any other admin call: a refused session goes to the login form, as
-    // it does for saves.
-    async request(method, path, body) {
-        const answer = await call(method, path, body);
+    // it does for saves. options as for call.
+    async request(method, path, body, options) {
+        const answer = await call(method, path, body, options);
         if (answer.status === 401) {
             await answered(401, answer.data);
         }
         return answer;
     },
-    // Stores a logo image; the answer names it as blob:<sha256>.
-    async upload(file) {
-        const answer = await send('POST', 'logos', file, file.type || 'application/octet-stream');
+    // Stores a logo image; the answer names it as blob:<sha256>. kept()
+    // gives the {state, target, done} of the form's unsaved change, which a
+    // session that ended meanwhile offers again after login, as for a save.
+    async upload(file, kept) {
+        const answer = await send('POST', 'logos', file, file.type, {deadlineMs: UPLOAD_DEADLINE_MS});
         if (answer.status === 401) {
-            await answered(401, answer.data);
+            const change = kept ? kept() : null;
+            await answered(401, answer.data, change && {...change, basedOn: ctx.config.version});
         }
         return answer;
     },
     // Replaces the stations with an imported file, as one save. A stale
     // version reloads and a missing fresh code is reported, both without
-    // redrawing the page, so it can show the file again; state is the file's, for naming
-    // a refused station.
-    async importFile(toml, state) {
+    // redrawing the page, so it can show the file again.
+    async importFile(toml) {
         const body = {toml, based_on: ctx.config.version};
-        return once(() => call('POST', 'import', body), state, 'Imported.', undefined, async (answer) => {
+        return once(() => call('POST', 'import', body), 'Imported.', undefined, async (answer) => {
             if (answer.status === 409) {
                 await ctx.reload();
                 return {ok: false, stale: true};
@@ -145,11 +143,9 @@ const ctx = {
             return null;
         });
     },
-    // restoredState is the state the entry brings back, so a refusal names
-    // that state's stations.
-    restore(entryId, restoredState) {
+    restore(entryId) {
         const body = {based_on: ctx.config.version};
-        return once(() => call('POST', `history/${entryId}/restore`, body), restoredState, 'Restored.');
+        return once(() => call('POST', `history/${entryId}/restore`, body), 'Restored.');
     },
 };
 
@@ -161,7 +157,7 @@ let saving = false;
 // the page asks what is stored before it draws anything.
 // early may answer for the caller before the shared handling (a page that
 // keeps its own state across a refusal); null leaves the answer to commit.
-async function once(send, state, done, retry, early) {
+async function once(send, done, retry, early) {
     if (saving) {
         return {ok: false};
     }
@@ -171,7 +167,7 @@ async function once(send, state, done, retry, early) {
     try {
         const answer = await send();
         const handled = early ? await early(answer) : null;
-        return handled || await commit(answer, state, done, retry);
+        return handled || await commit(answer, done, retry);
     } catch (error) {
         try {
             await ctx.reload();
@@ -196,7 +192,7 @@ function onForm() {
 // The form stays as typed after a refusal, also a stale one (its next Save
 // applies the edit to the reloaded state); the other pages are drawn again
 // from the stored state after any refusal, so a refused switch flips back.
-async function commit(answer, state, done, retry) {
+async function commit(answer, done, retry) {
     const {ok, status, data} = answer;
     if (ok) {
         try {
@@ -226,7 +222,7 @@ async function commit(answer, state, done, retry) {
         return {ok: false, stale: true};
     }
     if (status === 400 && data.error === 'invalid') {
-        const text = explain(data.message, state);
+        const text = data.message;
         if (!onForm()) {
             route();
         }

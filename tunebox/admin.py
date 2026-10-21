@@ -36,6 +36,7 @@ from tunebox.config import (
     SOURCE_SETTINGS,
     AdminConfig,
     ConfigError,
+    ConfigState,
     state_from_import,
     state_to_toml,
     validate_state,
@@ -52,6 +53,7 @@ from tunebox.settings import (
     SettingsUnavailable,
     SettingsWriteError,
     StaleVersion,
+    keeps_a_channel,
     state_from_dict,
     state_to_json,
 )
@@ -157,6 +159,22 @@ def _json(status: int, payload: object, *headers: tuple[str, str]) -> Response:
 
 def _error(status: int, name: str) -> Response:
     return _json(status, {"error": name})
+
+
+def _invalid(message: str, state: ConfigState | None) -> Response:
+    """A refused state. The server names fields by position
+    (channels[3].streams[0].url); the station's id next to it says which
+    one that is."""
+    if state is not None:
+
+        def named(found: re.Match[str]) -> str:
+            index = int(found.group(1))
+            if index >= len(state.channels):
+                return found.group(0)
+            return f"{found.group(0)} ({state.channels[index].id})"
+
+        message = re.sub(r"channels\[(\d+)\]", named, message)
+    return _json(400, {"error": "invalid", "message": message})
 
 
 class Admin:
@@ -389,6 +407,7 @@ class Admin:
                     "password_min": crypto.MIN_PASSWORD,
                     "pin_min": PIN_MIN,
                     "pin_max": PIN_MAX,
+                    "logo_max": MAX_BLOB,
                 },
             },
         )
@@ -577,6 +596,7 @@ class Admin:
     def _commit(
         self, raw: object, based_on: int, kind: str, target: str | None, client: str
     ) -> Response:
+        state: ConfigState | None = None
         try:
             state = state_from_dict(raw)
             validate_state(state)
@@ -585,10 +605,10 @@ class Admin:
                 return _json(409, {"error": "stale", "version": version})
             reason = refused(state, stored, self._samples) or self._blobs.missing(state)
             if reason:
-                return _json(400, {"error": "invalid", "message": reason})
+                return _invalid(reason, state)
             version, changed = self._settings.commit_changed(state, based_on, kind, target)
         except ConfigError as error:
-            return _json(400, {"error": "invalid", "message": str(error)})
+            return _invalid(str(error), state)
         except StaleVersion as error:
             return _json(409, {"error": "stale", "version": error.current})
         # An unchanged save still asks for the apply: after a failed one the
@@ -618,7 +638,7 @@ class Admin:
             event(
                 log, logging.WARNING, "logo_store_failed", client=request.client, errno=error.errno
             )
-            return _error(503, "read_only")
+            return _error(503, "logo_store_failed")
         event(
             log,
             logging.INFO,
@@ -665,15 +685,17 @@ class Admin:
         body = _body(request, ("toml",))
         if body is None:
             return _error(400, "bad_request")
+        state: ConfigState | None = None
         try:
             state, notes = state_from_import(body["toml"])
             validate_state(state)
             stored, _ = self._settings.load()
+            keeps_a_channel(stored, state)
         except ConfigError as error:
-            return _json(400, {"error": "invalid", "message": str(error)})
+            return _invalid(str(error), state)
         reason = lint_new(state, stored) or self._blobs.missing(state)
         if reason:
-            return _json(400, {"error": "invalid", "message": reason})
+            return _invalid(reason, state)
         return _json(200, {"state": json.loads(state_to_json(state)), "notes": notes})
 
     def _import(self, request: Request, session: Session) -> Response:
@@ -685,11 +707,12 @@ class Admin:
         stale = self._fresh(session)
         if stale is not None:
             return stale
+        state: ConfigState | None = None
         try:
             state, _notes = state_from_import(text)
             validate_state(state)
         except ConfigError as error:
-            return _json(400, {"error": "invalid", "message": str(error)})
+            return _invalid(str(error), state)
         return self._commit(
             json.loads(state_to_json(state)), based_on, "import", "panel", request.client
         )

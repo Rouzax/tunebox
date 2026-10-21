@@ -113,16 +113,19 @@ function sourceEditor(schema, source) {
     }};
 }
 
-// The server's limit for an uploaded image, in bytes.
-const MAX_LOGO_BYTES = 2000000;
+// The types the server accepts for an upload; the image itself is judged by
+// its bytes there.
+const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
 
 // An uploaded logo is shown from the panel at the size of the page and of a
-// list row; a URL is only downloaded after saving.
-function logoPart(ctx, input) {
+// list row; a URL is only downloaded after saving. kept() gives the form's
+// unsaved change, which an upload that meets an ended session hands to the
+// login so it can be offered again.
+function logoPart(ctx, input, kept) {
     const current = ctx.stillOpen;
     const preview = el('div', {class: 'logo-preview'});
     const picker = el('input', {type: 'file', name: 'logo-file', hidden: true,
-        accept: 'image/png,image/jpeg,image/webp,image/svg+xml'});
+        accept: LOGO_TYPES.join(',')});
     const note = el('span', {class: 'hint', role: 'alert'});
     function draw() {
         const shown = logoPreview(input.value.trim());
@@ -144,14 +147,18 @@ function logoPart(ctx, input) {
         if (!file) {
             return;
         }
-        if (file.size > MAX_LOGO_BYTES) {
-            note.textContent = 'The image is larger than 2 MB.';
+        if (!LOGO_TYPES.includes(file.type)) {
+            note.textContent = 'Upload a PNG, JPEG, WebP or SVG image.';
+            return;
+        }
+        if (file.size > ctx.limits.logo_max) {
+            note.textContent = `The image is larger than ${ctx.limits.logo_max / 1000000} MB.`;
             return;
         }
         note.textContent = '';
         let answer;
         try {
-            answer = await ctx.upload(file);
+            answer = await ctx.upload(file, kept);
         } catch (error) {
             note.textContent = 'Could not reach tunebox.';
             return;
@@ -192,7 +199,10 @@ export function render(root, ctx, id) {
     const groups = [['', 'None'], ...state.groups.map((name) => [name, name])];
     const rules = doc.rules || {};
     const logoInput = text('logo', doc.logo, {type: 'url', placeholder: 'https://'});
-    const logo = logoPart(ctx, logoInput);
+    const logo = logoPart(ctx, logoInput, () => {
+        const change = pendingChange();
+        return change.problem ? null : change;
+    });
     const form = el('form', {class: 'edit', novalidate: true},
         el('h2', null, existing ? `Edit ${doc.name || id}` : 'New station'),
         field('Name', text('name', doc.name, {required: true})),
@@ -276,33 +286,43 @@ export function render(root, ctx, id) {
         },
     };
 
-    form.addEventListener('submit', async (event) => {
-        event.preventDefault();
+    // The save the form asks for: {state, target, done}, or {problem} with
+    // the reason it cannot be made.
+    function pendingChange() {
         const next = collect();
         const newId = next.id;
-        const out = next.doc;
-        const show = (textValue) => {
-            error.textContent = textValue;
-            error.hidden = !textValue;
-        };
         if (!existing && !validId(newId)) {
-            show('The id needs lower-case letters, digits and - only, and must not start with -.');
-            return;
+            return {problem: 'The id needs lower-case letters, digits and - only, and must not start with -.'};
         }
         // The stored state at the time of saving, which a stale answer
         // reloads in between.
         const current = ctx.config.state;
         if (existing && !current.channels.some((item) => item.id === row.id)) {
-            show(`${row.id} was deleted elsewhere in the meantime; nothing was saved.`);
-            return;
+            return {problem: `${row.id} was deleted elsewhere in the meantime; nothing was saved.`};
         }
         if (!existing && current.channels.some((item) => item.id === newId)) {
-            show(`There is already a station with the id ${newId}.`);
+            return {problem: `There is already a station with the id ${newId}.`};
+        }
+        return {
+            state: existing ? replaceStation(current, row.id, next) : addStation(current, next),
+            target: newId,
+            done: `Saved ${next.doc.name}.`,
+        };
+    }
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const show = (textValue) => {
+            error.textContent = textValue;
+            error.hidden = !textValue;
+        };
+        const change = pendingChange();
+        if (change.problem) {
+            show(change.problem);
             return;
         }
-        const nextState = existing ? replaceStation(current, row.id, next) : addStation(current, next);
         show('');
-        const result = await ctx.save(nextState, newId, `Saved ${out.name}.`);
+        const result = await ctx.save(change.state, change.target, change.done);
         if (result.ok) {
             ctx.unsaved = null;
             ctx.go('#stations', true);

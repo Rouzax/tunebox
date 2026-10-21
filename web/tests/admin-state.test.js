@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
-    addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, historyLabel, importSummary, logoPreview, moveGroup,
+    addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, exportName, historyLabel, historyTarget, importSummary, logoPreview, moveGroup,
     moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setSettings, stationsByGroup, tickets, validId,
 } from '../../web_admin/js/state.js';
 
@@ -186,4 +186,16 @@ test('historyLabel names a panel import apart from the first-start import', () =
     assert.equal(historyLabel('file', null), 'Taken from tunebox.toml');
     assert.equal(historyLabel('restore', 'x'), 'Restored');
     assert.equal(historyLabel('other', null), 'other');
+});
+
+test('historyTarget leaves out the target of an import, which its label already says', () => {
+    assert.equal(historyTarget('import', 'panel'), null);
+    assert.equal(historyTarget('edit', 'owr'), 'owr');
+    assert.equal(historyTarget('edit', null), null);
+});
+
+test('exportName reads the filename the server sent, with a fallback', () => {
+    assert.equal(exportName('attachment; filename="tunebox-2026-10-21.toml"'), 'tunebox-2026-10-21.toml');
+    assert.equal(exportName(null), 'tunebox.toml');
+    assert.equal(exportName('attachment'), 'tunebox.toml');
 });

@@ -744,7 +744,7 @@ def test_preview_shows_the_state_and_notes_without_storing(world: World) -> None
         ("[[channels]\n", "line"),
         ("surprise = 1\n", "surprise"),
         (TWO_SAME_IDS, "duplicate id"),
-        (STATIONS_TOML.replace('name = "Late"', "name = 1979-05-27"), "channels[1].name"),
+        (STATIONS_TOML.replace('name = "Late"', "name = 1979-05-27"), "channels[1] (late).name"),
         (SLOW_RULE, "rules.played_by"),
     ],
 )
@@ -757,6 +757,34 @@ def test_a_broken_import_is_refused_with_its_reason(world: World, text: str, nam
         assert answer.status == 400
         assert names in json_of(answer)["message"]
     assert world.settings.load()[1] == 0
+
+
+def test_the_last_enabled_station_cannot_go_by_import_nor_preview(world: World) -> None:
+    csrf = world.login()
+    assert save(world, csrf, 0, state_of(station("owr"))).status == 200
+    fresh(world, csrf)
+    text = STATIONS_TOML.replace('id = "owr"', 'id = "owr"\nenabled = false').split("[[channels]]")
+    text = "[[channels]]" + text[1]
+    for path, body in (
+        ("/admin/api/import/preview", {"toml": text}),
+        ("/admin/api/import", {"toml": text, "based_on": 1}),
+    ):
+        answer = world.call("POST", path, body, csrf=csrf)
+        assert answer.status == 400
+        assert json_of(answer)["message"] == "channels: at least one enabled channel is required"
+    assert world.settings.load()[1] == 1
+
+
+def test_a_refused_import_names_the_station_by_id(world: World) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+    gone = "blob:" + "1" * 64
+    text = STATIONS_TOML.replace('name = "Late"', f'name = "Late"\nlogo = "{gone}"')
+    preview = world.call("POST", "/admin/api/import/preview", {"toml": text}, csrf=csrf)
+    stored = world.call("POST", "/admin/api/import", {"toml": text, "based_on": 0}, csrf=csrf)
+    for answer in (preview, stored):
+        assert answer.status == 400
+        assert json_of(answer)["message"].startswith("channels[1] (late).logo: ")
 
 
 def test_the_preview_does_not_lint_patterns_the_store_already_holds(
@@ -776,7 +804,7 @@ def test_the_preview_does_not_lint_patterns_the_store_already_holds(
     changed = text.replace("Played by", "Played with")
     answer = world.call("POST", "/admin/api/import/preview", {"toml": changed}, csrf=csrf)
     assert answer.status == 400
-    assert json_of(answer)["message"] == "channels[0].rules.played_by: now refused"
+    assert json_of(answer)["message"] == "channels[0] (owr).rules.played_by: now refused"
 
 
 def test_a_deeply_nested_import_is_refused_not_a_crash(world: World) -> None:
@@ -922,7 +950,7 @@ def test_an_invalid_state_names_the_field(world: World) -> None:
     answer = save(world, csrf, 0, state_of(bad))
     assert answer.status == 400
     assert json_of(answer)["error"] == "invalid"
-    assert "channels[0].stream_url" in json_of(answer)["message"]
+    assert "channels[0] (a).stream_url" in json_of(answer)["message"]
     shape = save(world, csrf, 0, {"channels": [5]})
     assert json_of(shape) == {"error": "invalid", "message": "channels[0]: expected an object"}
     assert world.applied == []
@@ -941,7 +969,7 @@ def test_a_refused_pattern_names_the_field(world: World) -> None:
     answer = save(world, csrf, 0, state_of(station("a"), station("b", rules=rules)))
     assert answer.status == 400
     message = json_of(answer)["message"]
-    assert "channels[1].rules.played_by" in message
+    assert "channels[1] (b).rules.played_by" in message
     assert "nested repetition" in message
 
 
@@ -960,7 +988,7 @@ def test_a_slow_new_pattern_is_refused_naming_its_field(
     ]
     answer = save(world, csrf, 0, state_of(*stations))
     assert answer.status == 400
-    assert json_of(answer)["message"].startswith("channels[1].rules.played_by: too slow")
+    assert json_of(answer)["message"].startswith("channels[1] (b).rules.played_by: too slow")
 
 
 def test_a_check_that_cannot_run_refuses_the_save(
@@ -1020,7 +1048,7 @@ def test_an_invalid_pattern_is_named_by_validation(world: World) -> None:
     csrf = world.login()
     answer = save(world, csrf, 0, state_of(station("owr", rules={"played_by": "("})))
     assert answer.status == 400
-    assert json_of(answer)["message"].startswith("channels[0].rules.played_by")
+    assert json_of(answer)["message"].startswith("channels[0] (owr).rules.played_by")
 
 
 def test_restore_applies_the_old_state(world: World) -> None:
@@ -1528,6 +1556,7 @@ def test_state_names_the_limits(world: World) -> None:
         "password_min": 12,
         "pin_min": 6,
         "pin_max": 8,
+        "logo_max": MAX_BLOB,
     }
 
 
@@ -1790,7 +1819,7 @@ def test_a_save_naming_an_absent_blob_is_refused(world: World) -> None:
     gone = "blob:" + "1" * 64
     answer = save(world, csrf, 0, state_of(station("a", logo=gone)))
     assert answer.status == 400
-    assert json_of(answer)["message"] == f"channels[0].logo: no uploaded logo {gone}"
+    assert json_of(answer)["message"] == f"channels[0] (a).logo: no uploaded logo {gone}"
     assert world.settings.load()[1] == 0
 
 
@@ -1845,7 +1874,7 @@ def test_an_svg_is_stored_and_served_as_svg_whatever_it_declared(
     assert ("Content-Security-Policy", "sandbox") in shown.headers
 
 
-def test_an_upload_that_cannot_be_stored_is_read_only(
+def test_an_upload_that_cannot_be_stored_has_its_own_error(
     world: World, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def full(_self: Path, _data: bytes) -> int:
@@ -1855,7 +1884,7 @@ def test_an_upload_that_cannot_be_stored_is_read_only(
     monkeypatch.setattr(Path, "write_bytes", full)
     with caplog.at_level(logging.WARNING):
         answer = upload(world, csrf, PNG)
-    assert answer.status == 503 and json_of(answer) == {"error": "read_only"}
+    assert answer.status == 503 and json_of(answer) == {"error": "logo_store_failed"}
     event = next(r for r in caplog.records if r.getMessage() == "logo_store_failed")
     assert event.__dict__["fields"] == {"client": "198.51.100.7", "errno": 28}
 

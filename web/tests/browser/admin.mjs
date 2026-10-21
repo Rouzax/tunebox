@@ -1366,6 +1366,38 @@ async function run() {
             return said === 'No changes to save.' ? null : `message: ${said}`;
         });
 
+        await step('the Export button saves the stored stations under the server\'s filename', async () => {
+            if (!(await openPage('#history', `document.querySelector('.transfer')`))) {
+                return 'no History page';
+            }
+            // The page saves through a temporary link to a blob; the link's
+            // click is caught here and the blob kept, since the page's
+            // connect-src does not allow fetching a blob URL.
+            await evaluate(`(() => {
+                window.__saved = null;
+                window.__click = HTMLAnchorElement.prototype.click;
+                window.__make = URL.createObjectURL;
+                let blob = null;
+                URL.createObjectURL = function (made) { blob = made; return window.__make.call(URL, made); };
+                HTMLAnchorElement.prototype.click = function () {
+                    const saved = {name: this.download, text: null};
+                    window.__saved = saved;
+                    blob.text().then((t) => { saved.text = t; });
+                };
+            })()`);
+            await buttonNamed('Export');
+            const got = await until(`window.__saved && window.__saved.text !== null`);
+            await evaluate(`HTMLAnchorElement.prototype.click = window.__click; URL.createObjectURL = window.__make`);
+            if (!got) {
+                return `nothing was saved (message: ${await message()})`;
+            }
+            const saved = await evaluate(`window.__saved`);
+            if (!/^tunebox-\d{4}-\d\d-\d\d\.toml$/.test(saved.name)) {
+                return `the file is named ${saved.name}`;
+            }
+            return saved.text === (await exportText()) ? null : 'the saved file differs from the export';
+        });
+
         await step('an import shows its differences', async () => {
             const before = (await channels(base)).find((c) => c.id === 'first').name;
             const text = await exportText();

@@ -17,7 +17,6 @@ from pathlib import Path
 from tunebox.config import BLOB_REF, ConfigState
 from tunebox.logos import EXTENSIONS, sniff
 
-REF = BLOB_REF
 MAX_BLOB = 2_000_000
 
 
@@ -69,7 +68,7 @@ class Blobs:
     def path(self, ref: str) -> Path | None:
         """The stored file of a reference, None when it is not a reference
         (exactly 64 lowercase hex digits, so never a path) or is absent."""
-        match = REF.fullmatch(ref)
+        match = BLOB_REF.fullmatch(ref)
         if match is None:
             return None
         for kind in EXTENSIONS:

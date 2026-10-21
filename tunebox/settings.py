@@ -91,6 +91,13 @@ MIGRATIONS: tuple[str, ...] = (
 )
 
 
+def keeps_a_channel(before: ConfigState, after: ConfigState) -> None:
+    """Refuses a state that switches off the last enabled channel of the
+    stored one. A stored state with none enabled can be replaced by any."""
+    if any(c.enabled for c in before.channels) and not any(c.enabled for c in after.channels):
+        raise ConfigError("channels: at least one enabled channel is required")
+
+
 class SettingsUnavailable(Exception):
     """The database cannot be opened, read or brought to this schema."""
 
@@ -311,10 +318,7 @@ class Settings:
             before = self._read_state()
             if state_to_json(before) == after:
                 return version, False
-            if any(c.enabled for c in before.channels) and not any(
-                c.enabled for c in state.channels
-            ):
-                raise ConfigError("channels: at least one enabled channel is required")
+            keeps_a_channel(before, state)
             self._write(state)
             db.execute(
                 "INSERT INTO history (at, kind, target, before_json, after_json)"

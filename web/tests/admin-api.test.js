@@ -39,3 +39,13 @@ test('call sends JSON under its content type and the token', async () => {
     assert.equal(seen.init.body, JSON.stringify({a: 1}));
     setCsrf(null);
 });
+
+test('asText answers the body as text with the disposition, errors stay JSON', async () => {
+    const headers = {get: (name) => (name === 'Content-Disposition' ? 'attachment; filename="x.toml"' : null)};
+    const good = async () => ({ok: true, status: 200, headers, text: async () => 'a = 1\n'});
+    assert.deepEqual(await call('GET', 'export', undefined, {fetchFn: good, asText: true}),
+        {ok: true, status: 200, data: 'a = 1\n', disposition: 'attachment; filename="x.toml"'});
+    const bad = async () => ({ok: false, status: 401, headers, json: async () => ({error: 'login_required'})});
+    assert.deepEqual(await call('GET', 'export', undefined, {fetchFn: bad, asText: true}),
+        {ok: false, status: 401, data: {error: 'login_required'}});
+});
