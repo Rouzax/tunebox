@@ -14,7 +14,7 @@ import pytest
 from tunebox import blobs as blobs_module
 from tunebox import crypto
 from tunebox.accounts import AccountError, Accounts, Session, SessionEnded
-from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Request, Response
+from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Request, Response, Route
 from tunebox.blobs import MAX_BLOB, Blobs
 from tunebox.config import AdminConfig
 from tunebox.disk import MIN_FREE
@@ -1449,7 +1449,7 @@ def test_a_crashing_route_answers_500_with_the_admin_headers(
     def boom(_request: Request) -> Response:
         raise RuntimeError("broken")
 
-    monkeypatch.setattr(world.admin, "_state", boom)
+    monkeypatch.setitem(world.admin.routes, ("GET", "state"), Route(open=boom))
     answer = world.call("GET", "/admin/api/state")
     assert answer.status == 500
     assert json_of(answer) == {"error": "internal"}
@@ -2049,3 +2049,40 @@ def test_a_change_refused_for_disk_space_never_starts_the_rule_check(
     fresh = station("a", rules={"played_by": "(n1)"})
     answer = save(world, csrf, 0, state_of(fresh))
     assert (answer.status, json_of(answer)) == (507, {"error": "disk_low"})
+
+
+def test_every_session_route_refuses_without_a_session(world: World) -> None:
+    for (method, template), route in world.admin.routes.items():
+        if route.open is not None:
+            continue
+        path = "/admin/api/" + template.replace("{id}", "1").replace("{part}", "x")
+        answer = world.call(
+            method, path, {} if method == "POST" else None, content_type=route.types[0]
+        )
+        assert (answer.status, json_of(answer)) == (401, {"error": "login_required"}), path
+
+
+def test_routes_that_need_a_code_ask_before_reading_the_body(world: World) -> None:
+    csrf = world.login()
+    asked = 0
+    for (method, template), route in world.admin.routes.items():
+        if not route.code:
+            continue
+        asked += 1
+        answer = world.call(method, "/admin/api/" + template, {}, csrf=csrf)
+        assert json_of(answer) == {"error": "reauth_required"}, template
+    assert asked
+
+
+def test_a_known_path_with_another_method_is_not_found(world: World) -> None:
+    world.login()
+    assert world.call("DELETE", "/admin/api/config").status == 404
+    assert world.call("GET", "/admin/api/history/1/restore").status == 404
+    assert world.call("GET", "/admin/api/history/x").status == 404
+    assert world.call("GET", "/admin/api/logos/a/b").status == 404
+
+
+def test_only_upload_routes_take_images(world: World) -> None:
+    csrf = world.login()
+    answer = world.call("POST", "/admin/api/config", {}, csrf=csrf, content_type="image/png")
+    assert json_of(answer) == {"error": "json_only"}

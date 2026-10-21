@@ -15,7 +15,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast, overload
+from typing import Any, cast
 
 from tunebox import crypto
 from tunebox.accounts import (
@@ -71,14 +71,9 @@ MAX_BODY = 65_536
 MAX_STATE_BODY = 524_288
 # Longest history target a save may carry.
 MAX_TARGET = 200
-LARGE_ROUTES = {
-    "config": MAX_STATE_BODY,
-    "import/preview": MAX_STATE_BODY,
-    "import": MAX_STATE_BODY,
-    "logos": MAX_BLOB,
-}
 # The image types a logo upload may declare; the bytes decide the kind.
 UPLOAD_TYPES = ("image/png", "image/jpeg", "image/webp", "image/svg+xml")
+JSON_ONLY = ("application/json",)
 SESSION_COOKIE = "tunebox_admin"
 KNOWN_COOKIE = "tunebox_known"
 SETUP_TOKEN_S = 900
@@ -147,6 +142,24 @@ def _uint(text: str) -> int | None:
     return int(text) if _UINT.fullmatch(text) else None
 
 
+def _matches(template: str, name: str) -> bool:
+    """Whether a path below /admin/api/ fits a route template: {id} is a
+    history id, {part} one non-empty segment."""
+    want, got = template.split("/"), name.split("/")
+    if len(want) != len(got):
+        return False
+    for part, given in zip(want, got, strict=True):
+        if part == "{id}":
+            if _uint(given) is None:
+                return False
+        elif part == "{part}":
+            if not given:
+                return False
+        elif part != given:
+            return False
+    return True
+
+
 def _same(given: str, expected: str) -> bool:
     """A constant-time comparison that also takes text compare_digest
     refuses (non-ASCII), as a mismatch rather than an error."""
@@ -189,6 +202,20 @@ def _invalid(message: str, state: ConfigState | None) -> Response:
 
         message = re.sub(r"channels\[(\d+)\]", named, message)
     return _json(400, {"error": "invalid", "message": message})
+
+
+@dataclass(frozen=True)
+class Route:
+    """What a request must bring before its handler runs. Exactly one of
+    open (no session) and run (handed the checked session) is set."""
+
+    run: Callable[[Request, Session], Response] | None = None
+    open: Callable[[Request], Response] | None = None
+    # The largest body, granted on the headers alone before it is read.
+    body: int = MAX_BODY
+    types: tuple[str, ...] = JSON_ONLY
+    # A fresh code (re-auth) before the handler runs.
+    code: bool = False
 
 
 class Admin:
@@ -234,6 +261,32 @@ class Admin:
         self.gate = Gate(accounts.server_key, self.plain_http, clock, monotonic, sleep)
         self._setup_token: str | None = None
         self._setup_until = 0.0
+        self.routes: dict[tuple[str, str], Route] = {
+            ("GET", "state"): Route(open=self._state),
+            ("POST", "login"): Route(open=self._login),
+            ("POST", "logout"): Route(open=self._logout),
+            ("POST", "setup/start"): Route(open=self._setup_start),
+            ("POST", "setup/finish"): Route(open=self._setup_finish),
+            ("GET", "config"): Route(self._config),
+            ("POST", "config"): Route(self._save, body=MAX_STATE_BODY),
+            ("GET", "history"): Route(self._history),
+            ("GET", "history/{id}"): Route(self._history_entry),
+            ("POST", "history/{id}/restore"): Route(self._restore),
+            ("GET", "export"): Route(self._export),
+            ("POST", "import/preview"): Route(self._import_preview, body=MAX_STATE_BODY),
+            ("POST", "import"): Route(self._import, body=MAX_STATE_BODY, code=True),
+            ("POST", "logos"): Route(self._upload, body=MAX_BLOB, types=UPLOAD_TYPES),
+            ("GET", "logos/{part}"): Route(self._blob),
+            ("GET", "account"): Route(self._account),
+            ("POST", "account/reauth"): Route(self._reauth),
+            ("POST", "account/password"): Route(self._password, code=True),
+            ("POST", "account/totp/start"): Route(self._totp_start, code=True),
+            ("POST", "account/totp/finish"): Route(self._totp_finish, code=True),
+            ("POST", "account/recovery"): Route(self._recovery, code=True),
+            ("POST", "account/sessions/{part}/end"): Route(self._end_session),
+            ("GET", "pin"): Route(self._pin_status),
+            ("POST", "pin"): Route(self._pin_change),
+        }
         if config.setup_page and not accounts.exists():
             self._setup_token = crypto.new_token()
             self._setup_until = monotonic() + SETUP_TOKEN_S
@@ -270,19 +323,30 @@ class Admin:
             return _error(405, "method_not_allowed")
         return self._static(request.path.removeprefix("/admin/"))
 
+    def route(self, method: str, name: str) -> Route | None:
+        """The route a method and a path below /admin/api/ name, if any."""
+        exact = self.routes.get((method, name))
+        if exact is not None:
+            return exact
+        for (wanted, template), found in self.routes.items():
+            if wanted == method and _matches(template, name):
+                return found
+        return None
+
     def _api(self, request: Request) -> Response:
-        name = request.path.removeprefix("/admin/api/")
-        open_handler = self._open_route(request.method, name)
-        if open_handler is not None:
-            refused = self._refusal(request, needs_session=False)
-            return refused if isinstance(refused, Response) else open_handler(request)
-        session_handler = self._session_route(request.method, name)
-        if session_handler is None:
+        route = self.route(request.method, request.path.removeprefix("/admin/api/"))
+        if route is None:
             return _error(404, "not_found")
-        checked = self._refusal(request, needs_session=True)
+        if route.run is None:
+            assert route.open is not None
+            refused = self._screen(request, route)
+            return refused if refused is not None else route.open(request)
+        checked = self._refusal(request, route)
         if isinstance(checked, Response):
             return checked
-        return session_handler(request, checked)
+        if route.code and not self._accounts.fresh(checked):
+            return _error(403, "reauth_required")
+        return route.run(request, checked)
 
     def body_limit(self, request: Request) -> tuple[int, Response | None]:
         """The largest body this POST may send, judged on its headers alone
@@ -291,109 +355,55 @@ class Admin:
         grants one, to a live session with its token and the right origin;
         any other request over MAX_BODY gets the refusal its handler would
         have given, so the page can tell an ended session from a size."""
-        large = LARGE_ROUTES.get(request.path.removeprefix("/admin/api/"))
+        route = self.route("POST", request.path.removeprefix("/admin/api/"))
         declared = content_length(request.header("Content-Length"))
         if (
             request.method != "POST"
             or not request.path.startswith("/admin/api/")
-            or large is None
+            or route is None
+            or route.run is None
             or declared is None
             or declared <= MAX_BODY
         ):
             # Within MAX_BODY the handler's own checks judge it after the read.
             return MAX_BODY, None
         try:
-            refused = self._refusal(request, needs_session=True)
+            refused = self._refusal(request, route)
         except SettingsUnavailable:
             refused = _error(503, "read_only")
         if isinstance(refused, Session):
-            return large, None
+            return route.body, None
         return MAX_BODY, _with_admin_headers(refused)
 
-    @overload
-    def _refusal(self, request: Request, needs_session: Literal[True]) -> Session | Response: ...
-
-    @overload
-    def _refusal(self, request: Request, needs_session: Literal[False]) -> Response | None: ...
-
-    def _refusal(self, request: Request, needs_session: bool) -> Session | Response | None:
-        """The origin, content type, session and token checks a request must
-        pass before its handler runs: the refusal, or the session a route
-        that needs one passed with (None for a route without a session that
-        passes). A request body_limit refuses never reaches _api, so a
+    def _screen(self, request: Request, route: Route) -> Response | None:
+        """The origin and content type checks every POST must pass; a
         rejection is logged once."""
-        if request.method == "POST":
-            if not self._origin or request.header("Origin") != self._origin:
-                event(
-                    log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="origin"
-                )
-                return _error(403, "bad_origin")
-            content_type = (request.header("Content-Type") or "").split(";")[0].strip()
-            if request.path == "/admin/api/logos":
-                if content_type not in UPLOAD_TYPES:
-                    return _error(415, "unsupported_type")
-            elif content_type != "application/json":
-                return _error(415, "json_only")
-        if needs_session:
-            session = self._session(request)
-            if session is None:
-                return _error(401, "login_required")
-            given = request.header("X-Tunebox-CSRF") or ""
-            if request.method == "POST" and not _same(given, session.csrf):
-                event(
-                    log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="token"
-                )
-                return _error(403, "bad_csrf")
-            return session
-        return None
-
-    def _open_route(self, method: str, name: str) -> Callable[[Request], Response] | None:
-        """The handler of a route that works without a session."""
-        fixed: dict[tuple[str, str], Callable[[Request], Response]] = {
-            ("GET", "state"): self._state,
-            ("POST", "login"): self._login,
-            ("POST", "logout"): self._logout,
-            ("POST", "setup/start"): self._setup_start,
-            ("POST", "setup/finish"): self._setup_finish,
-        }
-        return fixed.get((method, name))
-
-    def _session_route(
-        self, method: str, name: str
-    ) -> Callable[[Request, Session], Response] | None:
-        """The handler of a route that needs a session; it is handed the
-        session the checks found."""
-        fixed: dict[tuple[str, str], Callable[[Request, Session], Response]] = {
-            ("GET", "config"): self._config,
-            ("POST", "config"): self._save,
-            ("GET", "history"): self._history,
-            ("GET", "export"): self._export,
-            ("POST", "import/preview"): self._import_preview,
-            ("POST", "import"): self._import,
-            ("POST", "logos"): self._upload,
-            ("GET", "account"): self._account,
-            ("POST", "account/reauth"): self._reauth,
-            ("POST", "account/password"): self._password,
-            ("POST", "account/totp/start"): self._totp_start,
-            ("POST", "account/totp/finish"): self._totp_finish,
-            ("POST", "account/recovery"): self._recovery,
-            ("GET", "pin"): self._pin_status,
-            ("POST", "pin"): self._pin_change,
-        }
-        if (method, name) in fixed:
-            return fixed[(method, name)]
-        parts = name.split("/")
-        if parts[0] == "logos" and len(parts) == 2 and method == "GET":
-            return self._blob
-        if parts[:2] == ["account", "sessions"] and len(parts) == 4 and parts[3] == "end":
-            return self._end_session if method == "POST" else None
-        if parts[0] != "history" or not parts[1:2] or _uint(parts[1]) is None:
+        if request.method != "POST":
             return None
-        if len(parts) == 2 and method == "GET":
-            return self._history_entry
-        if parts[2:] == ["restore"] and method == "POST":
-            return self._restore
+        if not self._origin or request.header("Origin") != self._origin:
+            event(log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="origin")
+            return _error(403, "bad_origin")
+        content_type = (request.header("Content-Type") or "").split(";")[0].strip()
+        if content_type not in route.types:
+            return _error(415, "json_only" if route.types == JSON_ONLY else "unsupported_type")
         return None
+
+    def _refusal(self, request: Request, route: Route) -> Session | Response:
+        """The checks a request must pass before the handler of a route that
+        needs a session runs: the refusal, or the session found. A request
+        body_limit refuses never reaches _api, so a rejection is logged
+        once."""
+        refused = self._screen(request, route)
+        if refused is not None:
+            return refused
+        session = self._session(request)
+        if session is None:
+            return _error(401, "login_required")
+        given = request.header("X-Tunebox-CSRF") or ""
+        if request.method == "POST" and not _same(given, session.csrf):
+            event(log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="token")
+            return _error(403, "bad_csrf")
+        return session
 
     def _cookie(self, name: str, value: str, max_age: int) -> tuple[str, str]:
         secure = "" if self.plain_http else " Secure;"
@@ -744,9 +754,6 @@ class Admin:
         text = payload.get("toml") if payload else None
         if based_on is None or not isinstance(text, str):
             return _error(400, "bad_request")
-        stale = self._fresh(session)
-        if stale is not None:
-            return stale
         try:
             state, _notes = state_from_import(text)
         except ConfigError as error:
@@ -777,13 +784,6 @@ class Admin:
             return _error(404, "not_found")
         _, before, _ = found
         return self._commit(before, based_on, "restore", f"history {entry_id}", request.client)
-
-    def _fresh(self, session: Session) -> Response | None:
-        """The answer to give when the session has not typed a code
-        recently, else None."""
-        if not self._accounts.fresh(session):
-            return _error(403, "reauth_required")
-        return None
 
     def _account(self, _request: Request, session: Session) -> Response:
         mine = session_id(session.token_hash)
@@ -822,9 +822,6 @@ class Admin:
         body = _body(request, ("password",))
         if body is None:
             return _error(400, "bad_request")
-        stale = self._fresh(session)
-        if stale is not None:
-            return stale
         password = body["password"]
         try:
             password.encode()
@@ -845,9 +842,6 @@ class Admin:
         return Response(204, headers=(self._known_grant(generation),))
 
     def _totp_start(self, _request: Request, session: Session) -> Response:
-        stale = self._fresh(session)
-        if stale is not None:
-            return stale
         secret = crypto.new_totp_secret()
         self.gate.hold_totp(session.token_hash, secret)
         return _json(200, {"secret": crypto.secret_text(secret), "uri": crypto.otpauth_uri(secret)})
@@ -856,9 +850,6 @@ class Admin:
         body = _body(request, ("code",))
         if body is None:
             return _error(400, "bad_request")
-        stale = self._fresh(session)
-        if stale is not None:
-            return stale
         secret = self.gate.take_totp(session.token_hash)
         if secret is None:
             return _error(400, "no_new_secret")
@@ -877,9 +868,6 @@ class Admin:
         return Response(204, headers=(self._known_grant(generation),))
 
     def _recovery(self, request: Request, session: Session) -> Response:
-        stale = self._fresh(session)
-        if stale is not None:
-            return stale
         try:
             codes, generation = self._accounts.replace_recovery_codes(session)
         except SessionEnded:

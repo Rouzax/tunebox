@@ -19,7 +19,7 @@ from tests.fakes import FakeSource, NoJitter, channel_config
 from tests.test_admin import PASSWORD, SECRET
 from tunebox import crypto
 from tunebox.accounts import Accounts
-from tunebox.admin import MAX_BODY, MAX_STATE_BODY, Admin, Request, Response
+from tunebox.admin import MAX_BODY, MAX_STATE_BODY, Admin, Request, Response, Route
 from tunebox.blobs import Blobs
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
@@ -735,7 +735,8 @@ def test_a_large_body_from_a_session_is_read(
         "X-Tunebox-CSRF": csrf,
     }
     status, _ = post(httpd, path, big, headers)
-    assert status == 400  # read and judged, not refused for its size
+    # Read and judged, not refused for its size; import asks for a code first.
+    assert status == (403 if path.endswith("/import") else 400)
 
 
 def test_post_outside_admin_is_not_allowed(server: TuneboxServer) -> None:
@@ -1091,7 +1092,7 @@ def test_a_crash_inside_an_admin_request_answers_500_with_the_admin_headers(
     def boom(_request: Request) -> Response:
         raise RuntimeError("broken")
 
-    monkeypatch.setattr(admin, "_state", boom)
+    monkeypatch.setitem(admin.routes, ("GET", "state"), Route(open=boom))
     status, headers, _ = request(admin_server, "/admin/api/state")
     assert status == 500
     assert headers["cache-control"] == "no-store"
