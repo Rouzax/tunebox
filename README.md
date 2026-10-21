@@ -413,17 +413,19 @@ A file that cannot be used is refused before anything is stored, and the
 message says why: broken TOML names the line, and an unknown key, an
 invalid station or a refused title rule names the field. The preview does
 not time new title rules; Replace does, so a slow rule can still be refused
-at that step. A file in which no station is enabled is refused, in the
-preview and at Replace alike, while a station is enabled now. If the stations changed elsewhere in the meantime, Replace
-says so and shows the differences again, against what is stored now.
+at that step. A file in which every station is off (or that has no
+stations, such as a `tunebox.toml` with only `[server]`) is refused
+already in the preview, because the player needs a station that is on.
+If the stations changed elsewhere in the meantime, Replace says so and
+shows the differences again, against what is stored now.
 
 An export names uploaded logos rather than containing them (see
 [Logos](#logos)). Imported on the same tunebox, they come back with it.
 Another tunebox that does not have those uploads refuses the file and names
 the station, for example
-`channels[2] (owr).logo: no uploaded logo blob:3f2a...`. Put a logo link in that
-station's `logo` in the file (or remove the line), import, and upload the
-logo again there.
+`channels[2] (owr).logo: no uploaded logo blob:3f2a...`. Put a logo link
+in that station's `logo` in the file (or remove the line), import, and
+upload the logo again there.
 
 ### Logos
 
