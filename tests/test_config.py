@@ -1,4 +1,3 @@
-import inspect
 import re
 from pathlib import Path
 from typing import Any
@@ -370,7 +369,8 @@ def test_a_log_file_is_optional_and_lives_under_the_data_folder(tmp_path: Path) 
         parse({**minimal(), "server": {"log_file": ""}}, tmp_path)
 
 
-def test_every_compiled_rule_is_a_pattern_rule() -> None:
-    source = inspect.getsource(config._rules)  # pyright: ignore[reportPrivateUsage]
-    compiled = set(re.findall(r'_pattern\(table, "(\w+)"', source))
-    assert compiled == set(config.PATTERN_RULES)
+def test_every_pattern_rule_is_compiled() -> None:
+    rules = {key: "(x)" for key in config.PATTERN_RULES}
+    compiled = config._rules(rules, "rules")  # pyright: ignore[reportPrivateUsage]
+    for key in config.PATTERN_RULES:
+        assert getattr(compiled, key) is not None

@@ -4,8 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from tunebox.config import ChannelRow, ConfigState, load
-from tunebox.rulecheck import SYNTHETIC, check, lint, refused, samples_for, stored_refusals
+from tunebox.config import PATTERN_RULES, ChannelRow, ConfigState, load
+from tunebox.rulecheck import (
+    SYNTHETIC,
+    check,
+    lint,
+    patterns,
+    refused,
+    samples_for,
+    stored_refusals,
+)
 from tunebox.tracks import MAX_TITLE
 
 STATION_ID = r"^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b"
@@ -180,3 +188,9 @@ def test_refused_lets_a_state_of_stored_patterns_through() -> None:
 def test_stored_refusals_lists_what_the_lint_now_refuses() -> None:
     found = stored_refusals(state_with("(x)", "(a+)+$"))
     assert [field for field, _ in found] == ["channels[1].rules.played_by"]
+
+
+def test_patterns_finds_every_key_config_compiles() -> None:
+    doc = {"rules": {key: "(x)" for key in PATTERN_RULES}}
+    state = ConfigState({}, {}, (), (ChannelRow("a", None, True, doc),))
+    assert {field.rsplit(".", 1)[1] for field, _ in patterns(state)} == set(PATTERN_RULES)

@@ -6,7 +6,7 @@ import ipaddress
 import re
 import tomllib
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -398,15 +398,15 @@ PATTERN_RULES = ("station_id", "played_by")
 
 
 def _rules(table: dict[str, Any], where: str) -> Rules:
-    _no_unknown(table, {"station_id", "played_by", "artist_separator"}, where)
-    station_id = _pattern(table, "station_id", f"{where}.station_id")
-    played_by = _pattern(table, "played_by", f"{where}.played_by")
+    _no_unknown(table, {*PATTERN_RULES, "artist_separator"}, where)
+    patterns = {key: _pattern(table, key, f"{where}.{key}") for key in PATTERN_RULES}
+    played_by = patterns["played_by"]
     if played_by is not None and played_by.groups < 1:
         raise ConfigError(f"{where}.played_by: needs a group for the part to keep")
     separator = _str(table, "artist_separator", f"{where}.artist_separator", ",")
     if not separator:
         raise ConfigError(f"{where}.artist_separator: must not be empty")
-    return Rules(station_id=station_id, played_by=played_by, artist_separator=separator)
+    return replace(Rules(artist_separator=separator), **patterns)
 
 
 def _pattern(table: dict[str, Any], key: str, where: str) -> re.Pattern[str] | None:

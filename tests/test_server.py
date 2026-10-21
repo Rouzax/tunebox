@@ -1,3 +1,4 @@
+import contextlib
 import dataclasses
 import http.client
 import io
@@ -123,6 +124,26 @@ def request(
     data = response.read()
     connection.close()
     return response.status, {k.lower(): v for k, v in response.getheaders()}, data
+
+
+def raw_post(
+    httpd: TuneboxServer, path: str, headers: list[tuple[str, str]], body: bytes
+) -> tuple[int, bytes]:
+    """POSTs with the header lines exactly as given, so a repeated one reaches the server."""
+    lines = [
+        f"POST {path} HTTP/1.1",
+        "Host: x",
+        "Connection: close",
+        f"Content-Length: {len(body)}",
+    ]
+    lines += [f"{name}: {value}" for name, value in headers]
+    sock = socket.create_connection(("127.0.0.1", httpd.server_address[1]), timeout=5)
+    sock.sendall("\r\n".join(lines).encode() + b"\r\n\r\n" + body)
+    answer = b""
+    while chunk := sock.recv(4096):
+        answer += chunk
+    sock.close()
+    return int(answer.split(b" ", 2)[1]), answer
 
 
 def test_channels_list(server: TuneboxServer) -> None:
@@ -1331,3 +1352,52 @@ def test_a_dropped_connection_prints_no_traceback(
     assert "Traceback" not in capfd.readouterr().err
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
     assert any(r.getMessage() == "connection_dropped" for r in caplog.records)
+
+
+def test_two_content_length_lines_are_refused(server: TuneboxServer) -> None:
+    sock = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5)
+    sock.sendall(
+        b"POST /api/pin HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+        b"Content-Length: 2\r\nContent-Length: 40\r\n\r\n{}"
+    )
+    answer = sock.recv(4096)
+    sock.close()
+    assert answer.startswith(b"HTTP/1.1 411")
+    assert b"Connection: close" in answer
+
+
+def test_two_sec_fetch_site_lines_are_refused(server: TuneboxServer) -> None:
+    status, _ = raw_post(
+        server,
+        "/api/pin",
+        [
+            ("Content-Type", "application/json"),
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Site", "cross-site"),
+        ],
+        b'{"pin": "123456"}',
+    )
+    assert status == 403
+
+
+def test_a_trickled_body_is_cut_at_the_deadline(
+    server: TuneboxServer, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("tunebox.server.BODY_DEADLINE_S", 0.5)
+    caplog.set_level(logging.DEBUG)
+    sock = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5)
+    sock.sendall(
+        b"POST /api/pin HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+        b"Content-Length: 40\r\n\r\n"
+    )
+    with contextlib.suppress(OSError):  # the server hangs up while bytes still trickle in
+        for _ in range(8):
+            sock.sendall(b" ")
+            time.sleep(0.1)
+    with contextlib.suppress(ConnectionResetError):  # unread bytes were left when it closed
+        assert sock.recv(4096) == b""  # hung up, nothing answered
+    sock.close()
+    names = [r.getMessage() for r in caplog.records]
+    assert "request_body_incomplete" in names
+    assert "request_crashed" not in names
+    assert "connection_crashed" not in names

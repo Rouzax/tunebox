@@ -15,7 +15,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast, overload
 
 from tunebox import crypto
 from tunebox.accounts import (
@@ -37,6 +37,7 @@ from tunebox.config import (
     ConfigError,
     validate_state,
 )
+from tunebox.http_headers import single
 from tunebox.logs import event
 from tunebox.paths import inside
 from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, PinStale, read_cookie
@@ -106,9 +107,7 @@ class Request:
         """The header's value; None when it is missing or repeated. A
         repeated Origin, token or cookie line is a broken proxy or a forgery,
         and either way not one value to trust."""
-        wanted = name.lower()
-        found = [v for k, v in self.headers if k.lower() == wanted]
-        return found[0] if len(found) == 1 else None
+        return single(self.headers, name)
 
     def cookie(self, name: str) -> str | None:
         return read_cookie(self.header("Cookie"), name)
@@ -224,14 +223,18 @@ class Admin:
         return self._static(request.path.removeprefix("/admin/"))
 
     def _api(self, request: Request) -> Response:
-        route = self._route(request.method, request.path.removeprefix("/admin/api/"))
-        if route is None:
+        name = request.path.removeprefix("/admin/api/")
+        open_handler = self._open_route(request.method, name)
+        if open_handler is not None:
+            refused = self._refusal(request, needs_session=False)
+            return refused if isinstance(refused, Response) else open_handler(request)
+        session_handler = self._session_route(request.method, name)
+        if session_handler is None:
             return _error(404, "not_found")
-        handler, needs_session = route
-        refused = self._refusal(request, needs_session)
-        if refused is not None:
-            return refused
-        return handler(request)
+        checked = self._refusal(request, needs_session=True)
+        if isinstance(checked, Response):
+            return checked
+        return session_handler(request, checked)
 
     def body_limit(self, request: Request) -> tuple[int, Response | None]:
         """The largest body this POST may send, judged on its headers alone
@@ -255,15 +258,22 @@ class Admin:
             refused = self._refusal(request, needs_session=True)
         except SettingsUnavailable:
             refused = _error(503, "read_only")
-        if refused is None:
+        if isinstance(refused, Session):
             return large, None
         return MAX_BODY, _with_admin_headers(refused)
 
-    def _refusal(self, request: Request, needs_session: bool) -> Response | None:
+    @overload
+    def _refusal(self, request: Request, needs_session: Literal[True]) -> Session | Response: ...
+
+    @overload
+    def _refusal(self, request: Request, needs_session: Literal[False]) -> Response | None: ...
+
+    def _refusal(self, request: Request, needs_session: bool) -> Session | Response | None:
         """The origin, content type, session and token checks a request must
-        pass before its handler runs: the refusal, or None to go on. A
-        request body_limit refuses never reaches _api, so a rejection is
-        logged once."""
+        pass before its handler runs: the refusal, or the session a route
+        that needs one passed with (None for a route without a session that
+        passes). A request body_limit refuses never reaches _api, so a
+        rejection is logged once."""
         if request.method == "POST":
             if not self._origin or request.header("Origin") != self._origin:
                 event(
@@ -283,39 +293,49 @@ class Admin:
                     log, logging.WARNING, "admin_csrf_rejected", client=request.client, why="token"
                 )
                 return _error(403, "bad_csrf")
+            return session
         return None
 
-    def _route(self, method: str, name: str) -> tuple[Callable[[Request], Response], bool] | None:
-        """The handler and whether it needs a session."""
-        fixed: dict[tuple[str, str], tuple[Callable[[Request], Response], bool]] = {
-            ("GET", "state"): (self._state, False),
-            ("POST", "login"): (self._login, False),
-            ("POST", "logout"): (self._logout, False),
-            ("POST", "setup/start"): (self._setup_start, False),
-            ("POST", "setup/finish"): (self._setup_finish, False),
-            ("GET", "config"): (self._config, True),
-            ("POST", "config"): (self._save, True),
-            ("GET", "history"): (self._history, True),
-            ("GET", "account"): (self._account, True),
-            ("POST", "account/reauth"): (self._reauth, True),
-            ("POST", "account/password"): (self._password, True),
-            ("POST", "account/totp/start"): (self._totp_start, True),
-            ("POST", "account/totp/finish"): (self._totp_finish, True),
-            ("POST", "account/recovery"): (self._recovery, True),
-            ("GET", "pin"): (self._pin_status, True),
-            ("POST", "pin"): (self._pin_change, True),
+    def _open_route(self, method: str, name: str) -> Callable[[Request], Response] | None:
+        """The handler of a route that works without a session."""
+        fixed: dict[tuple[str, str], Callable[[Request], Response]] = {
+            ("GET", "state"): self._state,
+            ("POST", "login"): self._login,
+            ("POST", "logout"): self._logout,
+            ("POST", "setup/start"): self._setup_start,
+            ("POST", "setup/finish"): self._setup_finish,
+        }
+        return fixed.get((method, name))
+
+    def _session_route(
+        self, method: str, name: str
+    ) -> Callable[[Request, Session], Response] | None:
+        """The handler of a route that needs a session; it is handed the
+        session the checks found."""
+        fixed: dict[tuple[str, str], Callable[[Request, Session], Response]] = {
+            ("GET", "config"): self._config,
+            ("POST", "config"): self._save,
+            ("GET", "history"): self._history,
+            ("GET", "account"): self._account,
+            ("POST", "account/reauth"): self._reauth,
+            ("POST", "account/password"): self._password,
+            ("POST", "account/totp/start"): self._totp_start,
+            ("POST", "account/totp/finish"): self._totp_finish,
+            ("POST", "account/recovery"): self._recovery,
+            ("GET", "pin"): self._pin_status,
+            ("POST", "pin"): self._pin_change,
         }
         if (method, name) in fixed:
             return fixed[(method, name)]
         parts = name.split("/")
         if parts[:2] == ["account", "sessions"] and len(parts) == 4 and parts[3] == "end":
-            return (self._end_session, True) if method == "POST" else None
+            return self._end_session if method == "POST" else None
         if parts[0] != "history" or not parts[1:2] or _uint(parts[1]) is None:
             return None
         if len(parts) == 2 and method == "GET":
-            return (self._history_entry, True)
+            return self._history_entry
         if parts[2:] == ["restore"] and method == "POST":
-            return (self._restore, True)
+            return self._restore
         return None
 
     def _cookie(self, name: str, value: str, max_age: int) -> tuple[str, str]:
@@ -503,7 +523,7 @@ class Admin:
         event(log, logging.WARNING, "admin_account_created", client=request.client)
         return _json(200, {"recovery_codes": codes})
 
-    def _config(self, _request: Request) -> Response:
+    def _config(self, _request: Request, _session: Session) -> Response:
         state, version = self._settings.load()
         schema = {
             "sources": SOURCE_SETTINGS,
@@ -515,7 +535,7 @@ class Admin:
             200, {"version": version, "state": json.loads(state_to_json(state)), "schema": schema}
         )
 
-    def _save(self, request: Request) -> Response:
+    def _save(self, request: Request, _session: Session) -> Response:
         payload = _object(request)
         based_on = _version(payload)
         if payload is None or based_on is None:
@@ -566,7 +586,7 @@ class Admin:
         )
         return _json(200, {"version": version, "changed": True, "applied": applied})
 
-    def _history(self, request: Request) -> Response:
+    def _history(self, request: Request, _session: Session) -> Response:
         raw = urllib.parse.parse_qs(request.query).get("before", [""])[0]
         before = _uint(raw) if raw else None
         if raw and before is None:
@@ -574,7 +594,7 @@ class Admin:
         entries, more = self._settings.history(before)
         return _json(200, {"entries": [dataclasses.asdict(e) for e in entries], "more": more})
 
-    def _history_entry(self, request: Request) -> Response:
+    def _history_entry(self, request: Request, _session: Session) -> Response:
         found = self._settings.history_entry(_history_id(request.path))
         if found is None:
             return _error(404, "not_found")
@@ -588,7 +608,7 @@ class Admin:
             },
         )
 
-    def _restore(self, request: Request) -> Response:
+    def _restore(self, request: Request, _session: Session) -> Response:
         based_on = _version(_object(request))
         if based_on is None:
             return _error(400, "bad_request")
@@ -600,38 +620,24 @@ class Admin:
         raw = json.loads(state_to_json(before))
         return self._commit(raw, based_on, "restore", f"history {entry_id}", request.client)
 
-    def _live(self, request: Request) -> Session | None:
-        """The caller's session, or None when it ended after _api checked it."""
-        return self._session(request)
-
-    def _fresh(self, request: Request) -> Session | Response:
-        """The caller's session when it typed a code recently; else the
-        answer to give (401 when it has ended, 403 when it is not fresh)."""
-        session = self._live(request)
-        if session is None:
-            return _error(401, "login_required")
+    def _fresh(self, session: Session) -> Response | None:
+        """The answer to give when the session has not typed a code
+        recently, else None."""
         if not self._accounts.fresh(session):
             return _error(403, "reauth_required")
-        return session
+        return None
 
-    def _account(self, request: Request) -> Response:
-        session = self._live(request)
-        if session is None:
-            return _error(401, "login_required")
+    def _account(self, _request: Request, session: Session) -> Response:
         mine = session_id(session.token_hash)
         listed = [
             {**dataclasses.asdict(s), "current": s.id == mine} for s in self._accounts.sessions()
         ]
         return _json(200, {"sessions": listed, "fresh": self._accounts.fresh(session)})
 
-    def _reauth(self, request: Request) -> Response:
+    def _reauth(self, request: Request, session: Session) -> Response:
         body = _body(request, ("code",))
         if body is None:
             return _error(400, "bad_request")
-        # Read before reserving: a session that is gone spends no slot.
-        session = self._live(request)
-        if session is None:
-            return _error(401, "login_required")
         release = self.gate.reserve(request.client)
         if release is None:
             # Not why=address, which the CrowdSec ban scenario counts: this
@@ -654,13 +660,13 @@ class Admin:
         release()
         return Response(204)
 
-    def _password(self, request: Request) -> Response:
+    def _password(self, request: Request, session: Session) -> Response:
         body = _body(request, ("password",))
         if body is None:
             return _error(400, "bad_request")
-        session = self._fresh(request)
-        if isinstance(session, Response):
-            return session
+        stale = self._fresh(session)
+        if stale is not None:
+            return stale
         password = body["password"]
         try:
             password.encode()
@@ -680,21 +686,21 @@ class Admin:
         event(log, logging.INFO, "admin_change", kind="password", client=request.client)
         return Response(204, headers=(self._known_grant(generation),))
 
-    def _totp_start(self, request: Request) -> Response:
-        session = self._fresh(request)
-        if isinstance(session, Response):
-            return session
+    def _totp_start(self, _request: Request, session: Session) -> Response:
+        stale = self._fresh(session)
+        if stale is not None:
+            return stale
         secret = crypto.new_totp_secret()
         self.gate.hold_totp(session.token_hash, secret)
         return _json(200, {"secret": crypto.secret_text(secret), "uri": crypto.otpauth_uri(secret)})
 
-    def _totp_finish(self, request: Request) -> Response:
+    def _totp_finish(self, request: Request, session: Session) -> Response:
         body = _body(request, ("code",))
         if body is None:
             return _error(400, "bad_request")
-        session = self._fresh(request)
-        if isinstance(session, Response):
-            return session
+        stale = self._fresh(session)
+        if stale is not None:
+            return stale
         secret = self.gate.take_totp(session.token_hash)
         if secret is None:
             return _error(400, "no_new_secret")
@@ -705,27 +711,28 @@ class Admin:
             generation = self._accounts.replace_totp(session, secret, step)
         except SessionEnded:
             return _error(401, "login_required")
+        except AccountError as error:
+            return _json(400, {"error": "invalid", "message": str(error)})
         # Every session but this one has ended; their waiting secrets too.
         self.gate.drop_totp(keep=())
         event(log, logging.INFO, "admin_change", kind="totp", client=request.client)
         return Response(204, headers=(self._known_grant(generation),))
 
-    def _recovery(self, request: Request) -> Response:
-        session = self._fresh(request)
-        if isinstance(session, Response):
-            return session
+    def _recovery(self, request: Request, session: Session) -> Response:
+        stale = self._fresh(session)
+        if stale is not None:
+            return stale
         try:
             codes, generation = self._accounts.replace_recovery_codes(session)
         except SessionEnded:
             return _error(401, "login_required")
+        except AccountError as error:
+            return _json(400, {"error": "invalid", "message": str(error)})
         event(log, logging.INFO, "admin_change", kind="recovery_codes", client=request.client)
         return _json(200, {"recovery_codes": codes}, self._known_grant(generation))
 
-    def _end_session(self, request: Request) -> Response:
+    def _end_session(self, request: Request, session: Session) -> Response:
         wanted = request.path.removeprefix("/admin/api/account/sessions/").split("/")[0]
-        session = self._live(request)
-        if session is None:
-            return _error(401, "login_required")
         if wanted == session_id(session.token_hash):
             return _error(400, "this_session")
         ended = self._accounts.end_session(wanted)
@@ -737,10 +744,10 @@ class Admin:
         event(log, logging.INFO, "admin_change", kind="session_end", client=request.client)
         return Response(204)
 
-    def _pin_status(self, _request: Request) -> Response:
+    def _pin_status(self, _request: Request, _session: Session) -> Response:
         return _json(200, dataclasses.asdict(self._pin.status()))
 
-    def _pin_change(self, request: Request) -> Response:
+    def _pin_change(self, request: Request, _session: Session) -> Response:
         payload = _object(request) or {}
         mode = payload.get("mode")
         new_pin = payload.get("pin")

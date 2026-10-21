@@ -17,6 +17,7 @@ from tunebox.admin import ADMIN_HEADERS, Admin, Request, Response, content_lengt
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import Network, StreamConfig
+from tunebox.http_headers import single
 from tunebox.limits import Once
 from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
 from tunebox.logos import Logos
@@ -36,6 +37,10 @@ PIN_PAGE = "/pin.html"
 # A request to an idle channel waits this long for its first poll, so the
 # answer carries what is on now rather than nothing.
 FRESH_WAIT_S = 2.5
+# A whole request body must arrive within this many seconds, however slowly it
+# trickles; the socket timeout alone restarts with every byte.
+BODY_DEADLINE_S = 30
+BODY_CHUNK = 65_536
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -225,7 +230,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(405, {"error": "method_not_allowed"}, False)
             return
         if self.command != "POST" and (
-            self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0"
+            self.headers.get_all("Transfer-Encoding")
+            or (self.headers.get_all("Content-Length") or ["0"]) != ["0"]
         ):
             # GET and HEAD bodies are never read, so on a kept-alive connection
             # the body would be parsed as the next request. Answer, then hang up.
@@ -286,8 +292,8 @@ class Handler(BaseHTTPRequestHandler):
         read would be parsed as the next request, so a refused one also
         ends the connection."""
         headers = ADMIN_HEADERS if admin else None
-        length = content_length(self.headers.get("Content-Length"))
-        if self.headers.get("Transfer-Encoding") or length is None:
+        length = content_length(self._header("Content-Length"))
+        if self.headers.get_all("Transfer-Encoding") or length is None:
             self.close_connection = True
             self._send_json(411, {"error": "length_required"}, False, headers)
             return None
@@ -300,11 +306,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send_json(413, {"error": "too_large"}, False, headers)
             return None
-        try:
-            body = self.rfile.read(length)
-        except OSError:  # TimeoutError: the client stalled
-            body = None
-        if body is None or len(body) < length:
+        body = self._read_within_deadline(length)
+        if len(body) < length:
             # A client that stalls or hangs up mid-body is not a server
             # fault, and the stream is no longer usable: hang up silently.
             self.close_connection = True
@@ -314,10 +317,34 @@ class Handler(BaseHTTPRequestHandler):
                 "request_body_incomplete",
                 path=urllib.parse.urlsplit(self.path).path,
                 expected=length,
-                received=None if body is None else len(body),
+                received=len(body),
             )
             return None
         return body
+
+    def _read_within_deadline(self, length: int) -> bytes:
+        """length bytes, or what arrived by BODY_DEADLINE_S or before the
+        client stalled or hung up. One read per socket receive, each allowed only
+        the time left, so a body sent a byte at a time cannot hold the
+        thread past the deadline."""
+        deadline = time.monotonic() + BODY_DEADLINE_S
+        chunks: list[bytes] = []
+        received = 0
+        while received < length:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            self.connection.settimeout(min(remaining, self.timeout or remaining))
+            try:
+                chunk = self.rfile.read1(min(BODY_CHUNK, length - received))
+            except OSError:  # TimeoutError: the client stalled
+                break
+            if not chunk:  # hung up
+                break
+            chunks.append(chunk)
+            received += len(chunk)
+        self.connection.settimeout(self.timeout)
+        return b"".join(chunks)
 
     def _admin_shown(self, head: bool) -> Admin | None:
         """The panel, or None after answering 404 when it is off, or on
@@ -380,7 +407,7 @@ class Handler(BaseHTTPRequestHandler):
         """Whether the browser reached the proxy over https, as a trusted
         proxy says. tunebox itself speaks plain http, so without a proxy's
         word the cookie must work over http (a player on the home network)."""
-        proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+        proto = (self._header("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
         return proto == "https" and trusted_peer(self.client_address[0], self.app.trusted)
 
     def _local(self) -> bool:
@@ -394,18 +421,21 @@ class Handler(BaseHTTPRequestHandler):
         proxied = self._forwarded() or any(self.headers.get(n) for n in OTHER_FORWARDING)
         return loopback and not proxied
 
-    def _cookie_header(self) -> str | None:
-        """A repeated Cookie line counts as absent, as on admin requests."""
-        lines = self.headers.get_all("Cookie") or []
-        return lines[0] if len(lines) == 1 else None
+    def _header(self, name: str) -> str | None:
+        """The header's value; None when it is missing or repeated."""
+        return single(self.headers.items(), name)
 
     def _pin(self, head: bool, body: bytes) -> None:
         pin = self.app.pin
         if self.command != "POST":
             return self._send_json(405, {"error": "method_not_allowed"}, head, NO_STORE)
-        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        site = self.headers.get("Sec-Fetch-Site")
-        if content_type != "application/json" or (site is not None and site != "same-origin"):
+        content_type = (self._header("Content-Type") or "").split(";")[0].strip().lower()
+        site = self._header("Sec-Fetch-Site")
+        if (
+            content_type != "application/json"
+            or (site is not None and site != "same-origin")
+            or len(self.headers.get_all("Sec-Fetch-Site") or []) > 1
+        ):
             # Another site's page making a visitor's browser post here. Counted
             # as a failure, it would lock the household out of the PIN, or get
             # its address banned. A form cannot send JSON, and a cross-site
@@ -447,7 +477,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(200, {"status": "ok"}, head)
             status = {cid: channel.status() for cid, channel in channels.items()}
             return self._send_json(200, {"status": "ok", "channels": status}, head)
-        access = self.app.pin.access(self._cookie_header())
+        access = self.app.pin.access(self._header("Cookie"))
         if _locked_route(parts) and access.private:
             if access.locked:
                 return self._send_json(401, {"error": "pin_required"}, head, NO_STORE)
