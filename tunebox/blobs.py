@@ -23,6 +23,14 @@ class BlobError(Exception):
     pass
 
 
+class BlobUnavailable(Exception):
+    """The folder cannot be written (disk full, read-only); carries errno."""
+
+    def __init__(self, errno: int | None) -> None:
+        super().__init__(errno)
+        self.errno = errno
+
+
 class Blobs:
     def __init__(self, directory: Path, clock: Callable[[], float] = time.time) -> None:
         self._dir = directory
@@ -39,12 +47,16 @@ class Blobs:
         digest = hashlib.sha256(body).hexdigest()
         target = self._dir / f"{digest}.{kind}"
         if not target.is_file():
-            self._dir.mkdir(parents=True, exist_ok=True)
             # A unique temp name: two uploads of the same file at once must
             # not write one half-file over the other.
             partial = self._dir / f".{digest}.{secrets.token_hex(4)}.tmp"
-            partial.write_bytes(body)
-            partial.replace(target)
+            try:
+                self._dir.mkdir(parents=True, exist_ok=True)
+                partial.write_bytes(body)
+                partial.replace(target)
+            except OSError as error:
+                partial.unlink(missing_ok=True)
+                raise BlobUnavailable(error.errno) from error
         return f"blob:{digest}", kind
 
     def path(self, ref: str) -> Path | None:
@@ -78,8 +90,9 @@ class Blobs:
         except OSError:
             return 0
         for path in files:
-            # A dot file is an upload in progress.
-            if path.name.startswith(".") or f"blob:{path.stem}" in keep:
+            # Runs at start-up, when no upload is in progress: an old dot file
+            # is a temp file a crash left behind.
+            if f"blob:{path.stem}" in keep:
                 continue
             try:
                 if path.stat().st_mtime < limit:

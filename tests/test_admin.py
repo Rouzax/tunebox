@@ -1828,3 +1828,33 @@ def test_a_logo_upload_is_granted_its_own_limit_to_a_live_session(world: World) 
     csrf = world.login()
     assert asked("wrong") == (MAX_BODY, 403)
     assert asked(csrf) == (MAX_BLOB, None)
+
+
+SVG = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+
+
+@pytest.mark.parametrize("declared", ["image/svg+xml", "image/png"])
+def test_an_svg_is_stored_and_served_as_svg_whatever_it_declared(
+    world: World, declared: str
+) -> None:
+    csrf = world.login()
+    answer = upload(world, csrf, SVG, declared)
+    assert answer.status == 200 and json_of(answer)["kind"] == "svg"
+    shown = world.call("GET", f"/admin/api/logos/{json_of(answer)['logo'].removeprefix('blob:')}")
+    assert shown.body == SVG and shown.content_type == "image/svg+xml"
+    assert ("Content-Security-Policy", "sandbox") in shown.headers
+
+
+def test_an_upload_that_cannot_be_stored_is_read_only(
+    world: World, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def full(_self: Path, _data: bytes) -> int:
+        raise OSError(28, "No space left on device")
+
+    csrf = world.login()
+    monkeypatch.setattr(Path, "write_bytes", full)
+    with caplog.at_level(logging.WARNING):
+        answer = upload(world, csrf, PNG)
+    assert answer.status == 503 and json_of(answer) == {"error": "read_only"}
+    event = next(r for r in caplog.records if r.getMessage() == "logo_store_failed")
+    assert event.__dict__["fields"] == {"client": "198.51.100.7", "errno": 28}

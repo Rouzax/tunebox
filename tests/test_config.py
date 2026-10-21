@@ -157,6 +157,9 @@ GOOD_STREAM = {"name": "High", "url": "https://example.invalid/a.aac"}
         (streams_channel({**GOOD_STREAM, "kbps": True}), "channels[0].streams[0].kbps"),
         (streams_channel({**GOOD_STREAM, "bitrate": 1}), "channels[0].streams[0].bitrate"),
         (minimal(logo="http://example.invalid/x.png"), "channels[0].logo"),
+        (minimal(logo="blob:../x"), "channels[0].logo"),
+        (minimal(logo="blob:" + "A" * 64), "channels[0].logo"),
+        (minimal(logo="blob:" + "0" * 63), "channels[0].logo"),
         (minimal(group=""), "channels[0].group"),
         (minimal(always="yes"), "channels[0].always"),
         ({**minimal(), "player": {"latitude": 52.0}}, "player: give latitude and longitude"),
@@ -181,6 +184,11 @@ def test_group_logo_and_always(tmp_path: Path) -> None:
         "https://example.invalid/l.png",
         True,
     )
+
+
+def test_an_uploaded_logo_reference_is_a_logo(tmp_path: Path) -> None:
+    ref = "blob:" + "a" * 64
+    assert parse(minimal(logo=ref), tmp_path).channels[0].logo == ref
 
 
 def test_player_settings(tmp_path: Path) -> None:

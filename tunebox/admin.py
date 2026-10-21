@@ -28,7 +28,7 @@ from tunebox.accounts import (
     SessionEnded,
     session_id,
 )
-from tunebox.blobs import MAX_BLOB, BlobError, Blobs
+from tunebox.blobs import MAX_BLOB, BlobError, Blobs, BlobUnavailable
 from tunebox.config import (
     CODECS,
     DEFAULTS,
@@ -614,6 +614,11 @@ class Admin:
             ref, kind = self._blobs.save(request.body)
         except BlobError:
             return _error(400, "not_an_image")
+        except BlobUnavailable as error:
+            event(
+                log, logging.WARNING, "logo_store_failed", client=request.client, errno=error.errno
+            )
+            return _error(503, "read_only")
         event(
             log,
             logging.INFO,

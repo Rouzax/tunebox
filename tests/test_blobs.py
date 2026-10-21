@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from tunebox.blobs import BlobError, Blobs
+from tunebox.blobs import MAX_BLOB, BlobError, Blobs, BlobUnavailable
 from tunebox.config import ChannelRow, ConfigState
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -63,12 +63,52 @@ def test_collect_keeps_referenced_and_young_blobs(tmp_path: Path) -> None:
         path = blobs.path(ref)
         assert path is not None
         os.utime(path, (clock[0] - 2 * 86_400, clock[0] - 2 * 86_400))
-    (tmp_path / ".partial.tmp").write_bytes(b"x")
-    os.utime(tmp_path / ".partial.tmp", (0, 0))
     assert blobs.collect(keep={kept}, older_than_s=86_400) == 1
     assert blobs.path(kept) and blobs.path(young) and blobs.path(old) is None
-    assert (tmp_path / ".partial.tmp").exists()
 
 
 def test_collect_without_a_folder_removes_nothing(tmp_path: Path) -> None:
     assert Blobs(tmp_path / "nowhere").collect(set(), 0) == 0
+
+
+def test_save_accepts_exactly_the_limit(tmp_path: Path) -> None:
+    body = PNG + b"\x00" * (MAX_BLOB - len(PNG))
+    assert len(body) == MAX_BLOB
+    ref, _ = Blobs(tmp_path).save(body)
+    assert Blobs(tmp_path).path(ref) is not None
+
+
+def test_collect_removes_old_temp_files_only(tmp_path: Path) -> None:
+    clock = [1_000_000.0]
+    blobs = Blobs(tmp_path, clock=lambda: clock[0])
+    old, young = tmp_path / ".a.tmp", tmp_path / ".b.tmp"
+    old.write_bytes(b"x")
+    young.write_bytes(b"x")
+    os.utime(old, (clock[0] - 2 * 86_400, clock[0] - 2 * 86_400))
+    os.utime(young, (clock[0], clock[0]))
+    assert blobs.collect(set(), 86_400) == 1
+    assert not old.exists() and young.exists()
+
+
+def test_a_failed_write_leaves_no_partial_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def full(_self: Path, _data: bytes) -> int:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", full)
+    with pytest.raises(BlobUnavailable):
+        Blobs(tmp_path).save(PNG)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_failed_rename_removes_the_partial_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(_self: Path, _target: Path) -> Path:
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(Path, "replace", refuse)
+    with pytest.raises(BlobUnavailable):
+        Blobs(tmp_path).save(PNG)
+    assert list(tmp_path.iterdir()) == []
