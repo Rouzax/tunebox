@@ -113,7 +113,8 @@ function sourceEditor(schema, source) {
     }};
 }
 
-const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+// The server's limit for an uploaded image, in bytes.
+const MAX_LOGO_BYTES = 2000000;
 
 // An uploaded logo is shown from the panel at the size of the page and of a
 // list row; a URL is only downloaded after saving.

@@ -27,3 +27,15 @@ test('send passes a raw body with its own type and the token', async () => {
     assert.deepEqual(seen.init.body, new Uint8Array([1, 2]));
     setCsrf(null);
 });
+
+test('call sends JSON under its content type and the token', async () => {
+    let seen = null;
+    setCsrf('t0k');
+    const fetchFn = async (url, init) => { seen = {url, init}; return {ok: true, status: 200, json: async () => ({})}; };
+    await call('POST', 'config', {a: 1}, {fetchFn});
+    assert.equal(seen.url, '/admin/api/config');
+    assert.equal(seen.init.headers['Content-Type'], 'application/json');
+    assert.equal(seen.init.headers['X-Tunebox-CSRF'], 't0k');
+    assert.equal(seen.init.body, JSON.stringify({a: 1}));
+    setCsrf(null);
+});

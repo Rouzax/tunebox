@@ -1,6 +1,5 @@
 // Every change, newest first, with what it changed and a way back.
-import {button, el, icon, when} from './dom.js';
-import {askCode} from './account.js';
+import {askCode, button, el, icon, when} from './dom.js';
 import {diffStates, importSummary} from './state.js';
 
 const KINDS = {
@@ -39,14 +38,13 @@ function guarded(ctx, handler) {
 // Import: a file is read by the server, shown as differences with what is
 // stored, and stored only after a click (and a fresh code when the server
 // wants one). The page never reads the file itself.
-function importPart(ctx) {
+function importPart(ctx, refreshList) {
     const current = ctx.stillOpen;
     const area = el('div', {class: 'restore'});
     const chooser = el('input', {type: 'file', name: 'import-file', accept: '.toml,text/plain,application/toml', hidden: true});
     const codeArea = el('div');
 
     function cancel() {
-        chooser.value = '';
         area.replaceChildren();
     }
 
@@ -54,16 +52,16 @@ function importPart(ctx) {
         const changes = diffStates(ctx.config.state, previewed.state);
         const store = guarded(ctx, async () => {
             let result = await ctx.importFile(toml, previewed.state);
-            if (result.reauth && await askCode(ctx, codeArea)) {
+            // A code that went stale before the import arrived asks again.
+            while (result.reauth && current() && await askCode(ctx, codeArea)) {
                 result = await ctx.importFile(toml, previewed.state);
             }
             if (!current()) {
                 return;
             }
             if (result.stale) {
+                refreshList();
                 showPreview(toml, previewed, 'The stations changed in the meantime. Check the differences again.');
-            } else if (result.ok) {
-                chooser.value = '';
             }
         });
         area.replaceChildren(
@@ -78,6 +76,9 @@ function importPart(ctx) {
 
     const choose = guarded(ctx, async () => {
         const file = chooser.files[0];
+        // Cleared at once so choosing the same file again (after fixing it)
+        // fires a change; the File stays readable.
+        chooser.value = '';
         if (!file) {
             return;
         }
@@ -136,7 +137,12 @@ async function list(root, ctx) {
         }
     }
     more.addEventListener('click', () => page().catch(() => ctx.message('Could not reach tunebox.')));
-    root.replaceChildren(el('h2', null, 'History'), importPart(ctx), items, more);
+    function refresh() {
+        items.replaceChildren();
+        last = null;
+        page().catch(() => ctx.message('Could not reach tunebox.'));
+    }
+    root.replaceChildren(el('h2', null, 'History'), importPart(ctx, refresh), items, more);
     await page();
 }
 

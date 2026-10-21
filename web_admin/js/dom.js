@@ -54,3 +54,32 @@ export function field(label, input, hint) {
 export function when(seconds) {
     return new Date(seconds * 1000).toLocaleString();
 }
+
+// Asks for a code in area and confirms it. Resolves true once the server
+// has a fresh code, false when the owner cancels.
+export function askCode(ctx, area) {
+    return new Promise((resolve) => {
+        const input = el('input', {name: 'code', autocomplete: 'one-time-code', inputmode: 'numeric', required: true});
+        const form = el('form', {class: 'confirm-code'},
+            field('Code from your authenticator app, or a recovery code', input),
+            el('div', {class: 'actions'},
+                el('button', {type: 'submit'}, icon('lock'), ' Confirm'),
+                button('close', 'Cancel', () => {
+                    form.remove();
+                    resolve(false);
+                }, {class: 'quiet'})));
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const answer = await ctx.request('POST', 'account/reauth', {code: input.value});
+            input.value = '';
+            if (answer.status === 204) {
+                form.remove();
+                resolve(true);
+            } else if (answer.status !== 401) {
+                ctx.fail(answer.data);
+            }
+        });
+        area.replaceChildren(form);
+        input.focus();
+    });
+}

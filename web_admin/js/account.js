@@ -2,37 +2,8 @@
 // that are logged in. Each change asks for a code first (within 5 minutes
 // of the last one), and signs every other browser out.
 import qrcode from '/vendor/qrcode-generator-2.0.4/qrcode.mjs';
-import {button, el, field, icon, when} from './dom.js';
+import {askCode, button, el, field, icon, when} from './dom.js';
 import {qrMatrix, qrSvg} from './qr.js';
-
-// Asks for a code in area and confirms it. Resolves true once the server
-// has a fresh code, false when the owner cancels.
-export function askCode(ctx, area) {
-    return new Promise((resolve) => {
-        const input = el('input', {name: 'code', autocomplete: 'one-time-code', inputmode: 'numeric', required: true});
-        const form = el('form', {class: 'confirm-code'},
-            field('Code from your authenticator app, or a recovery code', input),
-            el('div', {class: 'actions'},
-                el('button', {type: 'submit'}, icon('lock'), ' Confirm'),
-                button('close', 'Cancel', () => {
-                    form.remove();
-                    resolve(false);
-                }, {class: 'quiet'})));
-        form.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const answer = await ctx.request('POST', 'account/reauth', {code: input.value});
-            input.value = '';
-            if (answer.status === 204) {
-                form.remove();
-                resolve(true);
-            } else if (answer.status !== 401) {
-                ctx.fail(answer.data);
-            }
-        });
-        area.replaceChildren(form);
-        input.focus();
-    });
-}
 
 // Sends; when the server wants a fresh code, asks for one in area, sends
 // the code, then sends again. Resolves with the last answer.

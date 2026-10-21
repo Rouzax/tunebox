@@ -128,20 +128,22 @@ const ctx = {
         }
         return answer;
     },
-    // Replaces the stations with an imported file. A stale version reloads
-    // and a missing fresh code is reported, both without redrawing the
-    // page, so it can show the file again; state is the file's, for naming
+    // Replaces the stations with an imported file, as one save. A stale
+    // version reloads and a missing fresh code is reported, both without
+    // redrawing the page, so it can show the file again; state is the file's, for naming
     // a refused station.
     async importFile(toml, state) {
-        const answer = await call('POST', 'import', {toml, based_on: ctx.config.version});
-        if (answer.status === 409) {
-            await ctx.reload();
-            return {ok: false, stale: true};
-        }
-        if (answer.status === 403 && answer.data.error === 'reauth_required') {
-            return {ok: false, reauth: true};
-        }
-        return once(async () => answer, state, 'Imported.');
+        const body = {toml, based_on: ctx.config.version};
+        return once(() => call('POST', 'import', body), state, 'Imported.', undefined, async (answer) => {
+            if (answer.status === 409) {
+                await ctx.reload();
+                return {ok: false, stale: true};
+            }
+            if (answer.status === 403 && answer.data.error === 'reauth_required') {
+                return {ok: false, reauth: true};
+            }
+            return null;
+        });
     },
     // restoredState is the state the entry brings back, so a refusal names
     // that state's stations.
@@ -157,7 +159,9 @@ let saving = false;
 // the same version again and be refused as stale. The page is inert
 // meanwhile. A request that got no answer may still have been stored, so
 // the page asks what is stored before it draws anything.
-async function once(send, state, done, retry) {
+// early may answer for the caller before the shared handling (a page that
+// keeps its own state across a refusal); null leaves the answer to commit.
+async function once(send, state, done, retry, early) {
     if (saving) {
         return {ok: false};
     }
@@ -165,7 +169,9 @@ async function once(send, state, done, retry) {
     view.inert = true;
     message('');
     try {
-        return await commit(await send(), state, done, retry);
+        const answer = await send();
+        const handled = early ? await early(answer) : null;
+        return handled || await commit(answer, state, done, retry);
     } catch (error) {
         try {
             await ctx.reload();
