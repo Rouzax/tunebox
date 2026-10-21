@@ -737,7 +737,8 @@ def test_preview_shows_the_state_and_notes_without_storing(world: World) -> None
     [
         ("[[channels]\n", "line"),
         ("surprise = 1\n", "surprise"),
-        (TWO_SAME_IDS, "duplicate"),
+        (TWO_SAME_IDS, "duplicate id"),
+        (STATIONS_TOML.replace('name = "Late"', "name = 1979-05-27"), "channels[1].name"),
         (SLOW_RULE, "rules.played_by"),
     ],
 )
@@ -750,6 +751,112 @@ def test_a_broken_import_is_refused_with_its_reason(world: World, text: str, nam
         assert answer.status == 400
         assert names in json_of(answer)["message"]
     assert world.settings.load()[1] == 0
+
+
+def test_the_preview_does_not_lint_patterns_the_store_already_holds(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = world.login()
+    rules = {"played_by": r"\s*\(Played by ([^)]*)\)\s*$"}
+    save(world, csrf, 0, state_of(station("owr", rules=rules)))
+    text = world.call("GET", "/admin/api/export").body.decode()
+
+    def stricter(_pattern: str) -> str:
+        return "now refused"
+
+    monkeypatch.setattr("tunebox.rulecheck.lint", stricter)
+    answer = world.call("POST", "/admin/api/import/preview", {"toml": text}, csrf=csrf)
+    assert answer.status == 200
+    changed = text.replace("Played by", "Played with")
+    answer = world.call("POST", "/admin/api/import/preview", {"toml": changed}, csrf=csrf)
+    assert answer.status == 400
+    assert json_of(answer)["message"] == "channels[0].rules.played_by: now refused"
+
+
+def test_a_deeply_nested_import_is_refused_not_a_crash(world: World) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+    deep = "x = " + "[" * 5000 + "]" * 5000
+    for path, body in (
+        ("/admin/api/import/preview", {"toml": deep}),
+        ("/admin/api/import", {"toml": deep, "based_on": 0}),
+    ):
+        answer = world.call("POST", path, body, csrf=csrf)
+        assert answer.status == 400
+        assert "too deeply nested" in json_of(answer)["message"]
+
+
+def test_a_deeply_nested_json_body_is_a_bad_request(world: World) -> None:
+    csrf = world.login()
+    request = Request(
+        "POST",
+        "/admin/api/config",
+        (
+            ("Origin", ORIGIN),
+            ("Content-Type", "application/json"),
+            ("X-Tunebox-CSRF", csrf),
+            ("Cookie", "; ".join(f"{k}={v}" for k, v in world.cookies.items())),
+        ),
+        b"[" * 100_000,
+        "198.51.100.7",
+    )
+    assert world.admin.handle(request).status == 400
+
+
+def test_a_non_finite_number_is_refused(world: World) -> None:
+    csrf = world.login()
+    answer = world.call(
+        "POST",
+        "/admin/api/import/preview",
+        {"toml": "[defaults]\ndelay_s = nan\n" + STATIONS_TOML},
+        csrf=csrf,
+    )
+    assert answer.status == 400
+    assert "defaults.delay_s" in json_of(answer)["message"]
+    raw = '{"based_on": 0, "state": {"defaults": {"delay_s": NaN}, "channels": []}}'
+    request = Request(
+        "POST",
+        "/admin/api/config",
+        (
+            ("Origin", ORIGIN),
+            ("Content-Type", "application/json"),
+            ("X-Tunebox-CSRF", csrf),
+            ("Cookie", "; ".join(f"{k}={v}" for k, v in world.cookies.items())),
+        ),
+        raw.encode(),
+        "198.51.100.7",
+    )
+    saved = world.admin.handle(request)
+    assert saved.status == 400
+    assert "defaults.delay_s" in json_of(saved)["message"]
+
+
+def test_export_then_import_keeps_enabled_groups_and_an_empty_group(world: World) -> None:
+    csrf = world.login()
+    off = station("late")
+    off["enabled"] = False
+    off["group"] = "Night"
+    on = station("owr")
+    on["group"] = "Day"
+    state = state_of(on, off, groups=["Day", "Empty", "Night"])
+    assert save(world, csrf, 0, state).status == 200
+    before = json_of(world.call("GET", "/admin/api/config"))["state"]
+    text = world.call("GET", "/admin/api/export").body.decode()
+    fresh(world, csrf)
+    answer = world.call("POST", "/admin/api/import", {"toml": text, "based_on": 1}, csrf=csrf)
+    assert json_of(answer)["changed"] is False
+    assert json_of(world.call("GET", "/admin/api/config"))["state"] == before
+    assert before["groups"] == ["Day", "Empty", "Night"]
+
+
+def test_a_stale_import_is_refused(world: World) -> None:
+    csrf = world.login()
+    save(world, csrf, 0, state_of(station("a")))
+    fresh(world, csrf)
+    answer = world.call(
+        "POST", "/admin/api/import", {"toml": STATIONS_TOML, "based_on": 0}, csrf=csrf
+    )
+    assert (answer.status, json_of(answer)) == (409, {"error": "stale", "version": 1})
 
 
 @pytest.mark.parametrize("path", ["/admin/api/import", "/admin/api/import/preview"])

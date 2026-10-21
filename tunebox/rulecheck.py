@@ -345,6 +345,23 @@ def patterns(state: ConfigState) -> list[tuple[str, str]]:
     return found
 
 
+def _unseen(candidate: ConfigState, stored: ConfigState) -> list[tuple[str, str]]:
+    """The candidate's patterns that the stored state does not hold."""
+    known = {pattern for _, pattern in patterns(stored)}
+    return [(field, pattern) for field, pattern in patterns(candidate) if pattern not in known]
+
+
+def lint_new(candidate: ConfigState, stored: ConfigState) -> str | None:
+    """Why the lint refuses the first of the candidate's new patterns, as
+    "<field>: <reason>", or None. Patterns already stored are left alone
+    (see refused); no child process runs."""
+    for field, pattern in _unseen(candidate, stored):
+        reason = lint(pattern)
+        if reason:
+            return f"{field}: {reason}"
+    return None
+
+
 def refused(
     candidate: ConfigState, stored: ConfigState, samples: Callable[[], list[str]]
 ) -> str | None:
@@ -353,14 +370,11 @@ def refused(
     that grew stricter must not block every save until they are edited.
     samples gives the titles to try new patterns on; gathering them reads
     every channel, so it is asked only when there is a new pattern."""
-    known = {pattern for _, pattern in patterns(stored)}
+    reason = lint_new(candidate, stored)
+    if reason:
+        return reason
     new: dict[str, str] = {}
-    for field, pattern in patterns(candidate):
-        if pattern in known:
-            continue
-        reason = lint(pattern)
-        if reason:
-            return f"{field}: {reason}"
+    for field, pattern in _unseen(candidate, stored):
         new.setdefault(pattern, field)
     if not new:
         return None
@@ -370,17 +384,6 @@ def refused(
         return None
     at, reason = result
     return f"{new[listed[at]] if at is not None else 'rules'}: {reason}"
-
-
-def lint_all(state: ConfigState) -> str | None:
-    """Why the lint refuses the first of the state's patterns, as
-    "<field>: <reason>", or None. Every pattern is linted, stored or not;
-    no child process runs."""
-    for field, pattern in patterns(state):
-        reason = lint(pattern)
-        if reason:
-            return f"{field}: {reason}"
-    return None
 
 
 def stored_refusals(state: ConfigState) -> list[tuple[str, str]]:

@@ -43,7 +43,7 @@ from tunebox.http_headers import single
 from tunebox.logs import event
 from tunebox.paths import inside
 from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, PinStale, read_cookie
-from tunebox.rulecheck import lint_all, refused
+from tunebox.rulecheck import lint_new, refused
 from tunebox.sessions import KNOWN_S, Gate
 from tunebox.settings import (
     Settings,
@@ -622,9 +622,10 @@ class Admin:
         try:
             state, notes = state_from_import(body["toml"])
             validate_state(state)
+            stored, _ = self._settings.load()
         except ConfigError as error:
             return _json(400, {"error": "invalid", "message": str(error)})
-        reason = lint_all(state)
+        reason = lint_new(state, stored)
         if reason:
             return _json(400, {"error": "invalid", "message": reason})
         return _json(200, {"state": json.loads(state_to_json(state)), "notes": notes})
@@ -640,6 +641,7 @@ class Admin:
             return stale
         try:
             state, _notes = state_from_import(text)
+            validate_state(state)
         except ConfigError as error:
             return _json(400, {"error": "invalid", "message": str(error)})
         return self._commit(
@@ -855,7 +857,7 @@ def _body(request: Request, keys: tuple[str, ...]) -> dict[str, str] | None:
     """The JSON object with the string fields named, or None."""
     try:
         payload: object = json.loads(request.body or b"null")
-    except ValueError:
+    except ValueError, RecursionError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -868,7 +870,7 @@ def _body(request: Request, keys: tuple[str, ...]) -> dict[str, str] | None:
 def _object(request: Request) -> dict[str, object] | None:
     try:
         payload: object = json.loads(request.body or b"null")
-    except ValueError:
+    except ValueError, RecursionError:
         return None
     return cast("dict[str, object]", payload) if isinstance(payload, dict) else None
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import re
 import tomllib
 import urllib.parse
@@ -255,6 +256,8 @@ def state_from_import(text: str) -> tuple[ConfigState, list[str]]:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
         raise ConfigError(str(error)) from error
+    except RecursionError as error:
+        raise ConfigError("the file is too deeply nested") from error
     notes = [
         f"[{key}] is a start-up setting and was left out" for key in _START_UP_ONLY if key in data
     ]
@@ -491,6 +494,8 @@ def _numbers(table: dict[str, Any], where: str) -> dict[str, float]:
         value: object = table[key]
         if isinstance(value, bool) or not isinstance(value, int | float):
             raise ConfigError(f"{where}.{key}: expected a number")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ConfigError(f"{where}.{key}: expected a finite number")
         if key == "history_size" and (not isinstance(value, int) or value < 1):
             raise ConfigError(f"{where}.{key}: expected a whole number of at least 1")
         if value < 0 or (key == "poll_interval_s" and value == 0):

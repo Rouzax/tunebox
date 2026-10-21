@@ -9,7 +9,7 @@ from tunebox.rulecheck import (
     SYNTHETIC,
     check,
     lint,
-    lint_all,
+    lint_new,
     patterns,
     refused,
     samples_for,
@@ -191,11 +191,12 @@ def test_stored_refusals_lists_what_the_lint_now_refuses() -> None:
     assert [field for field, _ in found] == ["channels[1].rules.played_by"]
 
 
-def test_lint_all_names_the_first_refused_pattern_stored_or_not() -> None:
-    assert lint_all(state_with("(x)", "(a+)+$")) == (
-        "channels[1].rules.played_by: " + str(lint("(a+)+$"))
-    )
-    assert lint_all(state_with("(x)", "(y)")) is None
+def test_lint_new_skips_the_patterns_the_store_holds() -> None:
+    stored = state_with("(x)", "(a+)+$")
+    assert lint_new(stored, stored) is None
+    reason = lint_new(state_with("(x)", "(a+)+$"), state_with("(x)"))
+    assert reason == "channels[1].rules.played_by: " + str(lint("(a+)+$"))
+    assert lint_new(state_with("(x)", "(y)"), state_with()) is None
 
 
 def test_patterns_finds_every_key_config_compiles() -> None:

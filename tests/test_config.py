@@ -433,3 +433,8 @@ def test_state_from_import_refuses_an_unknown_top_level_key() -> None:
 def test_state_from_import_names_the_toml_error() -> None:
     with pytest.raises(config.ConfigError, match="line"):
         config.state_from_import("[[channels]\n")
+
+
+def test_state_from_import_refuses_a_too_deeply_nested_file() -> None:
+    with pytest.raises(config.ConfigError, match="too deeply nested"):
+        config.state_from_import("x = " + "[" * 5000 + "]" * 5000)
