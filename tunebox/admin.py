@@ -161,6 +161,18 @@ def _error(status: int, name: str) -> Response:
     return _json(status, {"error": name})
 
 
+def _exposed(stored: ConfigState, state: ConfigState) -> list[str]:
+    """The stations the PIN hides now that stay in state without needs_pin:
+    importing a tunebox.toml that never set it would show them to every
+    device. A station the state removes is not exposed."""
+    hidden = {row.id for row in stored.channels if row.doc.get("needs_pin") is True}
+    return [
+        row.id
+        for row in state.channels
+        if row.id in hidden and row.doc.get("needs_pin") is not True
+    ]
+
+
 def _invalid(message: str, state: ConfigState | None) -> Response:
     """A refused state. The server names fields by position
     (channels[3].streams[0].url); the station's id next to it says which
@@ -702,9 +714,16 @@ class Admin:
             state, notes = state_from_import(body["toml"])
         except ConfigError as error:
             return _invalid(str(error), None)
-        reason = self._judge(state, self._settings.load()[0])
+        stored = self._settings.load()[0]
+        reason = self._judge(state, stored)
         if reason:
             return _invalid(reason, state)
+        exposed = _exposed(stored, state)
+        if exposed:
+            notes.append(
+                f"The listening PIN no longer hides {', '.join(exposed)}"
+                " (needs_pin is not set in the file)"
+            )
         return _json(200, {"state": json.loads(state_to_json(state)), "notes": notes})
 
     def _import(self, request: Request, session: Session) -> Response:

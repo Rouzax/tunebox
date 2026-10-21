@@ -404,7 +404,9 @@ Import takes such a file, or a `tunebox.toml`, and first only shows it:
 1. Choose **Import** and pick the file. Nothing is stored yet. The page says
    how many differences there are with what is stored now and lists them.
    `[server]` and `[admin]` tables are left out, with a note: they only
-   apply to the file tunebox starts from.
+   apply to the file tunebox starts from. Another note names each station
+   that needs the listening PIN now but has no `needs_pin = true` in the
+   file: after Replace, devices without the PIN see it.
 2. **Replace the stations with this file** replaces the stations, groups,
    defaults and player settings as a whole: a station that is not in the
    file is removed. If you have not typed an authenticator code in the

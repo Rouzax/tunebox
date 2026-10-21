@@ -822,6 +822,23 @@ def test_a_preview_with_too_many_new_title_rules_is_refused(
     assert json_of(answer)["message"].startswith(f"rules: at most {MAX_NEW_PATTERNS} new")
 
 
+def test_preview_notes_stations_that_lose_needs_pin(world: World) -> None:
+    csrf = world.login()
+    hidden = [station("owr", needs_pin=True), station("late", needs_pin=True)]
+    assert save(world, csrf, 0, state_of(*hidden, station("open"))).status == 200
+    kept = STATIONS_TOML.replace('name = "Late"', 'name = "Late"\nneeds_pin = true')
+    for text, named in ((STATIONS_TOML, ["owr", "late"]), (kept, ["owr"]), (ONLY_LATE, ["late"])):
+        answer = world.call("POST", "/admin/api/import/preview", {"toml": text}, csrf=csrf)
+        notes = [n for n in json_of(answer)["notes"] if "PIN" in n]
+        assert notes == [
+            f"The listening PIN no longer hides {', '.join(named)}"
+            " (needs_pin is not set in the file)"
+        ]
+    text = STATIONS_TOML.replace("[[channels]]", "[[channels]]\nneeds_pin = true")
+    answer = world.call("POST", "/admin/api/import/preview", {"toml": text}, csrf=csrf)
+    assert json_of(answer)["notes"] == []
+
+
 def test_a_refused_import_names_the_station_by_id(world: World) -> None:
     csrf = world.login()
     fresh(world, csrf)
