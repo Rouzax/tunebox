@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
-    addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, moveGroup,
+    addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, importSummary, logoPreview, moveGroup,
     moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setSettings, stationsByGroup, tickets, validId,
 } from '../../web_admin/js/state.js';
 
@@ -162,4 +162,18 @@ test('a page draw is current only until the next route', () => {
     const second = pages.take();
     assert.equal(first(), false);
     assert.equal(second(), true);
+});
+
+test('a logo preview comes from the panel for an upload only', () => {
+    assert.deepEqual(logoPreview('blob:' + 'a'.repeat(64)), {kind: 'blob', src: '/admin/api/logos/' + 'a'.repeat(64)});
+    assert.deepEqual(logoPreview('https://img.example/x.png'), {kind: 'url', src: null});
+    assert.deepEqual(logoPreview(''), {kind: 'none', src: null});
+    assert.deepEqual(logoPreview('blob:../x'), {kind: 'none', src: null});
+});
+
+test('the import summary counts the changes and repeats the notes', () => {
+    const lines = importSummary([{path: 'a'}, {path: 'b'}], ['[server] is a start-up setting and was left out']);
+    assert.deepEqual(lines, ['2 differences with what is stored now.', '[server] is a start-up setting and was left out']);
+    assert.deepEqual(importSummary([{path: 'a'}], []), ['1 difference with what is stored now.']);
+    assert.deepEqual(importSummary([], []), ['The file matches what is stored now.']);
 });

@@ -1,6 +1,7 @@
 // Every change, newest first, with what it changed and a way back.
-import {button, el, when} from './dom.js';
-import {diffStates} from './state.js';
+import {button, el, icon, when} from './dom.js';
+import {askCode} from './account.js';
+import {diffStates, importSummary} from './state.js';
 
 const KINDS = {
     file: 'Taken from tunebox.toml',
@@ -35,6 +36,77 @@ function guarded(ctx, handler) {
     });
 }
 
+// Import: a file is read by the server, shown as differences with what is
+// stored, and stored only after a click (and a fresh code when the server
+// wants one). The page never reads the file itself.
+function importPart(ctx) {
+    const current = ctx.stillOpen;
+    const area = el('div', {class: 'restore'});
+    const chooser = el('input', {type: 'file', name: 'import-file', accept: '.toml,text/plain,application/toml', hidden: true});
+    const codeArea = el('div');
+
+    function cancel() {
+        chooser.value = '';
+        area.replaceChildren();
+    }
+
+    function showPreview(toml, previewed, extraNote) {
+        const changes = diffStates(ctx.config.state, previewed.state);
+        const store = guarded(ctx, async () => {
+            let result = await ctx.importFile(toml, previewed.state);
+            if (result.reauth && await askCode(ctx, codeArea)) {
+                result = await ctx.importFile(toml, previewed.state);
+            }
+            if (!current()) {
+                return;
+            }
+            if (result.stale) {
+                showPreview(toml, previewed, 'The stations changed in the meantime. Check the differences again.');
+            } else if (result.ok) {
+                chooser.value = '';
+            }
+        });
+        area.replaceChildren(
+            extraNote ? el('p', {class: 'message', role: 'alert'}, extraNote) : null,
+            importSummary(changes, previewed.notes || []).map((line) => el('p', null, line)),
+            diffTable(changes),
+            el('div', {class: 'actions'},
+                button('arrow_upward', 'Replace the stations with this file', store, {class: 'danger'}),
+                button('close', 'Cancel', cancel, {class: 'quiet'})),
+            codeArea);
+    }
+
+    const choose = guarded(ctx, async () => {
+        const file = chooser.files[0];
+        if (!file) {
+            return;
+        }
+        const toml = await file.text();
+        const answer = await ctx.request('POST', 'import/preview', {toml});
+        if (!current()) {
+            return;
+        }
+        if (answer.status === 401) {
+            return;
+        }
+        if (answer.status === 400 && answer.data.error === 'invalid') {
+            area.replaceChildren(el('p', {class: 'message', role: 'alert'}, answer.data.message),
+                button('close', 'Cancel', cancel, {class: 'quiet'}));
+        } else if (answer.ok) {
+            showPreview(toml, answer.data);
+        } else {
+            ctx.fail(answer.data);
+        }
+    });
+    chooser.addEventListener('change', choose);
+    return el('div', {class: 'transfer'},
+        el('div', {class: 'actions'},
+            el('a', {class: 'button quiet', href: '/admin/api/export', download: ''}, icon('arrow_downward'), ' Export'),
+            button('arrow_upward', 'Import', () => chooser.click(), {class: 'quiet'}),
+            chooser),
+        area);
+}
+
 async function list(root, ctx) {
     const current = ctx.stillOpen;
     const items = el('ul', {class: 'history'});
@@ -64,7 +136,7 @@ async function list(root, ctx) {
         }
     }
     more.addEventListener('click', () => page().catch(() => ctx.message('Could not reach tunebox.')));
-    root.replaceChildren(el('h2', null, 'History'), items, more);
+    root.replaceChildren(el('h2', null, 'History'), importPart(ctx), items, more);
     await page();
 }
 

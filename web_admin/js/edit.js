@@ -1,6 +1,6 @@
 // The station form, for a new station and for an existing one.
 import {button, el, field} from './dom.js';
-import {addStation, newStation, replaceStation, validId} from './state.js';
+import {addStation, logoPreview, newStation, replaceStation, validId} from './state.js';
 
 const NUMBERS = {
     delay_s: ['Delay (seconds)', 'How far the audio runs behind the feed.'],
@@ -113,6 +113,68 @@ function sourceEditor(schema, source) {
     }};
 }
 
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+
+// An uploaded logo is shown from the panel at the size of the page and of a
+// list row; a URL is only downloaded after saving.
+function logoPart(ctx, input) {
+    const current = ctx.stillOpen;
+    const preview = el('div', {class: 'logo-preview'});
+    const picker = el('input', {type: 'file', name: 'logo-file', hidden: true,
+        accept: 'image/png,image/jpeg,image/webp,image/svg+xml'});
+    const note = el('span', {class: 'hint', role: 'alert'});
+    function draw() {
+        const shown = logoPreview(input.value.trim());
+        if (shown.kind === 'blob') {
+            preview.replaceChildren(
+                el('img', {class: 'logo-full', src: shown.src, alt: 'Logo'}),
+                el('img', {class: 'logo-small', src: shown.src, alt: 'Logo at list size'}));
+        } else if (shown.kind === 'url') {
+            preview.replaceChildren(el('span', {class: 'hint'}, 'Shown after saving.'));
+        } else {
+            preview.replaceChildren();
+        }
+    }
+    input.addEventListener('input', draw);
+    input.addEventListener('change', draw);
+    picker.addEventListener('change', async () => {
+        const file = picker.files[0];
+        picker.value = '';
+        if (!file) {
+            return;
+        }
+        if (file.size > MAX_LOGO_BYTES) {
+            note.textContent = 'The image is larger than 2 MB.';
+            return;
+        }
+        note.textContent = '';
+        let answer;
+        try {
+            answer = await ctx.upload(file);
+        } catch (error) {
+            note.textContent = 'Could not reach tunebox.';
+            return;
+        }
+        if (!current()) {
+            return;
+        }
+        if (answer.status === 401) {
+            return;
+        }
+        if (!answer.ok) {
+            ctx.fail(answer.data);
+            return;
+        }
+        input.value = answer.data.logo;
+        draw();
+    });
+    draw();
+    return {
+        preview,
+        controls: el('div', {class: 'actions'}, button('arrow_upward', 'Upload', () => picker.click(), {class: 'quiet'}), picker, note),
+    };
+}
+
 export function render(root, ctx, id) {
     const {state, schema} = ctx.config;
     const existing = id ? state.channels.find((row) => row.id === id) : null;
@@ -128,6 +190,8 @@ export function render(root, ctx, id) {
     const error = el('p', {class: 'message', role: 'alert', hidden: true});
     const groups = [['', 'None'], ...state.groups.map((name) => [name, name])];
     const rules = doc.rules || {};
+    const logoInput = text('logo', doc.logo, {type: 'url', placeholder: 'https://'});
+    const logo = logoPart(ctx, logoInput);
     const form = el('form', {class: 'edit', novalidate: true},
         el('h2', null, existing ? `Edit ${doc.name || id}` : 'New station'),
         field('Name', text('name', doc.name, {required: true})),
@@ -136,7 +200,9 @@ export function render(root, ctx, id) {
             : field('Id', text('id', '', {required: true, pattern: '[a-z0-9][a-z0-9\\-]*', autocapitalize: 'off'}),
                 'Lower-case letters, digits and -; used in links, fixed once saved.'),
         field('Group', select('group', groups, row.group || '')),
-        field('Logo URL', text('logo', doc.logo, {type: 'url', placeholder: 'https://'}), 'Downloaded and served by tunebox.'),
+        field('Logo URL', logoInput, 'Downloaded and served by tunebox, or an image uploaded here.'),
+        logo.controls,
+        logo.preview,
         field('Default image URL', text('default_image', doc.default_image, {type: 'url'}), 'Shown when no cover is found.'),
         el('label', {class: 'check'}, el('input', {type: 'checkbox', name: 'always', checked: Boolean(doc.always)}),
             'Always poll the feed, also when nobody listens'),

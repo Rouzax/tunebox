@@ -5,13 +5,9 @@ import qrcode from '/vendor/qrcode-generator-2.0.4/qrcode.mjs';
 import {button, el, field, icon, when} from './dom.js';
 import {qrMatrix, qrSvg} from './qr.js';
 
-// Sends; when the server wants a fresh code, asks for one in area, sends
-// the code, then sends again. Resolves with the last answer.
-async function confirmed(ctx, area, send) {
-    const first = await send();
-    if (first.status !== 403 || first.data.error !== 'reauth_required') {
-        return first;
-    }
+// Asks for a code in area and confirms it. Resolves true once the server
+// has a fresh code, false when the owner cancels.
+export function askCode(ctx, area) {
     return new Promise((resolve) => {
         const input = el('input', {name: 'code', autocomplete: 'one-time-code', inputmode: 'numeric', required: true});
         const form = el('form', {class: 'confirm-code'},
@@ -20,7 +16,7 @@ async function confirmed(ctx, area, send) {
                 el('button', {type: 'submit'}, icon('lock'), ' Confirm'),
                 button('close', 'Cancel', () => {
                     form.remove();
-                    resolve({ok: false, status: 0, data: {}});
+                    resolve(false);
                 }, {class: 'quiet'})));
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
@@ -28,7 +24,7 @@ async function confirmed(ctx, area, send) {
             input.value = '';
             if (answer.status === 204) {
                 form.remove();
-                resolve(await send());
+                resolve(true);
             } else if (answer.status !== 401) {
                 ctx.fail(answer.data);
             }
@@ -36,6 +32,16 @@ async function confirmed(ctx, area, send) {
         area.replaceChildren(form);
         input.focus();
     });
+}
+
+// Sends; when the server wants a fresh code, asks for one in area, sends
+// the code, then sends again. Resolves with the last answer.
+async function confirmed(ctx, area, send) {
+    const first = await send();
+    if (first.status !== 403 || first.data.error !== 'reauth_required') {
+        return first;
+    }
+    return await askCode(ctx, area) ? send() : {ok: false, status: 0, data: {}};
 }
 
 function passwordPart(ctx) {

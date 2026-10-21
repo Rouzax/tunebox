@@ -2,7 +2,7 @@
 // the loaded configuration and every save, so the pages only build states.
 import qrcode from '/vendor/qrcode-generator-2.0.4/qrcode.mjs';
 import {render as renderAccount} from './account.js';
-import {call, setCsrf} from './api.js';
+import {call, send, setCsrf} from './api.js';
 import {render as renderEdit} from './edit.js';
 import {render as renderHistory} from './history.js';
 import {qrMatrix, qrSvg} from './qr.js';
@@ -23,7 +23,9 @@ const ERRORS = {
     no_new_secret: 'Start setting up the new authenticator again.',
     this_session: 'Use Log out to end this session.',
     bad_request: 'tunebox did not understand that. Reload the page and try again.',
-    too_large: 'This change is too large to save.',
+    too_large: 'That is too large to send.',
+    not_an_image: 'That file is not a PNG, JPEG, WebP or SVG image.',
+    unsupported_type: 'Upload a PNG, JPEG, WebP or SVG image.',
 };
 
 function show(id) {
@@ -117,6 +119,29 @@ const ctx = {
             await answered(401, answer.data);
         }
         return answer;
+    },
+    // Stores a logo image; the answer names it as blob:<sha256>.
+    async upload(file) {
+        const answer = await send('POST', 'logos', file, file.type || 'application/octet-stream');
+        if (answer.status === 401) {
+            await answered(401, answer.data);
+        }
+        return answer;
+    },
+    // Replaces the stations with an imported file. A stale version reloads
+    // and a missing fresh code is reported, both without redrawing the
+    // page, so it can show the file again; state is the file's, for naming
+    // a refused station.
+    async importFile(toml, state) {
+        const answer = await call('POST', 'import', {toml, based_on: ctx.config.version});
+        if (answer.status === 409) {
+            await ctx.reload();
+            return {ok: false, stale: true};
+        }
+        if (answer.status === 403 && answer.data.error === 'reauth_required') {
+            return {ok: false, reauth: true};
+        }
+        return once(async () => answer, state, 'Imported.');
     },
     // restoredState is the state the entry brings back, so a refusal names
     // that state's stations.

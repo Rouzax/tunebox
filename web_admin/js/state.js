@@ -273,3 +273,28 @@ export function tickets() {
         },
     };
 }
+
+const BLOB = /^blob:([0-9a-f]{64})$/;
+
+// Where the Logo field's value can be shown from. The panel's CSP allows
+// images from itself only, so an uploaded logo is drawn from the panel and
+// a remote URL is not drawn at all.
+export function logoPreview(value) {
+    const blob = BLOB.exec(value);
+    if (blob) {
+        return {kind: 'blob', src: `/admin/api/logos/${blob[1]}`};
+    }
+    if (/^https?:\/\//.test(value)) {
+        return {kind: 'url', src: null};
+    }
+    return {kind: 'none', src: null};
+}
+
+// The lines above an import's differences.
+export function importSummary(changes, notes) {
+    let first = 'The file matches what is stored now.';
+    if (changes.length) {
+        first = `${changes.length} ${changes.length === 1 ? 'difference' : 'differences'} with what is stored now.`;
+    }
+    return [first, ...notes];
+}
