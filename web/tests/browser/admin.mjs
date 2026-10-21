@@ -1531,6 +1531,31 @@ async function run() {
             await evaluate(`[...document.querySelectorAll('form.edit .actions button')].find((b) => b.textContent.trim() === 'Cancel').click()`);
             return (await until(`location.hash === '#stations' && document.querySelector('.station')`)) ? null : 'could not leave the form';
         });
+        await step('an upload that meets an ended session asks for the image again after login', async () => {
+            if (!(await openPage('#edit/first', `document.querySelector('form.edit') && document.querySelector('input[name=logo-file]')`))) {
+                return 'no edit form';
+            }
+            await otherLogin();
+            await endPageSession();
+            await setFile('input[name=logo-file]', join(transfer, 'logo.png'));
+            if (!(await until(`!document.querySelector('#login').hidden`))) {
+                return `the login form did not show (message: ${await message()})`;
+            }
+            const problem = await pageLogin();
+            if (problem) {
+                return problem;
+            }
+            if (!(await until(`document.querySelector('#shell .pending') && !document.querySelector('#shell .pending').hidden`))) {
+                return 'no box after login';
+            }
+            const text = await evaluate(`document.querySelector('#shell .pending').textContent`);
+            if (text.indexOf('The image was not uploaded') < 0) {
+                return `box says: ${text}`;
+            }
+            await buttonNamed('Discard');
+            return (await until(`document.querySelector('#shell .pending').hidden`)) ? null : 'the box stayed after Discard';
+        });
+
         rmSync(transfer, {recursive: true, force: true});
 
         // A first start: no account, the setup page on, the link from the log.

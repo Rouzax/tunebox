@@ -119,11 +119,14 @@ const ctx = {
     // Stores a logo image; the answer names it as blob:<sha256>. kept()
     // gives the {state, target, done} of the form's unsaved change, which a
     // session that ended meanwhile offers again after login, as for a save.
+    // That change never holds the image (the upload was refused before it
+    // was stored), so the offer says to upload it again.
     async upload(file, kept) {
         const answer = await send('POST', 'logos', file, file.type, {deadlineMs: UPLOAD_DEADLINE_MS});
         if (answer.status === 401) {
             const change = kept ? kept() : null;
-            await answered(401, answer.data, change && {...change, basedOn: ctx.config.version});
+            const usable = change && !change.problem;
+            await answered(401, answer.data, usable && {...change, basedOn: ctx.config.version, upload: true});
         }
         return answer;
     },
@@ -278,7 +281,9 @@ function showPending() {
     }
     const change = pending;
     const text = document.createElement('span');
-    text.textContent = 'A change was not saved because your session ended.';
+    text.textContent = change.upload
+        ? 'The image was not uploaded because your session ended. Save it now keeps the other changes in the form; then upload the image again.'
+        : 'A change was not saved because your session ended.';
     const save = document.createElement('button');
     save.type = 'button';
     save.textContent = 'Save it now';
