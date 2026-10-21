@@ -15,6 +15,7 @@ const ERRORS = {
     login_failed: 'Login failed.',
     slow_down: 'Too many attempts. Wait a little and try again.',
     setup_refused: 'This setup link is no longer valid.',
+    already_set_up: 'tunebox is already set up. Log in; if you did not note the recovery codes, make new ones on the Account page.',
     code_wrong: 'That code does not match. Type the one the app shows now.',
     read_only: 'tunebox cannot write its database right now. Try again later.',
     bad_origin: 'Open the admin panel at the address set as public_origin.',
@@ -432,7 +433,7 @@ async function startSetup(token) {
     const {ok, data} = await call('POST', 'setup/start', {token});
     if (!ok) {
         fail(data);
-        show('none');
+        show(data.error === 'already_set_up' ? 'login' : 'none');
         return;
     }
     document.querySelector('.qr-box').replaceChildren(qrSvg(document, qrMatrix(qrcode, data.uri)));
@@ -487,6 +488,11 @@ document.querySelector('#setup').addEventListener('submit', guarded(async (event
     const {ok, data} = await call('POST', 'setup/finish', answer);
     if (!ok) {
         fail(data);
+        if (data.error === 'already_set_up') {
+            form.password.value = '';
+            window.history.replaceState(null, '', '/admin/');
+            show('login');
+        }
         return;
     }
     form.password.value = '';

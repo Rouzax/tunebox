@@ -6,6 +6,7 @@ static files."""
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import hmac
 import json
 import logging
@@ -160,6 +161,10 @@ def _matches(template: str, name: str) -> bool:
     return True
 
 
+def _digest(token: str) -> bytes:
+    return hashlib.sha256(token.encode("utf-8", "surrogatepass")).digest()
+
+
 def _same(given: str, expected: str) -> bool:
     """A constant-time comparison that also takes text compare_digest
     refuses (non-ASCII), as a mismatch rather than an error."""
@@ -265,6 +270,7 @@ class Admin:
         self.gate = Gate(accounts.server_key, self.plain_http, clock, monotonic, sleep)
         self._setup_token: str | None = None
         self._setup_until = 0.0
+        self._spent: bytes | None = None
         self.routes: dict[tuple[str, str], Route] = {
             ("GET", "state"): Route(open=self._state),
             ("POST", "login"): Route(open=self._login),
@@ -542,6 +548,14 @@ class Admin:
             and not self._accounts.exists()
         )
 
+    def _is_spent(self, token: str) -> bool:
+        """The token of a setup that finished: its retry is not an attack."""
+        return (
+            self._spent is not None
+            and hmac.compare_digest(self._spent, _digest(token))
+            and self._accounts.exists()
+        )
+
     def _setup_allowed(self, request: Request, token: str) -> bool:
         """A wrong token counts as a failed login for the address."""
         release = self.gate.reserve(request.client)
@@ -557,6 +571,8 @@ class Admin:
         body = _body(request, ("token",))
         if body is None:
             return _error(400, "bad_request")
+        if self._is_spent(body["token"]):
+            return _error(409, "already_set_up")
         if not self._setup_allowed(request, body["token"]):
             return _error(401, "setup_refused")
         secret = self.gate.setup_secret()
@@ -569,6 +585,8 @@ class Admin:
         body = _body(request, ("token", "password", "code"))
         if body is None:
             return _error(400, "bad_request")
+        if self._is_spent(body["token"]):
+            return _error(409, "already_set_up")
         secret = self.gate.setup_secret_shown()
         if not self._setup_allowed(request, body["token"]) or secret is None:
             return _error(401, "setup_refused")
@@ -589,6 +607,7 @@ class Admin:
                 return _error(400, "password_too_short")
             except AccountError:
                 return _error(401, "setup_refused")
+        self._spent = _digest(body["token"])
         self._setup_token = None
         self.gate.end_setup()
         event(log, logging.WARNING, "admin_account_created", client=request.client)

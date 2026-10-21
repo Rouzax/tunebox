@@ -340,6 +340,33 @@ def test_static_files_are_limited_to_known_types_inside_the_folder(world: World)
     assert world.call("GET", "/admin").status == 301
 
 
+def totp_of(secret: str, world: World) -> str:
+    key = base64.b32decode(secret + "=" * (-len(secret) % 8))
+    return crypto.totp(key, int(world.clock.now // 30))
+
+
+def test_a_repeated_setup_finish_says_it_is_set_up(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        world = World(tmp_path, setup_page=True, account=False)
+    token = setup_token(caplog.records)
+    secret = json_of(world.call("POST", "/admin/api/setup/start", {"token": token}))["secret"]
+    body = {"token": token, "password": PASSWORD, "code": totp_of(secret, world)}
+    assert world.call("POST", "/admin/api/setup/finish", body).status == 200
+    caplog.clear()
+    again = world.call("POST", "/admin/api/setup/finish", body)
+    assert (again.status, json_of(again)) == (409, {"error": "already_set_up"})
+    assert world.call("POST", "/admin/api/setup/start", {"token": token}).status == 409
+    assert not [r for r in caplog.records if r.getMessage() == "admin_setup_token_rejected"]
+    for _ in range(10):
+        world.call("POST", "/admin/api/setup/finish", body)
+    other = world.call("POST", "/admin/api/setup/finish", {**body, "token": "different"})
+    assert other.status == 401
+    assert [r for r in caplog.records if r.getMessage() == "admin_setup_token_rejected"]
+    world.settings.close()
+
+
 def test_setup_page_flow(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING):
         world = World(tmp_path, setup_page=True, account=False)
