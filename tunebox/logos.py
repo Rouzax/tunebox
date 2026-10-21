@@ -56,7 +56,7 @@ def sniff(body: bytes) -> str | None:
 
 
 class Logos:
-    def __init__(self, directory: Path, http_get: HttpGet, blobs: Blobs | None = None) -> None:
+    def __init__(self, directory: Path, http_get: HttpGet, blobs: Blobs) -> None:
         self._dir = directory
         self._get = http_get
         self._blobs = blobs
@@ -163,7 +163,7 @@ class Logos:
         return saved == url and self.path_for(channel_id) is not None
 
     def _copy_blob(self, channel_id: str, ref: str) -> None:
-        source = self._blobs.path(ref) if self._blobs else None
+        source = self._blobs.path(ref)
         if source is None:
             event(log, logging.WARNING, "logo_missing", channel=channel_id, logo=ref)
             return

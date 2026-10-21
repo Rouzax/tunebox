@@ -89,7 +89,7 @@ def make_server(
     (logo_dir / "x.svg").write_bytes(b"<svg></svg>")
     (logo_dir / "small").mkdir()
     (logo_dir / "small" / "owr.png").write_bytes(b"\x89PNG\r\n\x1a\nsmall")
-    logos = Logos(logo_dir, lambda _url: b"")
+    logos = Logos(logo_dir, lambda _url: b"", Blobs(tmp_path / "blobs"))
     channels: dict[str, Channel] = {"owr": channel}
     for config in extra:
         channels[config.id] = Channel(

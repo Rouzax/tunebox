@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from tests.fakes import FakeHttp, FakeSource, NoJitter
+from tunebox.blobs import Blobs
 from tunebox.channel import Channel
 from tunebox.config import ChannelConfig, ChannelRow, ConfigState
 from tunebox.covers import CoverService
@@ -33,7 +34,7 @@ def rows(*docs: dict[str, Any]) -> ConfigState:
 
 class RecordingLogos(Logos):
     def __init__(self, directory: Path) -> None:
-        super().__init__(directory, FakeHttp(lambda _url: b""))
+        super().__init__(directory, FakeHttp(lambda _url: b""), Blobs(directory.parent / "blobs"))
         self.requested: list[str | None] = []
 
     def request(self, channel: ChannelConfig) -> None:
