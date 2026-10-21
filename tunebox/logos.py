@@ -12,11 +12,15 @@ import re
 import stat
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from tunebox.config import ChannelConfig
+from tunebox.config import BLOB_REF, ChannelConfig
 from tunebox.http import HttpError, HttpGet
 from tunebox.logs import event
 from tunebox.png import PngError, shrink
+
+if TYPE_CHECKING:
+    from tunebox.blobs import Blobs
 
 log = logging.getLogger(__name__)
 
@@ -52,9 +56,10 @@ def sniff(body: bytes) -> str | None:
 
 
 class Logos:
-    def __init__(self, directory: Path, http_get: HttpGet) -> None:
+    def __init__(self, directory: Path, http_get: HttpGet, blobs: Blobs | None = None) -> None:
         self._dir = directory
         self._get = http_get
+        self._blobs = blobs
         self._queue: queue.Queue[ChannelConfig] = queue.Queue()
         self._unavailable_reported = False
 
@@ -94,7 +99,8 @@ class Logos:
             self.refresh(channel)
 
     def refresh(self, channel: ChannelConfig) -> None:
-        """Downloads the logo when its address is new and keeps the small copy in step."""
+        """Downloads the logo when its address is new, or copies an uploaded
+        one, and keeps the small copy in step."""
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
         except OSError as error:
@@ -103,7 +109,10 @@ class Logos:
                 event(log, logging.WARNING, "logos_unavailable", error=str(error))
             return
         if channel.logo and not self._current(channel.id, channel.logo):
-            self._fetch(channel.id, channel.logo)
+            if BLOB_REF.fullmatch(channel.logo):
+                self._copy_blob(channel.id, channel.logo)
+            else:
+                self._fetch(channel.id, channel.logo)
         self._make_small(channel.id)
 
     def _make_small(self, channel_id: str) -> None:
@@ -153,6 +162,18 @@ class Logos:
             return False
         return saved == url and self.path_for(channel_id) is not None
 
+    def _copy_blob(self, channel_id: str, ref: str) -> None:
+        source = self._blobs.path(ref) if self._blobs else None
+        if source is None:
+            event(log, logging.WARNING, "logo_missing", channel=channel_id, logo=ref)
+            return
+        try:
+            body = source.read_bytes()
+        except OSError as error:
+            event(log, logging.WARNING, "logo_failed", channel=channel_id, error=str(error))
+            return
+        self._store(channel_id, body, source.suffix.removeprefix("."), ref)
+
     def _fetch(self, channel_id: str, url: str) -> None:
         try:
             body = self._get(url)
@@ -163,6 +184,11 @@ class Logos:
         if kind is None:
             event(log, logging.WARNING, "logo_rejected", channel=channel_id, bytes=len(body))
             return
+        self._store(channel_id, body, kind, url)
+
+    def _store(self, channel_id: str, body: bytes, kind: str, source: str) -> None:
+        """Makes body the channel's logo and records source (an address or a
+        blob reference) as what it came from."""
         try:
             partial = self._dir / f".{channel_id}.tmp"
             partial.write_bytes(body)
@@ -170,7 +196,7 @@ class Logos:
                 if other != kind:
                     (self._dir / f"{channel_id}.{other}").unlink(missing_ok=True)
             partial.replace(self._dir / f"{channel_id}.{kind}")
-            (self._dir / f"{channel_id}.url").write_text(url, encoding="utf-8")
+            (self._dir / f"{channel_id}.url").write_text(source, encoding="utf-8")
         except OSError as error:
             event(log, logging.WARNING, "logo_failed", channel=channel_id, error=str(error))
             return

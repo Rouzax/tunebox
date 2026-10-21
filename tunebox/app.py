@@ -38,6 +38,8 @@ DEFAULT_CONFIG = "/data/tunebox.toml"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # Outside web/, so the player's static files can never serve the admin pages.
 WEB_ADMIN_DIR = Path(__file__).resolve().parent.parent / "web_admin"
+# An upload waits this long for its station to be saved before a restart may remove it.
+BLOB_GRACE_S = 86_400
 
 
 def main() -> int:
@@ -75,10 +77,14 @@ def main() -> int:
         return 2
     for field, reason in stored_refusals(settings.load()[0]):
         event(log, logging.WARNING, "rule_refused", field=field, reason=reason)
+    blobs = Blobs(config.server.data_dir / "logos" / "blobs")
+    removed = blobs.collect(keep=settings.referenced_blobs(), older_than_s=BLOB_GRACE_S)
+    if removed:
+        event(log, logging.INFO, "logo_blobs_collected", removed=removed)
     store = Store(config.server.data_dir / "tunebox.db")
     covers = CoverService(store, Catalogs(http.get).find)
     guard = Guard()
-    logos = Logos(config.server.data_dir / "logos", guard.get)
+    logos = Logos(config.server.data_dir / "logos", guard.get, blobs)
     bursts = Bursts(guard.stream)
 
     def make_channel(channel: ChannelConfig, carry: Channel | None) -> Channel:
@@ -107,7 +113,7 @@ def main() -> int:
             admin_dir,
             settings=settings,
             pin=pin,
-            blobs=Blobs(config.server.data_dir / "logos" / "blobs"),
+            blobs=blobs,
             apply=runtime.apply,
             samples=lambda: [
                 title

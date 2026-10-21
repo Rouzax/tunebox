@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.fakes import FakeHttp, channel_config
+from tunebox.blobs import Blobs
 from tunebox.http import HttpError
 from tunebox.logos import SMALL_PX, Logos, sniff
 from tunebox.png import Image, read, write
@@ -180,3 +181,74 @@ def test_requested_logos_are_fetched_by_the_worker(tmp_path: Path) -> None:
     worker.join(5)
     assert http.urls == [URL]
     assert not worker.is_alive()
+
+
+def test_a_blob_logo_is_copied_like_a_download(tmp_path: Path) -> None:
+    blobs = Blobs(tmp_path / "blobs")
+    ref, _ = blobs.save(BIG_PNG)
+    fetched: list[str] = []
+    logos = Logos(tmp_path, FakeHttp(lambda url: fetched.append(url) or b""), blobs)
+    logos.refresh(channel_config(logo=ref))
+    assert (tmp_path / "owr.png").read_bytes() == BIG_PNG
+    assert (tmp_path / "owr.url").read_text(encoding="utf-8") == ref
+    assert (tmp_path / "small" / "owr.png").is_file()
+    assert logos.path_for("owr", small=True) is not None
+    assert fetched == []
+
+
+def test_a_blob_logo_is_copied_once(tmp_path: Path) -> None:
+    blobs = Blobs(tmp_path / "blobs")
+    ref, _ = blobs.save(BIG_PNG)
+    logos = Logos(tmp_path, FakeHttp(lambda _url: b""), blobs)
+    logos.refresh(channel_config(logo=ref))
+    before = (tmp_path / "owr.png").stat().st_mtime_ns
+    logos.refresh(channel_config(logo=ref))
+    assert (tmp_path / "owr.png").stat().st_mtime_ns == before
+
+
+def test_a_blob_logo_replaces_a_downloaded_one_of_another_kind(tmp_path: Path) -> None:
+    blobs = Blobs(tmp_path / "blobs")
+    ref, kind = blobs.save(SVG)
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), blobs)
+    logos.refresh(channel_config(logo=URL))
+    logos.refresh(channel_config(logo=ref))
+    assert kind == "svg"
+    assert not (tmp_path / "owr.png").exists()
+    assert (tmp_path / "owr.svg").read_bytes() == SVG
+
+
+def test_a_missing_blob_keeps_the_old_logo(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    (tmp_path / "owr.png").write_bytes(PNG)
+    fetched: list[str] = []
+    logos = Logos(
+        tmp_path, FakeHttp(lambda url: fetched.append(url) or b""), Blobs(tmp_path / "blobs")
+    )
+    logos.refresh(channel_config(logo="blob:" + "2" * 64))
+    assert (tmp_path / "owr.png").read_bytes() == PNG
+    assert "logo_missing" in [r.getMessage() for r in caplog.records]
+    assert fetched == []
+
+
+def test_a_blob_logo_without_blobs_is_never_downloaded(tmp_path: Path) -> None:
+    fetched: list[str] = []
+    logos = Logos(tmp_path, FakeHttp(lambda url: fetched.append(url) or b""))
+    logos.refresh(channel_config(logo="blob:" + "2" * 64))
+    assert fetched == []
+
+
+def test_a_refresh_leaves_the_blob_folder_alone(tmp_path: Path) -> None:
+    blobs = Blobs(tmp_path / "blobs")
+    ref, _ = blobs.save(BIG_PNG)
+    other, _ = blobs.save(SVG)
+    stray = tmp_path / "blobs" / ".stray.tmp"
+    stray.write_bytes(b"x")
+    before = sorted(p.name for p in (tmp_path / "blobs").iterdir())
+    logos = Logos(tmp_path, FakeHttp(lambda _url: JPG), blobs)
+    logos.refresh(channel_config(logo=ref))
+    logos.refresh(channel_config(logo=URL))
+    logos.refresh(channel_config(logo=other))
+    logos.refresh(channel_config())
+    assert sorted(p.name for p in (tmp_path / "blobs").iterdir()) == before
+    assert logos.file("blobs.png") is None

@@ -244,3 +244,21 @@ def test_each_migration_is_logged(tmp_path: Path, caplog: pytest.LogCaptureFixtu
         if r.getMessage() == "migration_applied"
     ]
     assert versions == list(range(1, len(MIGRATIONS) + 1))
+
+
+def with_logo(base: ConfigState, ref: str) -> ConfigState:
+    first = base.channels[0]
+    return ConfigState(
+        groups=base.groups,
+        channels=(ChannelRow(first.id, first.group, first.enabled, {**first.doc, "logo": ref}),),
+    )
+
+
+def test_referenced_blobs_include_stored_stations_and_history(settings: Settings) -> None:
+    first = "blob:" + "a" * 64
+    second = "blob:" + "b" * 64
+    assert settings.referenced_blobs() == set()
+    version = settings.commit(state("owr"), 0, "edit")
+    version = settings.commit(with_logo(state("owr"), first), version, "edit")
+    settings.commit(with_logo(state("owr"), second), version, "edit")
+    assert settings.referenced_blobs() == {first, second}

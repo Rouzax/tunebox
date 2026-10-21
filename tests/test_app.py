@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import signal
 import socket
 import threading
@@ -215,6 +216,40 @@ def test_start_up_names_stored_rules_the_lint_refuses(
     lines = [json.loads(x) for x in (tmp_path / "tunebox.log").read_text("utf-8").splitlines()]
     refusals = [line for line in lines if line["event"] == "rule_refused"]
     assert [line["field"] for line in refusals] == ["channels[0].rules.played_by"]
+
+
+def test_start_up_removes_old_unnamed_blobs_and_keeps_named_ones(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    blobs = tmp_path / "logos" / "blobs"
+    blobs.mkdir(parents=True)
+    named = "a" * 64
+    orphan = blobs / f"{'b' * 64}.png"
+    young = blobs / f"{'c' * 64}.png"
+    kept = blobs / f"{named}.png"
+    for path in (orphan, young, kept):
+        path.write_bytes(b"x")
+    long_ago = time.time() - 3 * 86_400
+    os.utime(orphan, (long_ago, long_ago))
+    os.utime(kept, (long_ago, long_ago))
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        config = tmp_path / "tunebox.toml"
+        config.write_text(
+            f'[server]\nhost = "127.0.0.1"\nport = {taken.getsockname()[1]}\n'
+            f'log_file = "tunebox.log"\n\n{CHANNEL_TOML}logo = "blob:{named}"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LOG_LEVEL", "info")
+        monkeypatch.setenv("TUNEBOX_CONFIG", str(config))
+        assert main() == 2
+    assert not orphan.exists()
+    assert young.exists()
+    assert kept.exists()
+    lines = [json.loads(x) for x in (tmp_path / "tunebox.log").read_text("utf-8").splitlines()]
+    collected = [line for line in lines if line["event"] == "logo_blobs_collected"]
+    assert [line["removed"] for line in collected] == [1]
 
 
 def test_admin_needs_its_web_folder() -> None:

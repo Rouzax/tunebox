@@ -1858,3 +1858,16 @@ def test_an_upload_that_cannot_be_stored_is_read_only(
     assert answer.status == 503 and json_of(answer) == {"error": "read_only"}
     event = next(r for r in caplog.records if r.getMessage() == "logo_store_failed")
     assert event.__dict__["fields"] == {"client": "198.51.100.7", "errno": 28}
+
+
+def test_history_keeps_its_blobs(world: World) -> None:
+    csrf = world.login()
+    old = json_of(upload(world, csrf, PNG))["logo"]
+    assert save(world, csrf, 0, state_of(station("owr", logo=old))).status == 200
+    new = json_of(upload(world, csrf, PNG + b"new"))["logo"]
+    assert save(world, csrf, 1, state_of(station("owr", logo=new))).status == 200
+    assert old in world.settings.referenced_blobs()
+    world.blobs.collect(keep=world.settings.referenced_blobs(), older_than_s=0)
+    restored = world.call("POST", "/admin/api/history/2/restore", {"based_on": 2}, csrf=csrf)
+    assert restored.status == 200
+    assert json_of(restored)["changed"] is True

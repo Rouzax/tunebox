@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from tunebox.config import ChannelRow, ConfigError, ConfigState, validate_state
+from tunebox.config import BLOB_REF, ChannelRow, ConfigError, ConfigState, validate_state
 from tunebox.logs import event
 
 log = logging.getLogger(__name__)
@@ -267,6 +267,21 @@ class Settings:
             state_from_dict(json.loads(before)),
             state_from_dict(json.loads(after)),
         )
+
+    def referenced_blobs(self) -> set[str]:
+        """Every uploaded-logo reference in the stored stations and in all
+        history, which keeps a restore able to find its logos."""
+        found: set[str] = set()
+        with self.read() as db:
+            for table, columns in (
+                ("channels", "doc_json"),
+                ("history", "before_json || after_json"),
+            ):
+                for (text,) in db.execute(
+                    f"SELECT {columns} FROM {table} WHERE {columns} LIKE '%blob:%'"
+                ):
+                    found.update(f"blob:{sha}" for sha in BLOB_REF.findall(cast(str, text)))
+        return found
 
     def commit(
         self, state: ConfigState, based_on: int, kind: str, target: str | None = None
