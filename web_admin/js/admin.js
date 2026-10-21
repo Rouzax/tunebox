@@ -3,6 +3,7 @@
 import qrcode from '/vendor/qrcode-generator-2.0.4/qrcode.mjs';
 import {render as renderAccount} from './account.js';
 import {call, send, setCsrf} from './api.js';
+import {askCode} from './dom.js';
 import {render as renderEdit} from './edit.js';
 import {render as renderHistory} from './history.js';
 import {qrMatrix, qrSvg} from './qr.js';
@@ -57,6 +58,8 @@ function fail(data) {
 const UPLOAD_DEADLINE_MS = 30000;
 
 const view = document.querySelector('#shell .view');
+// Outside the view, which is inert while a save waits for its answer.
+const codeArea = document.querySelector('.shell-code');
 let keepMessage = false;
 // The hash the view was drawn for, to go back to when leaving is refused.
 let shown = '';
@@ -162,6 +165,8 @@ let saving = false;
 // the page asks what is stored before it draws anything.
 // early may answer for the caller before the shared handling (a page that
 // keeps its own state across a refusal); null leaves the answer to commit.
+// Without early, a refusal for want of a fresh code asks for one here and
+// sends the same change again.
 async function once(send, done, retry, early) {
     if (saving) {
         return {ok: false};
@@ -170,7 +175,26 @@ async function once(send, done, retry, early) {
     view.inert = true;
     message('');
     try {
-        const answer = await send();
+        let answer = await send();
+        // A change that shows a hidden station needs a fresh code: ask for
+        // one outside the inert view, then send the same change again.
+        while (!early && answer.status === 403 && answer.data.error === 'reauth_required') {
+            const typed = await askCode(ctx, codeArea);
+            if (typed === null) {
+                // The session ended at the prompt: keep a form's change
+                // for the next login, as a refused save does.
+                await answered(401, {}, retry);
+                return {ok: false};
+            }
+            if (!typed) {
+                if (!onForm()) {
+                    route();
+                }
+                message('Not saved. Showing a station the PIN hides needs a code from your authenticator app.');
+                return {ok: false};
+            }
+            answer = await send();
+        }
         const handled = early ? await early(answer) : null;
         return handled || await commit(answer, done, retry);
     } catch (error) {
@@ -187,6 +211,7 @@ async function once(send, done, retry, early) {
     } finally {
         saving = false;
         view.inert = false;
+        codeArea.replaceChildren();
     }
 }
 
@@ -487,6 +512,12 @@ const logout = guarded(async () => {
         return;
     }
     setCsrf(null);
+    // A save waiting at the code prompt ends as cancelled, so the next
+    // login can save again.
+    const cancel = codeArea.querySelector('.confirm-code .quiet');
+    if (cancel) {
+        cancel.click();
+    }
     ctx.config = null;
     ctx.unsaved = null;
     pending = null;

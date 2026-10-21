@@ -2,18 +2,8 @@
 // that are logged in. Each change asks for a code first (within 5 minutes
 // of the last one), and signs every other browser out.
 import qrcode from '/vendor/qrcode-generator-2.0.4/qrcode.mjs';
-import {askCode, button, el, field, icon, when} from './dom.js';
+import {button, confirmed, el, field, icon, when} from './dom.js';
 import {qrMatrix, qrSvg} from './qr.js';
-
-// Sends; when the server wants a fresh code, asks for one in area, sends
-// the code, then sends again. Resolves with the last answer.
-async function confirmed(ctx, area, send) {
-    const first = await send();
-    if (first.status !== 403 || first.data.error !== 'reauth_required') {
-        return first;
-    }
-    return await askCode(ctx, area) ? send() : {ok: false, status: 0, data: {}};
-}
 
 function passwordPart(ctx) {
     const area = el('div');

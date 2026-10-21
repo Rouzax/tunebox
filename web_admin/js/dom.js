@@ -56,7 +56,8 @@ export function when(seconds) {
 }
 
 // Asks for a code in area and confirms it. Resolves true once the server
-// has a fresh code, false when the owner cancels.
+// has a fresh code, false when the owner cancels, null when the session
+// ended meanwhile (ctx.request has then gone to the login form).
 export function askCode(ctx, area) {
     return new Promise((resolve) => {
         const input = el('input', {name: 'code', autocomplete: 'one-time-code', inputmode: 'numeric', required: true});
@@ -70,16 +71,37 @@ export function askCode(ctx, area) {
                 }, {class: 'quiet'})));
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
+            // area may sit inside the form whose change this confirms, and
+            // a submit bubbles: that form must not send its change again.
+            event.stopPropagation();
             const answer = await ctx.request('POST', 'account/reauth', {code: input.value});
             input.value = '';
             if (answer.status === 204) {
                 form.remove();
                 resolve(true);
-            } else if (answer.status !== 401) {
+            } else if (answer.status === 401) {
+                form.remove();
+                resolve(null);
+            } else {
                 ctx.fail(answer.data);
             }
         });
         area.replaceChildren(form);
         input.focus();
     });
+}
+
+// Sends; when the server wants a fresh code, asks for one in area, sends
+// the code, then sends again. Resolves with the last answer: status 0 when
+// the owner cancels, 401 when the session ended at the prompt.
+export async function confirmed(ctx, area, send) {
+    const first = await send();
+    if (first.status !== 403 || first.data.error !== 'reauth_required') {
+        return first;
+    }
+    const typed = await askCode(ctx, area);
+    if (typed) {
+        return send();
+    }
+    return {ok: false, status: typed === null ? 401 : 0, data: {}};
 }

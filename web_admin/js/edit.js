@@ -218,7 +218,7 @@ export function render(root, ctx, id) {
         el('label', {class: 'check'}, el('input', {type: 'checkbox', name: 'always', checked: Boolean(doc.always)}),
             'Always poll the feed, also when nobody listens'),
         el('label', {class: 'check'}, el('input', {type: 'checkbox', name: 'needs_pin', checked: Boolean(doc.needs_pin)}),
-            'Needs the PIN: hidden until a device types it, when the PIN asks on chosen stations'),
+            'Needs the PIN: hidden until a device types it, when the PIN asks on chosen stations. Unticking it asks for a code from your authenticator app.'),
         el('h3', null, 'Now playing'),
         source.box,
         el('h3', null, 'Streams'),

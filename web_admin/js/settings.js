@@ -1,7 +1,7 @@
 // Settings: what every station inherits, where the player starts and the
 // location for day and night, saved like a station change; and the
 // listening PIN, which has its own save and stays out of the history.
-import {button, el, field, icon} from './dom.js';
+import {button, confirmed, el, field, icon} from './dom.js';
 import {setSettings} from './state.js';
 
 const NUMBERS = [
@@ -93,7 +93,8 @@ async function pinForm(ctx, page) {
         el('p', {class: 'hint'},
             'Keeps strangers who find the player\'s address out of tunebox. Each device types it once. ',
             'A new PIN, or switching it on, asks every device again. ',
-            'It cannot protect the audio itself: the streams are the stations\' own public addresses.'));
+            'It cannot protect the audio itself: the streams are the stations\' own public addresses. ',
+            'Changing the PIN asks for a code from your authenticator app.'));
     page.pinDirty = () => false;
     const {ok, data} = await ctx.request('GET', 'pin');
     if (!ok) {
@@ -111,17 +112,19 @@ async function pinForm(ctx, page) {
         placeholder: data.set ? 'Unchanged' : `${min} to ${max} digits`,
     });
     page.pinDirty = () => mode.value !== data.mode || code.value !== '';
+    const codeBox = el('div');
     box.append(
         field('Ask for the PIN on', mode, 'With the whole player locked, embeds on other sites stop working.'),
         field(data.set ? 'New PIN' : 'PIN', code, data.set ? 'Leave empty to keep the current PIN.' : null),
-        el('div', {class: 'actions'}, el('button', {type: 'submit'}, icon('check_circle'), ' Save the PIN')));
+        el('div', {class: 'actions'}, el('button', {type: 'submit'}, icon('check_circle'), ' Save the PIN')),
+        codeBox);
     box.addEventListener('submit', async (event) => {
         event.preventDefault();
         const body = {mode: mode.value, based_on: data.revision};
         if (code.value) {
             body.pin = code.value;
         }
-        const answer = await ctx.request('POST', 'pin', body);
+        const answer = await confirmed(ctx, codeBox, () => ctx.request('POST', 'pin', body));
         code.value = '';
         if (answer.ok) {
             const said = {
@@ -136,6 +139,8 @@ async function pinForm(ctx, page) {
             box.replaceWith(await pinForm(ctx, page));
         } else if (answer.status === 400 && answer.data.message) {
             ctx.message(`The PIN was not saved: ${answer.data.message}.`);
+        } else if (answer.status === 0) {
+            ctx.message('The PIN was not saved: changing it needs a code from your authenticator app.');
         } else if (answer.status !== 401) {
             ctx.fail(answer.data);
         }

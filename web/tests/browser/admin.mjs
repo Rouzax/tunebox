@@ -1,7 +1,8 @@
 // Browser check of the admin panel: log in with a password and a TOTP code,
 // then switch a station off, reorder, edit, have a dangerous title rule
 // refused, restore from the history, change the settings, lock the player
-// with a PIN and pass it, hide a chosen station behind it, confirm account
+// with a PIN and pass it, hide a chosen station behind it, ask for a code
+// before a PIN change or before showing that station again, confirm account
 // changes with a code, export and import the stations, upload a logo,
 // change the password, log out and log in with it,
 // checking after each step
@@ -354,6 +355,41 @@ async function run() {
             });
             return response.status;
         })()`);
+        // A PIN change through the API on the page's session; it confirms a
+        // fresh code first when the session has none from the last 5 minutes.
+        const pinCall = async (body) => {
+            const status = await adminCall('POST', 'pin', body);
+            if (status !== 403) {
+                return status;
+            }
+            const confirmed = await adminCall('POST', 'account/reauth', {code: await freshCode()});
+            return confirmed === 204 ? adminCall('POST', 'pin', body) : `reauth ${confirmed}`;
+        };
+        // Types a fresh code into the code form the page shows.
+        const typeCode = async () => {
+            const code = await freshCode();
+            await evaluate(`(() => {
+                const form = document.querySelector('form.confirm-code');
+                form.code.value = ${JSON.stringify(code)};
+                form.requestSubmit();
+            })()`);
+        };
+        // Clicks, gives a fresh code when the page asks for one, then waits
+        // for the page's answer to that save.
+        const saveCoded = async (selector) => {
+            await evaluate(`document.querySelector('.message').textContent = ''`);
+            await click(selector);
+            if (!(await until(`document.querySelector('form.confirm-code') || document.querySelector('.message').textContent !== ''`))) {
+                throw new Error(`no answer after ${selector}`);
+            }
+            if (await evaluate(`Boolean(document.querySelector('form.confirm-code'))`)) {
+                await typeCode();
+                if (!(await until(`document.querySelector('.message').textContent !== ''`))) {
+                    throw new Error(`no answer after the code for ${selector}`);
+                }
+            }
+            return message();
+        };
         // Safe while a page loads: the keypad's container may not be there yet.
         const pinShown = `(document.querySelector('.pin-screen') && !document.querySelector('.pin-screen').hidden)`;
         const typePin = (digits) => evaluate(`(() => {
@@ -382,6 +418,27 @@ async function run() {
             }
             const inputs = await evaluate(`[...document.querySelectorAll('#code input')].map((i) => i.autocomplete)`);
             return inputs.join() === 'one-time-code' ? null : `the code form holds ${inputs.join() || 'nothing'}`;
+        };
+        // Logs the page out and in again: a new login holds no fresh code,
+        // so the next change that needs one asks for it.
+        const newLogin = async (password) => {
+            await click('.logout');
+            if (!(await until(`!document.querySelector('#login').hidden`))) {
+                return 'log out did not show the login';
+            }
+            await sleep(1100);
+            const problem = await toCode(password);
+            if (problem) {
+                return problem;
+            }
+            const code = await freshCode();
+            await evaluate(`(() => {
+                const form = document.querySelector('#code');
+                form.code.value = ${JSON.stringify(code)};
+                form.requestSubmit();
+            })()`);
+            return (await until(`!document.querySelector('#shell').hidden && document.querySelector('#shell .view').children.length`))
+                ? null : `not logged in (message: ${await message()})`;
         };
         await step('the code has a form of its own', toCode);
         await noSideways('code');
@@ -794,7 +851,7 @@ async function run() {
                 form.pin_mode.value = ${JSON.stringify(mode)};
                 form.pin.value = ${JSON.stringify(digits || '')};
             })()`);
-            return saveBy('form.pin button[type=submit]');
+            return saveCoded('form.pin button[type=submit]');
         };
 
         await step('lock the whole player', async () => {
@@ -846,7 +903,7 @@ async function run() {
         });
 
         await step('a changed PIN asks again while listening', async () => {
-            const changed = await adminCall('POST', 'pin', {mode: 'site', pin: '7654321'});
+            const changed = await pinCall({mode: 'site', pin: '7654321'});
             if (changed !== 200) {
                 return `the PIN change answered ${changed}`;
             }
@@ -910,7 +967,7 @@ async function run() {
             if (!(await until(`document.querySelector('.current-channel').textContent === 'Second Station'`))) {
                 return 'could not pick the hidden station';
             }
-            const changed = await adminCall('POST', 'pin', {mode: 'stations', pin: '24682468'});
+            const changed = await pinCall({mode: 'stations', pin: '24682468'});
             if (changed !== 200) {
                 return `the PIN change answered ${changed}`;
             }
@@ -957,7 +1014,7 @@ async function run() {
         // addresses other than this browser's own. The server and keypad
         // tests cover it.
         await step('a PIN switched off shows the hidden stations', async () => {
-            const chosen = await adminCall('POST', 'pin', {mode: 'stations', pin: '13572468'});
+            const chosen = await pinCall({mode: 'stations', pin: '13572468'});
             if (chosen !== 200) {
                 return `choosing stations answered ${chosen}`;
             }
@@ -969,7 +1026,7 @@ async function run() {
             if (!(await until(`document.querySelectorAll('.channel-groups .channel').length === 1`))) {
                 return `listed ${await listed()} stations before the change, expected 1`;
             }
-            const off = await adminCall('POST', 'pin', {mode: 'off'});
+            const off = await pinCall({mode: 'off'});
             if (off !== 200) {
                 return `switching off answered ${off}`;
             }
@@ -1005,7 +1062,7 @@ async function run() {
                 if (!(await until(playing, 10000))) {
                     return 'the local stream did not start playing';
                 }
-                const locked = await adminCall('POST', 'pin', {mode: 'site', pin: '97531246'});
+                const locked = await pinCall({mode: 'site', pin: '97531246'});
                 if (locked !== 200) {
                     return `locking the site answered ${locked}`;
                 }
@@ -1027,7 +1084,7 @@ async function run() {
             } finally {
                 // Whatever happened, later steps start from an open player on the panel.
                 await send('Page.removeScriptToEvaluateOnNewDocument', {identifier: hook.result.identifier});
-                const off = await adminCall('POST', 'pin', {mode: 'off'});
+                const off = await pinCall({mode: 'off'});
                 await send('Page.navigate', {url: `${base}/admin/#stations`});
                 if (off !== 200) {
                     throw new Error(`switching off answered ${off}`);
@@ -1046,6 +1103,14 @@ async function run() {
         await noSideways('account');
 
         await step('new recovery codes ask for a code first', async () => {
+            const problem = await newLogin(PASSWORD);
+            if (problem) {
+                return problem;
+            }
+            await evaluate(`window.location.hash = '#account'`);
+            if (!(await until(`document.querySelectorAll('table.sessions tbody tr').length`))) {
+                return 'account page not shown';
+            }
             await buttonNamed('Make new recovery codes');
             if (!(await until(`document.querySelector('form.confirm-code')`))) {
                 return 'no code asked';
@@ -1268,18 +1333,100 @@ async function run() {
             return stored && stored.name === 'Changed Elsewhere' ? null : `stored name: ${stored && stored.name}`;
         });
 
+        // A station hidden behind the PIN, unticked on a session with no
+        // code from the last 5 minutes: a new login is not one.
+        const pageConfig = () => evaluate(`fetch('/admin/api/config').then((r) => r.json())`);
+        const hidden = async () => {
+            const {state} = await pageConfig();
+            const row = state.channels.find((item) => item.id === 'second');
+            return Boolean(row && row.doc.needs_pin === true);
+        };
+        const untickSecond = async () => {
+            if ((await evaluate(`location.hash`)) !== '#edit/second') {
+                await evaluate(`window.location.hash = '#edit/second'`);
+            }
+            if (!(await until(`document.querySelector('form.edit [name=needs_pin]')`))) {
+                throw new Error('no "Needs the PIN" box');
+            }
+            await evaluate(`(() => {
+                const form = document.querySelector('form.edit');
+                form.elements.needs_pin.checked = false;
+                form.requestSubmit();
+            })()`);
+            if (!(await until(`document.querySelector('.shell-code form.confirm-code')`))) {
+                throw new Error(`no code asked in the shell (message: ${await message()})`);
+            }
+        };
+
+        await step('cancelling the code leaves the station hidden', async () => {
+            const chosen = await pinCall({mode: 'stations'});
+            if (chosen !== 200) {
+                return `choosing stations answered ${chosen}`;
+            }
+            if (!(await hidden())) {
+                return 'the second station is not marked "Needs the PIN" before the step';
+            }
+            const problem = await newLogin(NEW_PASSWORD);
+            if (problem) {
+                return problem;
+            }
+            await untickSecond();
+            await click('.shell-code form.confirm-code .quiet');
+            if (!(await until(`document.querySelector('.message').textContent.indexOf('Not saved.') === 0`))) {
+                return `message: ${await message()}`;
+            }
+            if (!(await hidden())) {
+                return 'stored without needs_pin after Cancel';
+            }
+            if ((await channels(base)).some((c) => c.id === 'second')) {
+                return 'the player lists the hidden station after Cancel';
+            }
+            const left = await evaluate(`document.querySelector('.shell-code').children.length`);
+            return left ? 'the code form stayed after Cancel' : null;
+        });
+
+        await step('unticking Needs the PIN asks for a code', async () => {
+            await untickSecond();
+            await typeCode();
+            const mark = `document.querySelector('.station[data-id="second"] .id')`;
+            if (!(await until(`location.hash === '#stations' && ${mark} && !${mark}.textContent.includes('PIN')`))) {
+                return `not saved (message: ${await message()})`;
+            }
+            if (await hidden()) {
+                return 'still stored with needs_pin';
+            }
+            if (!(await channels(base)).some((c) => c.id === 'second')) {
+                return 'the player does not list the station';
+            }
+            // Ticking it again needs no code; later steps start hidden and open.
+            await evaluate(`window.location.hash = '#edit/second'`);
+            if (!(await until(`document.querySelector('form.edit [name=needs_pin]')`))) {
+                return 'no "Needs the PIN" box';
+            }
+            await evaluate(`(() => {
+                const form = document.querySelector('form.edit');
+                form.elements.needs_pin.checked = true;
+                form.requestSubmit();
+            })()`);
+            if (!(await until(`location.hash === '#stations' && ${mark} && ${mark}.textContent.includes('PIN')`))) {
+                return `not hidden again (message: ${await message()})`;
+            }
+            const off = await pinCall({mode: 'off'});
+            return off === 200 ? null : `switching off answered ${off}`;
+        });
+
         await step('a stale PIN form is refused', async () => {
             await send('Page.navigate', {url: `${base}/admin/#settings`});
             if (!(await until(`document.querySelector('form.pin [name=pin_mode]')`))) {
                 return 'PIN form not shown';
             }
             // Another page sets the mode meanwhile.
-            const status = await adminCall('POST', 'pin', {mode: 'stations'});
+            const status = await pinCall({mode: 'stations'});
             if (status !== 200) {
                 return `the other page's change answered ${status}`;
             }
             await evaluate(`document.querySelector('form.pin').pin_mode.value = 'off'`);
-            const said = await saveBy('form.pin button[type=submit]');
+            const said = await saveCoded('form.pin button[type=submit]');
             // The form is redrawn from a fresh read after the message.
             const shown = await until(`document.querySelector('form.pin').pin_mode.value === 'stations'`);
             if (said.indexOf('changed elsewhere') < 0 || !shown) {
@@ -1339,12 +1486,7 @@ async function run() {
                 throw new Error('no answer to Replace');
             }
             if (await evaluate(`Boolean(document.querySelector('form.confirm-code'))`)) {
-                const code = await freshCode();
-                await evaluate(`(() => {
-                    const form = document.querySelector('form.confirm-code');
-                    form.code.value = ${JSON.stringify(code)};
-                    form.requestSubmit();
-                })()`);
+                await typeCode();
                 if (!(await until(`document.querySelector('.message').textContent !== ''`))) {
                     throw new Error('no answer after the code');
                 }

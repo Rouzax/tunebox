@@ -289,7 +289,7 @@ class Admin:
             ("POST", "account/recovery"): Route(self._recovery, code=True),
             ("POST", "account/sessions/{part}/end"): Route(self._end_session),
             ("GET", "pin"): Route(self._pin_status),
-            ("POST", "pin"): Route(self._pin_change),
+            ("POST", "pin"): Route(self._pin_change, code=True),
         }
         if config.setup_page and not accounts.exists():
             self._setup_token = crypto.new_token()
@@ -606,7 +606,7 @@ class Admin:
             200, {"version": version, "state": json.loads(state_to_json(state)), "schema": schema}
         )
 
-    def _save(self, request: Request, _session: Session) -> Response:
+    def _save(self, request: Request, session: Session) -> Response:
         payload = _object(request)
         based_on = _version(payload)
         if payload is None or based_on is None:
@@ -619,7 +619,12 @@ class Admin:
         except ConfigError as error:
             return _invalid(str(error), None)
         return self._commit(
-            state, based_on, "edit", target if isinstance(target, str) else None, request.client
+            state,
+            based_on,
+            "edit",
+            target if isinstance(target, str) else None,
+            request.client,
+            session,
         )
 
     def _judge(self, state: ConfigState, stored: ConfigState) -> str | None:
@@ -635,7 +640,13 @@ class Admin:
         return lint_new(state, stored) or self._blobs.missing(state)
 
     def _commit(
-        self, state: ConfigState, based_on: int, kind: str, target: str | None, client: str
+        self,
+        state: ConfigState,
+        based_on: int,
+        kind: str,
+        target: str | None,
+        client: str,
+        session: Session,
     ) -> Response:
         try:
             stored, version = self._settings.load()
@@ -645,6 +656,10 @@ class Admin:
             # The timed check starts a child process: never for a stale change.
             if version != based_on:
                 return _json(409, {"error": "stale", "version": version})
+            # A station the PIN hides now that this change shows to every
+            # device: the one edit that exposes something needs a code.
+            if _exposed(stored, state) and not self._accounts.fresh(session):
+                return _error(403, "reauth_required")
             # The history row holds the state before and after.
             if not has_room(self._free(), 2 * len(state_to_json(state))):
                 event(log, logging.WARNING, "admin_disk_low", client=client)
@@ -761,7 +776,7 @@ class Admin:
             state, _notes = state_from_import(text)
         except ConfigError as error:
             return _invalid(str(error), None)
-        return self._commit(state, based_on, "import", "panel", request.client)
+        return self._commit(state, based_on, "import", "panel", request.client, session)
 
     def _history_entry(self, request: Request, _session: Session) -> Response:
         found = self._settings.history_entry(_history_id(request.path))
@@ -777,7 +792,7 @@ class Admin:
             },
         )
 
-    def _restore(self, request: Request, _session: Session) -> Response:
+    def _restore(self, request: Request, session: Session) -> Response:
         based_on = _version(_object(request))
         if based_on is None:
             return _error(400, "bad_request")
@@ -786,7 +801,9 @@ class Admin:
         if found is None:
             return _error(404, "not_found")
         _, before, _ = found
-        return self._commit(before, based_on, "restore", f"history {entry_id}", request.client)
+        return self._commit(
+            before, based_on, "restore", f"history {entry_id}", request.client, session
+        )
 
     def _account(self, _request: Request, session: Session) -> Response:
         mine = session_id(session.token_hash)

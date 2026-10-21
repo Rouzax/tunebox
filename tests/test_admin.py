@@ -13,7 +13,7 @@ import pytest
 
 from tunebox import blobs as blobs_module
 from tunebox import crypto
-from tunebox.accounts import AccountError, Accounts, Session, SessionEnded
+from tunebox.accounts import REAUTH_S, AccountError, Accounts, Session, SessionEnded
 from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Request, Response, Route
 from tunebox.blobs import MAX_BLOB, Blobs
 from tunebox.config import AdminConfig
@@ -1349,6 +1349,7 @@ def test_pin_endpoints_need_a_session_and_the_token(world: World) -> None:
 
 def test_set_the_pin_and_its_mode(world: World, caplog: pytest.LogCaptureFixture) -> None:
     csrf = world.login()
+    fresh(world, csrf)
     assert json_of(world.call("GET", "/admin/api/pin")) == {
         "mode": "off",
         "set": False,
@@ -1393,6 +1394,7 @@ def test_set_the_pin_and_its_mode(world: World, caplog: pytest.LogCaptureFixture
 )
 def test_a_bad_pin_change_is_refused(world: World, body: dict[str, object], error: str) -> None:
     csrf = world.login()
+    fresh(world, csrf)
     response = world.call("POST", "/admin/api/pin", body, csrf=csrf)
     assert (response.status, json_of(response)["error"]) == (400, error)
     assert world.pin.status().mode == "off"
@@ -1400,13 +1402,72 @@ def test_a_bad_pin_change_is_refused(world: World, body: dict[str, object], erro
 
 def test_pin_changes_stay_out_of_the_history(world: World) -> None:
     csrf = world.login()
-    world.call(
+    fresh(world, csrf)
+    changed = world.call(
         "POST",
         "/admin/api/pin",
         {"mode": "site", "pin": "123456", "based_on": "off.0"},
         csrf=csrf,
     )
+    assert changed.status == 200
     assert json_of(world.call("GET", "/admin/api/history"))["entries"] == []
+
+
+def hidden_world(world: World) -> str:
+    """A stored state with station b hidden behind the PIN; a fresh login."""
+    csrf = world.login()
+    assert save(world, csrf, 0, state_of(station("a"), station("b", needs_pin=True))).status == 200
+    world.clock.now += REAUTH_S + 1
+    return world.login()
+
+
+def test_unhiding_a_station_needs_a_fresh_code(world: World) -> None:
+    csrf = hidden_world(world)
+    answer = save(world, csrf, 1, state_of(station("a"), station("b")))
+    assert (answer.status, json_of(answer)) == (403, {"error": "reauth_required"})
+    assert world.settings.load()[1] == 1
+    fresh(world, csrf)
+    assert save(world, csrf, 1, state_of(station("a"), station("b"))).status == 200
+
+
+def test_a_stale_unhiding_save_is_stale_first(world: World) -> None:
+    csrf = hidden_world(world)
+    assert save(world, csrf, 0, state_of(station("a"), station("b"))).status == 409
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        state_of(station("a")),
+        state_of(station("a", needs_pin=True), station("b", needs_pin=True)),
+        state_of(station("a"), station("b", needs_pin=True), station("c")),
+    ],
+    ids=["delete-hidden", "hide-more", "add-visible"],
+)
+def test_changes_that_unhide_nothing_need_no_code(world: World, state: dict[str, Any]) -> None:
+    csrf = hidden_world(world)
+    assert save(world, csrf, 1, state).status == 200
+
+
+def test_restoring_a_version_without_needs_pin_needs_a_code(world: World) -> None:
+    csrf = world.login()
+    save(world, csrf, 0, state_of(station("a"), station("b")))
+    save(world, csrf, 1, state_of(station("a"), station("b", needs_pin=True)))
+    world.clock.now += REAUTH_S + 1
+    csrf = world.login()
+    entry = json_of(world.call("GET", "/admin/api/history"))["entries"][0]["id"]
+    answer = world.call("POST", f"/admin/api/history/{entry}/restore", {"based_on": 2}, csrf=csrf)
+    assert json_of(answer) == {"error": "reauth_required"}
+
+
+def test_every_pin_change_needs_a_fresh_code(world: World) -> None:
+    csrf = world.login()
+    body = {"mode": "site", "pin": "123456", "based_on": "off.0"}
+    answer = world.call("POST", "/admin/api/pin", body, csrf=csrf)
+    assert json_of(answer) == {"error": "reauth_required"}
+    assert world.pin.status().mode == "off"
+    fresh(world, csrf)
+    assert world.call("POST", "/admin/api/pin", body, csrf=csrf).status == 200
 
 
 def test_a_locked_reauth_is_not_a_ban_signal(
@@ -1698,6 +1759,7 @@ def test_saving_again_retries_a_change_that_is_not_live(
 
 def test_a_pin_change_needs_the_revision_it_was_based_on(world: World) -> None:
     csrf = world.login()
+    fresh(world, csrf)
     status = json_of(world.call("GET", "/admin/api/pin"))
     assert status == {"mode": "off", "set": False, "revision": "off.0"}
     body = {"mode": "stations", "pin": "123456", "based_on": "off.0"}

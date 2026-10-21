@@ -358,7 +358,10 @@ The edit form has the same settings as a `[[channels]]` block (see
 [Change the stations](#change-the-stations)). Empty fields use the
 defaults, shown greyed out. Nothing in the form is stored until you press
 Save; leaving it with changes (Cancel, the menu, the back button or a
-reload) asks first. Title rules are regular expressions and run on
+reload) asks first. Unticking **Needs the PIN** on a station that has it
+asks for a code from your authenticator app before the save goes through
+(see [Settings and the listening PIN](#settings-and-the-listening-pin)).
+Title rules are regular expressions and run on
 every title, and one slow match stops all of tunebox while it runs. So
 tunebox refuses a pattern that could take long on some title:
 
@@ -526,6 +529,17 @@ appear in the History (they cannot be undone there); the log records each
 change as `admin_change` with `kind` `pin`, never the PIN itself. Marking a
 station **Needs the PIN** is a station change like any other and does appear
 in the History.
+
+Every PIN change (a new PIN, another mode, or switching it off) asks for a
+code from your authenticator app (or a recovery code) before it is saved,
+unless you typed one in the last 5 minutes. So does unticking **Needs the
+PIN** on a station that has it, whether you save the station, restore an
+older version in the History or import a file, and also while the PIN is
+off. Both decide what every device can see, and unticking the box is the
+one station change that shows something to all of them, so being logged in
+is not enough for these changes. Removing a hidden station, adding a
+station or ticking the box needs no code. Cancel at the code prompt and
+nothing is saved; an open edit form keeps what you typed.
 
 ### Your account
 
