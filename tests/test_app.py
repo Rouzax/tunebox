@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 import signal
 import socket
 import threading
@@ -222,7 +223,7 @@ def test_start_up_names_stored_rules_the_lint_refuses(
 def _blob_start(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, database_age_s: float) -> Path:
     """Starts tunebox (it exits 2 on a taken port) over a database whose first
     history entry is database_age_s old, with an old upload nothing names."""
-    blobs = tmp_path / "logos" / "blobs"
+    blobs = tmp_path / "blobs"
     blobs.mkdir(parents=True)
     named = "a" * 64
     orphan = blobs / f"{'b' * 64}.png"
@@ -270,6 +271,18 @@ def test_start_up_keeps_uploads_while_the_database_is_young(
     assert (blobs / f"{'b' * 64}.png").exists()
     lines = [json.loads(x) for x in (tmp_path / "tunebox.log").read_text("utf-8").splitlines()]
     assert not [line for line in lines if line["event"] == "logo_blobs_collected"]
+
+
+def test_uploads_live_outside_the_logo_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "logos").mkdir()
+    (tmp_path / "logos" / "owr.png").write_bytes(b"x")
+    blobs = _blob_start(monkeypatch, tmp_path, 3 * 86_400)
+    # Start-up collected in data_dir/blobs: the orphan there is gone.
+    assert not (blobs / f"{'b' * 64}.png").exists()
+    shutil.rmtree(tmp_path / "logos")
+    assert (blobs / f"{'a' * 64}.png").exists()
 
 
 def test_a_database_that_fails_while_listing_blobs_stops_startup(

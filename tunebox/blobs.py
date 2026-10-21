@@ -1,4 +1,5 @@
-"""Uploaded logos, stored by their SHA-256 under logos/blobs/. The file is
+"""Uploaded logos, stored by their SHA-256 under blobs/ in the data folder,
+apart from the logo cache in logos/ (which can be deleted). The file is
 the record: a station's logo names blob:<sha256>, and the blob exists when
 its file does, also after the database was reset (export, reset, import).
 Unreferenced blobs are removed at start-up once they are a day old, so an

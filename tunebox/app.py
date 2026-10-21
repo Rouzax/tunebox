@@ -75,7 +75,9 @@ def main() -> int:
         event(log, logging.ERROR, "settings_unavailable", error=str(error))
         print(f"tunebox: {error}", file=sys.stderr)
         return 2
-    blobs = Blobs(config.server.data_dir / "logos" / "blobs")
+    # Beside the logo cache, not in it: data/logos/ can be deleted, while an
+    # upload has no other copy.
+    blobs = Blobs(config.server.data_dir / "blobs")
     try:
         for field, reason in stored_refusals(settings.load()[0]):
             event(log, logging.WARNING, "rule_refused", field=field, reason=reason)
