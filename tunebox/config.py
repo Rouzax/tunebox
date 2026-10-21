@@ -260,6 +260,9 @@ def state_from_import(text: str) -> tuple[ConfigState, list[str]]:
         raise ConfigError(str(error)) from error
     except RecursionError as error:
         raise ConfigError("the file is too deeply nested") from error
+    except ValueError as error:
+        # Python refuses to read an integer of more than 4300 digits.
+        raise ConfigError("the file holds a number with too many digits") from error
     notes = [
         f"[{key}] is a start-up setting and was left out" for key in _START_UP_ONLY if key in data
     ]
@@ -345,6 +348,12 @@ def state_to_toml(state: ConfigState) -> dict[str, object]:
 def validate_state(state: ConfigState) -> Resolved:
     """Checks the whole configuration, disabled channels included, so a
     change that breaks a rule spanning channels is refused as a whole."""
+    _text(dict(state.defaults), "defaults")
+    _text(state.player, "player")
+    _text(list(state.groups), "groups")
+    for index, row in enumerate(state.channels):
+        _text(row.doc, f"channels[{index}]")
+        _text(row.group, f"channels[{index}].group")
     _no_unknown(state.defaults, set(DEFAULTS), "defaults")
     defaults = {**DEFAULTS, **_numbers(dict(state.defaults), "defaults")}
     seen: dict[str, tuple[ChannelRow, ChannelConfig]] = {}
@@ -367,6 +376,29 @@ def validate_state(state: ConfigState) -> Resolved:
     # sorted() is stable, so channels keep their positions within a group.
     ordered = sorted(enabled, key=lambda c: -1 if c.group is None else rank[c.group])
     return Resolved(tuple(ordered), _player(dict(state.player), {c.id for c in ordered}))
+
+
+def _text(value: object, where: str) -> None:
+    """Refuses a string that cannot be stored as UTF-8: JSON allows a lone
+    surrogate such as \\ud800, SQLite does not."""
+    if isinstance(value, str) and not _encodable(value):
+        raise ConfigError(f"{where}: not valid text")
+    if isinstance(value, dict):
+        for key, item in cast("dict[str, object]", value).items():
+            if not _encodable(key):
+                raise ConfigError(f"{where}: a key that is not valid text")
+            _text(item, f"{where}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(cast("list[object]", value)):
+            _text(item, f"{where}[{index}]")
+
+
+def _encodable(text: str) -> bool:
+    try:
+        text.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _channel(table: dict[str, Any], where: str, defaults: dict[str, float]) -> ChannelConfig:

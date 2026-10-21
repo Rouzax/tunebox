@@ -820,6 +820,34 @@ def test_a_deeply_nested_import_is_refused_not_a_crash(world: World) -> None:
         assert "too deeply nested" in json_of(answer)["message"]
 
 
+def test_an_import_with_a_huge_integer_is_refused(world: World) -> None:
+    csrf = world.login()
+    fresh(world, csrf)
+    huge = "[defaults]\nhistory_size = " + "1" * 5000 + "\n" + STATIONS_TOML
+    for path, body in (
+        ("/admin/api/import/preview", {"toml": huge}),
+        ("/admin/api/import", {"toml": huge, "based_on": 0}),
+    ):
+        answer = world.call("POST", path, body, csrf=csrf)
+        assert answer.status == 400
+        assert json_of(answer) == {
+            "error": "invalid",
+            "message": "the file holds a number with too many digits",
+        }
+
+
+def test_a_save_with_a_lone_surrogate_names_the_field(world: World) -> None:
+    csrf = world.login()
+    answer = save(world, csrf, 0, state_of(station("a", name="x\ud800")))
+    assert answer.status == 400
+    assert json_of(answer)["message"] == "channels[0] (a).name: not valid text"
+    odd_key = station("a")
+    odd_key["doc"]["\ud800"] = 1
+    answer = save(world, csrf, 0, state_of(odd_key))
+    assert json_of(answer)["message"] == "channels[0] (a): a key that is not valid text"
+    assert world.settings.load()[1] == 0
+
+
 def test_a_deeply_nested_json_body_is_a_bad_request(world: World) -> None:
     csrf = world.login()
     request = Request(
