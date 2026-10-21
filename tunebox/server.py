@@ -324,9 +324,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _read_within_deadline(self, length: int) -> bytes:
         """length bytes, or what arrived by BODY_DEADLINE_S or before the
-        client stalled or hung up. One read per socket receive, each allowed only
-        the time left, so a body sent a byte at a time cannot hold the
-        thread past the deadline."""
+        client stalled or hung up. One read per socket receive, each
+        allowed only the time left, so a body sent a byte at a time
+        cannot hold the thread past the deadline."""
         deadline = time.monotonic() + BODY_DEADLINE_S
         chunks: list[bytes] = []
         received = 0
@@ -434,6 +434,8 @@ class Handler(BaseHTTPRequestHandler):
         if (
             content_type != "application/json"
             or (site is not None and site != "same-origin")
+            # A repeated line reads as absent from _header, which here would
+            # mean allowed.
             or len(self.headers.get_all("Sec-Fetch-Site") or []) > 1
         ):
             # Another site's page making a visitor's browser post here. Counted

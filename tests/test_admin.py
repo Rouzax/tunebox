@@ -1443,9 +1443,25 @@ def test_account_rules_in_totp_and_recovery_are_400_not_500(
     monkeypatch.setattr(world.accounts, "replace_recovery_codes", refuse)
     answer = world.call("POST", "/admin/api/account/recovery", {}, csrf=csrf)
     assert answer.status == 400
-    world.call("POST", "/admin/api/account/totp/start", {}, csrf=csrf)
+    expected = {"error": "invalid", "message": "some future rule"}
+    assert json_of(answer) == expected
+    started = json_of(world.call("POST", "/admin/api/account/totp/start", {}, csrf=csrf))
+    new_secret = base64.b32decode(started["secret"] + "=" * (-len(started["secret"]) % 8))
+    code = crypto.totp(new_secret, int(world.clock.now // 30))
     monkeypatch.setattr(world.accounts, "replace_totp", refuse)
-    answer = world.call(
-        "POST", "/admin/api/account/totp/finish", {"code": world.code(1)}, csrf=csrf
-    )
+    answer = world.call("POST", "/admin/api/account/totp/finish", {"code": code}, csrf=csrf)
     assert answer.status == 400
+    assert json_of(answer) == expected
+
+
+def test_an_ended_session_spends_no_reauth_slot(world: World) -> None:
+    csrf = world.login()
+    assert world.call("POST", "/admin/api/logout", {}, csrf=csrf).status == 204
+    for _ in range(6):
+        stale = world.call("POST", "/admin/api/account/reauth", {"code": "000000"}, csrf=csrf)
+        assert stale.status == 401
+    world.clock.now += 30
+    csrf = world.login()
+    world.clock.now += 30
+    good = {"code": world.code()}
+    assert world.call("POST", "/admin/api/account/reauth", good, csrf=csrf).status == 204
