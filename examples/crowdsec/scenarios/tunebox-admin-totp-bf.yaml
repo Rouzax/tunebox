@@ -4,7 +4,8 @@ type: leaky
 name: tunebox/admin-totp-bf
 description: "Wrong TOTP codes after a correct tunebox admin password"
 filter: >-
-  evt.Meta.log_type == 'tunebox_admin_login_failed'
+  evt.Meta.client_range != ''
+  && evt.Meta.log_type == 'tunebox_admin_login_failed'
   && (evt.Meta.reason == 'totp' || evt.Meta.reason == 'recovery')
 groupby: evt.Meta.client_range
 scope:

@@ -93,6 +93,9 @@ def test_scenarios_group_and_ban_by_the_range() -> None:
         text = scenario.read_text(encoding="utf-8")
         assert "groupby: evt.Meta.client_range" in text, scenario.name
         assert "scope:\n  type: Range\n  expression: evt.Meta.client_range\n" in text, scenario.name
+        # A line without a range would share one bucket with every other
+        # such line, and LAPI discards the resulting decision on "".
+        assert "filter: >-\n  evt.Meta.client_range != ''\n  && " in text, scenario.name
     parser = (EXAMPLES / "parsers" / "s01-parse" / "tunebox-logs.yaml").read_text(encoding="utf-8")
     assert (
         '- meta: client_range\n    expression: JsonExtract(evt.Parsed.message, "range")' in parser

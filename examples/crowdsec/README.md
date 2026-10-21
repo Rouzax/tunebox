@@ -64,12 +64,22 @@ The scenarios count and ban per range: the address itself for IPv4, its
 /64 for IPv6, the same unit tunebox counts in. tunebox writes the range as
 `range` on every event the scenarios count, and the parser keeps it as
 `client_range`, so a visitor who rotates addresses inside one /64 fills one
-bucket and is banned as a whole. A locked-out address writes at most one
-WARNING a second per address group (the rest are at DEBUG), so the log
-stays quiet however fast it retries.
+bucket and is banned as a whole. A line without `range` (written by a
+tunebox from before the field existed) counts toward no ban, so after a
+rollback to such a version keep the scenarios that group by `source_ip`.
+A locked-out address writes at most one WARNING a second per address
+group (the rest are at DEBUG), so the log stays quiet however fast it
+retries.
 
-These examples have not been run against a live CrowdSec. Check them on the
-host with `cscli explain` (step 5) before they replace a working setup.
+Check the examples on your host with `cscli explain` (step 5) before they replace
+a working setup.
+
+The hub whitelist (`crowdsecurity/whitelists`) covers private IPv4 ranges
+and loopback, but not IPv6 unique-local (`fc00::/7`) or link-local
+addresses, nor home devices that reach tunebox on a public IPv6 address.
+Since an IPv6 ban covers the whole /64, one device on your own network
+that trips a scenario would lock out every device in it; whitelist your
+own IPv6 prefixes if your clients use IPv6.
 
 The ban length comes from your CrowdSec profiles: 4 hours with the default
 profile. To ban the second scenario for 24 hours, add this profile before

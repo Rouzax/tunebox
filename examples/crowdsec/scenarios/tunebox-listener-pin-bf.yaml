@@ -6,7 +6,9 @@
 type: leaky
 name: tunebox/listener-pin-bf
 description: "Repeated wrong PINs on the tunebox player"
-filter: evt.Meta.log_type == 'tunebox_listener_pin_failed'
+filter: >-
+  evt.Meta.client_range != ''
+  && evt.Meta.log_type == 'tunebox_listener_pin_failed'
 groupby: evt.Meta.client_range
 scope:
   type: Range
