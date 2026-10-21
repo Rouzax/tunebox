@@ -5,9 +5,10 @@ export function setCsrf(token) {
     csrf = token;
 }
 
-// No admin call takes long on the server (writes wait at most 5 s, a rule
-// check 2 s); one with no answer by now has lost its network, and the page
-// treats it like one that failed to send.
+// A single write waits at most 5 s for the database (busy_timeout) and a
+// rule check 2 s; requests queued behind another write wait in turn. One
+// with no answer by now has lost its network, and the page treats it like
+// one that failed to send.
 const DEADLINE_MS = 20000;
 
 // Sends a body as it is (a JSON string, or the bytes of an image) under its

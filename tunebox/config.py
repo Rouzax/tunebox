@@ -170,6 +170,9 @@ def load(path: Path) -> Config:
         raise ConfigError(f"{path}: {error.strerror}") from error
     except tomllib.TOMLDecodeError as error:
         raise ConfigError(f"{path}: {error}") from error
+    except (RecursionError, ValueError) as error:
+        # Deep nesting and over-long integers escape tomllib as these.
+        raise ConfigError(f"{path}: not readable TOML ({type(error).__name__})") from error
     return parse(data, base_dir=path.parent)
 
 
@@ -356,6 +359,7 @@ def validate_state(state: ConfigState) -> Resolved:
         _text(row.group, f"channels[{index}].group")
     _no_unknown(state.defaults, set(DEFAULTS), "defaults")
     defaults = {**DEFAULTS, **_numbers(dict(state.defaults), "defaults")}
+    group_names = set(state.groups)
     seen: dict[str, tuple[ChannelRow, ChannelConfig]] = {}
     for index, row in enumerate(state.channels):
         where = f"channels[{index}]"
@@ -365,12 +369,14 @@ def validate_state(state: ConfigState) -> Resolved:
             raise ConfigError(f"{where}.id: duplicate id {channel.id!r}")
         if channel.id != row.id:
             raise ConfigError(f"{where}.id: {channel.id!r} is stored as {row.id!r}")
-        if channel.group is not None and channel.group not in state.groups:
+        if channel.group is not None and channel.group not in group_names:
             raise ConfigError(f"{where}.group: no group named {channel.group!r}")
         seen[channel.id] = (row, channel)
+    listed: set[str] = set()
     for index, name in enumerate(state.groups):
-        if not name.strip() or state.groups.index(name) != index:
+        if not name.strip() or name in listed:
             raise ConfigError(f"groups[{index}]: names must be unique and not empty")
+        listed.add(name)
     rank = {name: position for position, name in enumerate(state.groups)}
     enabled = [channel for row, channel in seen.values() if row.enabled]
     # sorted() is stable, so channels keep their positions within a group.
@@ -455,6 +461,7 @@ def _streams(table: dict[str, Any], where: str) -> tuple[StreamConfig, ...]:
     if not isinstance(raw, list) or not raw:
         raise ConfigError(f"{where}.streams: expected at least one [[channels.streams]] table")
     streams: list[StreamConfig] = []
+    names: set[str] = set()
     for index, item in enumerate(cast("list[object]", raw)):
         at = f"{where}.streams[{index}]"
         if not isinstance(item, dict):
@@ -464,8 +471,9 @@ def _streams(table: dict[str, Any], where: str) -> tuple[StreamConfig, ...]:
         name = _str(entry, "name", f"{at}.name")
         if not name.strip():
             raise ConfigError(f"{at}.name: must not be empty")
-        if any(s.name == name for s in streams):
+        if name in names:
             raise ConfigError(f"{at}.name: duplicate name {name!r}")
+        names.add(name)
         url = _str(entry, "url", f"{at}.url")
         # The player page is served over https and browsers block http audio on it.
         if not url.startswith("https://"):

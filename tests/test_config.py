@@ -446,3 +446,15 @@ def test_state_from_import_names_the_toml_error() -> None:
 def test_state_from_import_refuses_a_too_deeply_nested_file() -> None:
     with pytest.raises(config.ConfigError, match="too deeply nested"):
         config.state_from_import("x = " + "[" * 5000 + "]" * 5000)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["x = " + "[" * 2000 + "]" * 2000, "x = " + "9" * 5000],
+    ids=["deep", "long-int"],
+)
+def test_a_file_tomllib_cannot_take_is_a_config_error(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "tunebox.toml"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(ConfigError, match=r"tunebox\.toml"):
+        load(path)

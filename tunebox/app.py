@@ -82,8 +82,13 @@ def main() -> int:
     # upload has no other copy.
     blobs = Blobs(config.server.data_dir / "blobs", free_space=free_space)
     try:
-        for field, reason in stored_refusals(settings.load()[0]):
+        stored = settings.load()[0]
+        for field, reason in stored_refusals(stored):
             event(log, logging.WARNING, "rule_refused", field=field, reason=reason)
+        for row in stored.channels:
+            logo = row.doc.get("logo")
+            if isinstance(logo, str) and logo.startswith("blob:") and blobs.path(logo) is None:
+                event(log, logging.WARNING, "logo_blob_missing", channel=row.id)
         removed = blobs.tidy(settings.oldest_change(), settings.referenced_blobs)
         if removed is None:
             event(log, logging.DEBUG, "logo_blobs_kept", reason="database_young")

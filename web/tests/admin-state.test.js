@@ -199,3 +199,16 @@ test('exportName reads the filename the server sent, with a fallback', () => {
     assert.equal(exportName(null), 'tunebox.toml');
     assert.equal(exportName('attachment'), 'tunebox.toml');
 });
+
+test('diffStates keys each state once', () => {
+    const make = (suffix) => ({
+        defaults: {},
+        player: {},
+        groups: [],
+        channels: Array.from({length: 300}, (_, i) => newStation(`s${i}`, `Name ${i}${suffix}`, null)),
+    });
+    const started = performance.now();
+    const changes = diffStates(make(''), make('x'));
+    assert.ok(performance.now() - started < 1000);
+    assert.equal(changes.length, 300);
+});

@@ -178,8 +178,10 @@ function keyed(state) {
 }
 
 export function diffStates(before, after) {
-    const a = leaves(keyed(before), '', new Map());
-    const b = leaves(keyed(after), '', new Map());
+    const kb = keyed(before);
+    const ka = keyed(after);
+    const a = leaves(kb, '', new Map());
+    const b = leaves(ka, '', new Map());
     const paths = new Set([...a.keys(), ...b.keys()]);
     const changes = [];
     for (const path of paths) {
@@ -191,7 +193,7 @@ export function diffStates(before, after) {
     const whole = new Set();
     for (const change of changes) {
         const id = change.path.split('.')[1];
-        if (change.path.startsWith('channels.') && (!keyed(before).channels[id] || !keyed(after).channels[id])) {
+        if (change.path.startsWith('channels.') && (!kb.channels[id] || !ka.channels[id])) {
             whole.add(id);
         }
     }
@@ -199,8 +201,8 @@ export function diffStates(before, after) {
     for (const id of whole) {
         rest.push({
             path: `channels.${id}`,
-            before: keyed(before).channels[id] ? 'present' : undefined,
-            after: keyed(after).channels[id] ? 'present' : undefined,
+            before: kb.channels[id] ? 'present' : undefined,
+            after: ka.channels[id] ? 'present' : undefined,
         });
     }
     // Keyed by id, a reorder has no changed leaf of its own.
