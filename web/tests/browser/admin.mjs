@@ -227,6 +227,14 @@ async function run() {
     let browser = null;
     let stream = null;
     let steps = 0;
+    // A check interrupted mid-run skips the finally below; its tunebox and
+    // data folder go with the process all the same.
+    process.once('exit', () => {
+        if (tunebox) {
+            tunebox.child.kill('SIGKILL');
+        }
+        rmSync(folder, {recursive: true, force: true});
+    });
     try {
         stream = await silentStream(folder);
         tunebox = await startTunebox(folder, port, stream.url);

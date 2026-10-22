@@ -2,8 +2,8 @@
 // Node 22 or later (Node 20 needs --experimental-websocket).
 
 import {spawn} from 'node:child_process';
-import {existsSync, mkdtempSync, rmSync} from 'node:fs';
-import {tmpdir} from 'node:os';
+import {existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
+import os, {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
 // No CDP call here takes more than a few seconds; a call that gets no answer
@@ -27,10 +27,70 @@ export function findChrome() {
     return 'google-chrome';
 }
 
+const PROFILE_PREFIX = 'tunebox-cdp-';
+
+const alive = (pid) => {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        return error.code === 'EPERM';
+    }
+};
+
+// Chrome runs in its own process group so one signal reaches the browser
+// and every helper it forked; a helper left behind keeps writing the profile.
+function killGroup(pid, signal) {
+    try {
+        process.kill(-pid, signal);
+    } catch (error) {
+        // Already gone.
+    }
+}
+
+function removeProfile(profile) {
+    rmSync(profile, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
+}
+
+// A check killed outright (SIGKILL, a timeout) runs no exit handler; its
+// profile names its owner, so the next check removes what that run left.
+// The Chrome pid is killed only while its command line still names the
+// profile, so a reused pid is never hit.
+function sweepStaleProfiles() {
+    for (const name of readdirSync(tmpdir())) {
+        if (!name.startsWith(PROFILE_PREFIX)) {
+            continue;
+        }
+        const profile = join(tmpdir(), name);
+        let owner = null;
+        try {
+            owner = JSON.parse(readFileSync(join(profile, 'owner.json'), 'utf8'));
+        } catch (error) {
+            continue;
+        }
+        if (alive(owner.node)) {
+            continue;
+        }
+        try {
+            if (readFileSync(`/proc/${owner.chrome}/cmdline`, 'utf8').includes(profile)) {
+                killGroup(owner.chrome, 'SIGKILL');
+            }
+        } catch (error) {
+            // Chrome is gone too.
+        }
+        try {
+            removeProfile(profile);
+        } catch (error) {
+            // Left for the next sweep.
+        }
+    }
+}
+
 // port: the DevTools port to open; errors collects page exceptions and
 // console errors (CSP violations among them).
 export async function connect({port}) {
-    const profile = mkdtempSync(join(tmpdir(), 'tunebox-cdp-'));
+    sweepStaleProfiles();
+    const profile = mkdtempSync(join(tmpdir(), PROFILE_PREFIX));
     // /dev/shm is 64 MB in a container by default, too small for the
     // renderer; Chrome refuses to run as root without --no-sandbox, and an
     // unpacked Chrome for Testing has no sandbox where AppArmor blocks user
@@ -42,7 +102,23 @@ export async function connect({port}) {
     if ((process.getuid && process.getuid() === 0) || process.env.CHROME_NO_SANDBOX === '1') {
         args.push('--no-sandbox');
     }
-    const chrome = spawn(findChrome(), [...args, 'about:blank'], {stdio: 'ignore'});
+    const chrome = spawn(findChrome(), [...args, 'about:blank'], {stdio: 'ignore', detached: true});
+    writeFileSync(join(profile, 'owner.json'), JSON.stringify({node: process.pid, chrome: chrome.pid}));
+    // A failed check can exit from anywhere; Chrome and its profile go too.
+    const onExit = () => {
+        killGroup(chrome.pid, 'SIGKILL');
+        try {
+            removeProfile(profile);
+        } catch (error) {
+            // The next check's sweep removes it.
+        }
+    };
+    process.once('exit', onExit);
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+        if (process.listenerCount(signal) === 0) {
+            process.once(signal, () => process.exit(128 + os.constants.signals[signal]));
+        }
+    }
     let targets = null;
     for (let i = 0; i < 100 && !targets; i++) {
         await sleep(100);
@@ -53,7 +129,8 @@ export async function connect({port}) {
         }
     }
     if (!targets) {
-        chrome.kill();
+        process.removeListener('exit', onExit);
+        onExit();
         throw new Error('Chrome did not start (is google-chrome or chromium installed?)');
     }
     const ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
@@ -116,13 +193,10 @@ export async function connect({port}) {
     const close = async () => {
         ws.close();
         const exited = new Promise((resolve) => chrome.once('exit', resolve));
-        chrome.kill();
+        killGroup(chrome.pid, 'SIGTERM');
         await Promise.race([exited, sleep(3000)]);
-        try {
-            rmSync(profile, {recursive: true, force: true});
-        } catch (error) {
-            // Chrome can still be writing its profile; it is only a temp folder.
-        }
+        process.removeListener('exit', onExit);
+        onExit();
     };
     const evaluate = async (expression) => {
         const answer = await send('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true});
