@@ -1,8 +1,9 @@
 import dataclasses
+import itertools
 import logging
-import tempfile
 import threading
 import time
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,18 @@ NEW = RawEntry("JAZZY", "My People", 1_200_000)
 ID = RawEntry("", "E1700 16 Oct 2026 M19 VO", 1_100_000)
 M_URL = "https://example.invalid/m.jpg"
 S_URL = "https://example.invalid/s.jpg"
+
+
+_scratch: list[Path] = []
+_serial = itertools.count()
+
+
+@pytest.fixture(autouse=True)
+def scratch(tmp_path: Path) -> Generator[None]:
+    """A folder under pytest's tmp_path for every cover store a test builds."""
+    _scratch[:] = [tmp_path]
+    yield
+    _scratch.clear()
 
 
 class Clock:
@@ -52,7 +65,7 @@ def make(
 ) -> tuple[Channel, CoverService, Finder]:
     finder = Finder()
     store = store or Store(None)
-    files = CoverFiles(Path(tempfile.mkdtemp()), free=lambda: None)
+    files = CoverFiles(_scratch[0] / f"covers-{next(_serial)}", free=lambda: None)
     covers = CoverService(store, finder, files, fetch_cover, clock=lambda: clock.ms / 1000)
     channel = Channel(
         config or channel_config(),
