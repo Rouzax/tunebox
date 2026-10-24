@@ -295,3 +295,13 @@ def test_found_gives_the_file_and_its_address(tmp_path: Path) -> None:
     path, address = store.found(LINK) or (None, "")
     assert path == store.path_for(LINK)
     assert address == store.address_for(LINK)
+
+
+def test_a_folder_named_like_a_cover_is_not_a_cover(tmp_path: Path) -> None:
+    store = files(tmp_path)
+    (tmp_path / "covers" / f"{name_for(LINK)}.jpg").mkdir(parents=True)
+    assert store.path_for(LINK) is None and store.found(LINK) is None
+    assert store.save(LINK, PNG) is SaveResult.SAVED
+    found = store.found(LINK)
+    assert found is not None and found[0].suffix == ".png"
+    assert found[1] == f"/covers/{found[0].name}?v={found[0].stat().st_mtime_ns:x}"

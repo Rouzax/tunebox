@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import secrets
+import stat
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -30,11 +31,11 @@ MAX_COVERS = 500_000_000
 # Cleaning stops here rather than at the cap, so it does not run on every download.
 LOW_WATER = 450_000_000
 TOUCH_S = 86_400
-KINDS = ("jpg", "png", "webp")
 CONTENT_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+KINDS = tuple(CONTENT_TYPES)
 # A partial file is never in use for this long, so an older one is a crash's leftover.
 PARTIAL_STALE_S = 3600
-_NAME = re.compile(r"[0-9a-f]{32}\.(jpg|png|webp)")
+_NAME = re.compile(rf"[0-9a-f]{{32}}\.({'|'.join(KINDS)})")
 _PARTIAL = re.compile(r"\.[0-9a-f]+\.tmp")
 
 
@@ -97,25 +98,29 @@ class CoverFiles:
     def free(self) -> int | None:
         return self._free()
 
-    def path_for(self, link: str) -> Path | None:
+    def _stat(self, link: str) -> tuple[Path, os.stat_result] | None:
         name = name_for(link)
         for kind in KINDS:
             path = self._dir / f"{name}.{kind}"
-            with contextlib.suppress(OSError):
-                if path.is_file():
-                    return path
+            try:
+                info = path.stat()
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                return path, info
         return None
+
+    def path_for(self, link: str) -> Path | None:
+        found = self._stat(link)
+        return found[0] if found else None
 
     def found(self, link: str) -> tuple[Path, str] | None:
         """The file for the link and its address, from one stat of the file."""
-        path = self.path_for(link)
-        if path is None:
+        found = self._stat(link)
+        if found is None:
             return None
-        try:
-            version = path.stat().st_mtime_ns
-        except OSError:
-            return None
-        return path, f"/covers/{path.name}?v={version:x}"
+        path, info = found
+        return path, f"/covers/{path.name}?v={info.st_mtime_ns:x}"
 
     def address_for(self, link: str) -> str | None:
         found = self.found(link)
