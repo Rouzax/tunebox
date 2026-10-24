@@ -29,7 +29,7 @@ export function findChrome() {
 
 const PROFILE_PREFIX = 'tunebox-cdp-';
 
-const alive = (pid) => {
+export const alive = (pid) => {
     try {
         process.kill(pid, 0);
         return true;
@@ -40,7 +40,7 @@ const alive = (pid) => {
 
 // Chrome runs in its own process group so one signal reaches the browser
 // and every helper it forked; a helper left behind keeps writing the profile.
-function killGroup(pid, signal) {
+export function killGroup(pid, signal) {
     try {
         process.kill(-pid, signal);
     } catch (error) {

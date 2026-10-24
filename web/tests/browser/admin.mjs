@@ -23,15 +23,15 @@
 
 import {spawn, spawnSync} from 'node:child_process';
 import {createHmac} from 'node:crypto';
-import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
 import {createServer as createHttpsServer} from 'node:https';
 import {createServer} from 'node:net';
-import {tmpdir} from 'node:os';
+import os, {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {deflateSync} from 'node:zlib';
 
-import {connect, sleep} from './cdp.mjs';
+import {alive, connect, killGroup, sleep} from './cdp.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const PYTHON = join(ROOT, '.venv', 'bin', 'python');
@@ -136,6 +136,54 @@ function silentStream(folder) {
     })));
 }
 
+// Data folders made by this check; each holds owner.json naming the node
+// process and, once started, its tunebox.
+const FOLDER_PREFIXES = ['tunebox-admin-', 'tunebox-setup-', 'tunebox-transfer-'];
+
+function ownedFolder(prefix) {
+    const folder = mkdtempSync(join(tmpdir(), prefix));
+    writeFileSync(join(folder, 'owner.json'), JSON.stringify({node: process.pid}));
+    return folder;
+}
+
+// A check killed outright (SIGKILL, a timeout) runs no exit handler; the
+// next run stops the tunebox it left and removes its folders. The tunebox
+// pid is killed only while its environment still names that folder's
+// config (its command line does not name the folder), so a reused pid is
+// never hit.
+function sweepStaleFolders() {
+    for (const name of readdirSync(tmpdir())) {
+        if (!FOLDER_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+            continue;
+        }
+        const folder = join(tmpdir(), name);
+        let owner = null;
+        try {
+            owner = JSON.parse(readFileSync(join(folder, 'owner.json'), 'utf8'));
+        } catch (error) {
+            continue;
+        }
+        if (alive(owner.node)) {
+            continue;
+        }
+        if (owner.tunebox) {
+            try {
+                const environment = readFileSync(`/proc/${owner.tunebox}/environ`, 'utf8').split('\0');
+                if (environment.includes(`TUNEBOX_CONFIG=${join(folder, 'tunebox.toml')}`)) {
+                    killGroup(owner.tunebox, 'SIGKILL');
+                }
+            } catch (error) {
+                // tunebox is gone too.
+            }
+        }
+        try {
+            rmSync(folder, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
+        } catch (error) {
+            // Left for the next sweep.
+        }
+    }
+}
+
 // setup: no account yet and the setup page on, as a first start would be.
 async function startTunebox(folder, port, streamUrl, setup = false) {
     writeFileSync(join(folder, 'tunebox.toml'), [
@@ -165,11 +213,20 @@ async function startTunebox(folder, port, streamUrl, setup = false) {
         throw new Error(`could not create the account: ${made.stderr}`);
     }
     const log = [];
+    // Its own process group, so one signal also reaches the title-rule
+    // checks it runs in child processes.
     const child = spawn(PYTHON, ['-m', 'tunebox'], {
         cwd: ROOT,
         env: Object.assign({}, process.env, {TUNEBOX_CONFIG: join(folder, 'tunebox.toml'), LOG_LEVEL: process.env.DEBUG_TUNEBOX_LOG ? 'debug' : 'info'}),
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
     });
+    writeFileSync(join(folder, 'owner.json'), JSON.stringify({node: process.pid, tunebox: child.pid}));
+    // A check that exits from anywhere takes its tunebox along, stopped
+    // before any exit handler removes its folder.
+    const onExit = () => killGroup(child.pid, 'SIGKILL');
+    process.prependOnceListener('exit', onExit);
+    child.once('exit', () => process.removeListener('exit', onExit));
     child.stdout.on('data', (chunk) => log.push(String(chunk)));
     child.stderr.on('data', (chunk) => log.push(String(chunk)));
     for (let i = 0; i < 100; i++) {
@@ -182,7 +239,7 @@ async function startTunebox(folder, port, streamUrl, setup = false) {
         }
         await sleep(100);
     }
-    child.kill();
+    killGroup(child.pid, 'SIGTERM');
     throw new Error(`tunebox did not start:\n${log.join('')}`);
 }
 
@@ -219,7 +276,15 @@ async function channels(base) {
 }
 
 async function run() {
-    const folder = mkdtempSync(join(tmpdir(), 'tunebox-admin-'));
+    sweepStaleFolders();
+    // An interrupt runs the exit handlers: tunebox is in its own process
+    // group, out of reach of the terminal's signal.
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+        if (process.listenerCount(signal) === 0) {
+            process.once(signal, () => process.exit(128 + os.constants.signals[signal]));
+        }
+    }
+    const folder = ownedFolder('tunebox-admin-');
     const port = await freePort();
     const base = `http://127.0.0.1:${port}`;
     const failures = [];
@@ -227,12 +292,9 @@ async function run() {
     let browser = null;
     let stream = null;
     let steps = 0;
-    // A check interrupted mid-run skips the finally below; its tunebox and
-    // data folder go with the process all the same.
+    // A check interrupted mid-run skips the finally below; its data folder
+    // goes with the process all the same (startTunebox stops tunebox).
     process.once('exit', () => {
-        if (tunebox) {
-            tunebox.child.kill('SIGKILL');
-        }
         rmSync(folder, {recursive: true, force: true});
     });
     try {
@@ -1561,7 +1623,7 @@ async function run() {
 
         // Export, import and logo upload run on the History and Edit pages
         // with files chosen through the page's own hidden file inputs.
-        const transfer = mkdtempSync(join(tmpdir(), 'tunebox-transfer-'));
+        const transfer = ownedFolder('tunebox-transfer-');
         const setFile = async (selector, path) => {
             const document = await send('DOM.getDocument', {depth: 0});
             const found = await send('DOM.querySelector', {nodeId: document.result.root.nodeId, selector});
@@ -1812,7 +1874,7 @@ async function run() {
 
         // A first start: no account, the setup page on, the link from the log.
         await step('the setup link shows the form, keeps its secret and leaves the address bar clean', async () => {
-            const setupFolder = mkdtempSync(join(tmpdir(), 'tunebox-setup-'));
+            const setupFolder = ownedFolder('tunebox-setup-');
             let first = null;
             try {
                 const setupPort = await freePort();
@@ -1866,7 +1928,7 @@ async function run() {
             } finally {
                 if (first) {
                     const exited = new Promise((done) => first.child.once('exit', done));
-                    first.child.kill('SIGTERM');
+                    killGroup(first.child.pid, 'SIGTERM');
                     await Promise.race([exited, sleep(5000)]);
                 }
                 rmSync(setupFolder, {recursive: true, force: true});
@@ -1884,7 +1946,7 @@ async function run() {
         }
         if (tunebox) {
             const exited = new Promise((done) => tunebox.child.once('exit', done));
-            tunebox.child.kill('SIGTERM');
+            killGroup(tunebox.child.pid, 'SIGTERM');
             await Promise.race([exited, sleep(5000)]);
             if (process.env.DEBUG_TUNEBOX_LOG && failures.length) {
                 writeFileSync(process.env.DEBUG_TUNEBOX_LOG, tunebox.log.join(''));
