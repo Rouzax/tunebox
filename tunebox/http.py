@@ -16,7 +16,12 @@ HttpGet = Callable[[str], bytes]
 
 
 class HttpError(Exception):
-    pass
+    """status is the HTTP status of a refused answer, None for a transport
+    failure; a 404 or 410 tells a dead link from a host that is down."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 def get(url: str, timeout: float = 10.0) -> bytes:

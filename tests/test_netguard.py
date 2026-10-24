@@ -128,8 +128,9 @@ def test_too_many_redirects(port: int) -> None:
 
 
 def test_an_error_status_is_an_error(port: int) -> None:
-    with pytest.raises(HttpError, match="404"):
+    with pytest.raises(HttpError, match="404") as caught:
         guard().get(f"http://ok.test:{port}/missing")
+    assert caught.value.status == 404
 
 
 def test_a_bad_port_is_refused() -> None:

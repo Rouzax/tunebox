@@ -58,3 +58,20 @@ def test_close_releases_the_database(tmp_path: Path) -> None:
     store.close()
     store.close()
     assert store.get_cover("k") is None
+
+
+def test_prune_covers_removes_old_decisions_only() -> None:
+    store = Store(None)
+    store.put_cover(CoverDecision("old", "cover", "https://example.invalid/o.jpg", "m", 100.0))
+    store.put_cover(CoverDecision("new", "miss", None, None, 900.0))
+    assert store.prune_covers(older_than=500.0) == ["old"]
+    assert store.get_cover("old") is None
+    assert store.get_cover("new") is not None
+
+
+def test_cover_links_lists_every_stored_link() -> None:
+    store = Store(None)
+    store.put_cover(CoverDecision("a", "cover", "https://example.invalid/1.jpg", "m", 1.0))
+    store.put_cover(CoverDecision("b", "artist", "https://example.invalid/1.jpg", "m", 1.0))
+    store.put_cover(CoverDecision("c", "miss", None, None, 1.0))
+    assert store.cover_links() == {"https://example.invalid/1.jpg"}

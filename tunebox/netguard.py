@@ -252,6 +252,6 @@ class Guard:
                 continue
             if response.status != 200:
                 connection.close()
-                raise HttpError(f"{_short(url)}: HTTP {response.status}")
+                raise HttpError(f"{_short(url)}: HTTP {response.status}", response.status)
             return response, connection
         raise HttpError(f"{_short(url)}: too many redirects")

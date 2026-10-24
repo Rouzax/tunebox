@@ -106,6 +106,29 @@ class Store:
             except sqlite3.Error as error:
                 self._report(error)
 
+    def prune_covers(self, older_than: float) -> list[str]:
+        """Deletes decisions last made before older_than; returns their keys."""
+        with self._lock:
+            try:
+                rows = self._db.execute(
+                    "DELETE FROM covers WHERE decided_at < ? RETURNING key", (older_than,)
+                ).fetchall()
+            except sqlite3.Error as error:
+                self._report(error)
+                return []
+        return [cast("str", row[0]) for row in rows]
+
+    def cover_links(self) -> set[str]:
+        with self._lock:
+            try:
+                rows = self._db.execute(
+                    "SELECT DISTINCT url FROM covers WHERE url IS NOT NULL"
+                ).fetchall()
+            except sqlite3.Error as error:
+                self._report(error)
+                return set()
+        return {cast("str", row[0]) for row in rows}
+
     def load_recent(self, channel: str) -> list[Track]:
         with self._lock:
             try:
