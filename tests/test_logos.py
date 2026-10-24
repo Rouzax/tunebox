@@ -377,6 +377,8 @@ def test_forget_removes_everything_downloaded_for_a_channel(tmp_path: Path) -> N
     assert (tmp_path / "small" / "owr.png").exists()
     logos.forget("owr")
     logos.forget("owr")  # nothing left is fine
+    while logos.run_once():
+        pass
     left = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*") if p.is_file())
     assert left == [
         "default/keep.jpg",
@@ -397,5 +399,30 @@ def test_forget_logs_what_it_cannot_remove(
 
     monkeypatch.setattr(Path, "unlink", unlink)
     logos.forget("owr")
+    assert logos.run_once()
     failed = [r for r in caplog.records if r.getMessage() == "logo_failed"]
     assert failed and all(getattr(r, "fields", {}).get("kind") == "forget" for r in failed)
+
+
+def test_a_forget_queued_after_a_refresh_leaves_no_files(tmp_path: Path) -> None:
+    http = FakeHttp(lambda url: BIG_PNG if url == URL else JPG)
+    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    channel = channel_config(logo=URL, default_image=DEFAULT_URL)
+    logos.request(channel)
+    logos.forget(channel.id)
+    assert logos.run_once() and logos.run_once()
+    assert not logos.run_once()
+    assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
+    logos.request(channel)  # re-enabled: downloaded again
+    assert logos.run_once()
+    assert logos.path_for(channel.id) is not None
+
+
+def test_forget_removes_a_stale_partial_file(tmp_path: Path) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs"))
+    for folder in (tmp_path, tmp_path / "small", tmp_path / "default"):
+        folder.mkdir(exist_ok=True)
+        (folder / ".owr.tmp").write_bytes(b"x")
+    logos.forget("owr")
+    assert logos.run_once()
+    assert [p for p in tmp_path.rglob("*") if p.is_file()] == []

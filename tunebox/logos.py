@@ -12,6 +12,7 @@ import queue
 import re
 import stat
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -73,12 +74,17 @@ def default_image_address(value: str | None, downloaded: str | None) -> str | No
     return value if _is_local_path(value) else None
 
 
+@dataclass(frozen=True)
+class _Forget:
+    channel_id: str
+
+
 class Logos:
     def __init__(self, directory: Path, http_get: HttpGet, blobs: Blobs) -> None:
         self._dir = directory
         self._get = http_get
         self._blobs = blobs
-        self._queue: queue.Queue[ChannelConfig] = queue.Queue()
+        self._queue: queue.Queue[ChannelConfig | _Forget] = queue.Queue()
         self._unavailable_reported = False
         self._unusable_reported: set[tuple[str, str]] = set()
 
@@ -115,11 +121,19 @@ class Logos:
 
     def run_forever(self, stop: threading.Event) -> None:
         while not stop.is_set():
-            try:
-                channel = self._queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            self.refresh(channel)
+            self.run_once(timeout=0.5)
+
+    def run_once(self, timeout: float = 0) -> bool:
+        """Handles the next queued item, in the order queued; False when none came."""
+        try:
+            item = self._queue.get(timeout=timeout) if timeout else self._queue.get_nowait()
+        except queue.Empty:
+            return False
+        if isinstance(item, _Forget):
+            self._remove_files(item.channel_id)
+        else:
+            self.refresh(item)
+        return True
 
     def refresh(self, channel: ChannelConfig) -> None:
         """Downloads the logo when its address is new, or copies an uploaded
@@ -169,14 +183,22 @@ class Logos:
                 )
 
     def forget(self, channel_id: str) -> None:
-        """Removes everything downloaded for a channel that no longer exists:
-        the logo and its small copy, and the default image, each with its
-        recorded source. A missing file is fine."""
+        """Queues the removal of everything downloaded for a channel that is
+        no longer live (deleted or disabled); enabling it again downloads
+        again. Going through the queue puts it after any refresh of the same
+        channel, so a refresh cannot bring the files back."""
+        self._queue.put(_Forget(channel_id))
+
+    def _remove_files(self, channel_id: str) -> None:
+        """The logo and its small copy, and the default image, each with its
+        recorded source, and a partial file a crash left. A missing file is fine."""
         names = (*(f"{channel_id}.{ext}" for ext in EXTENSIONS), f"{channel_id}.url")
         paths = [
             *(self._dir / name for name in names),
             self._dir / "small" / f"{channel_id}.png",
             *(self._folder(False, default=True) / name for name in names),
+            *(folder / f".{channel_id}.tmp" for folder in (self._dir, self._dir / "small")),
+            self._folder(False, default=True) / f".{channel_id}.tmp",
         ]
         for path in paths:
             try:
