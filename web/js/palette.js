@@ -9,30 +9,17 @@ function pixelsOf(img) {
     canvas.height = SAMPLE;
     const ctx = canvas.getContext('2d', {willReadFrequently: true});
     ctx.drawImage(img, 0, 0, SAMPLE, SAMPLE);
-    // Throws on a cross-origin image served without CORS.
     return ctx.getImageData(0, 0, SAMPLE, SAMPLE).data;
 }
 
+// Covers, logos and default images all come from tunebox, so the canvas can
+// read them; a read that fails anyway leaves the accent colours in place.
 function readPalette(img) {
-    return new Promise((resolve) => {
-        try {
-            resolve(paletteFromPixels(pixelsOf(img)));
-            return;
-        } catch (error) {
-            // Tainted by a cross-origin image; retry the same URL with CORS.
-        }
-        const probe = new Image();
-        probe.crossOrigin = 'anonymous';
-        probe.onload = () => {
-            try {
-                resolve(paletteFromPixels(pixelsOf(probe)));
-            } catch (error) {
-                resolve(null);
-            }
-        };
-        probe.onerror = () => resolve(null);
-        probe.src = img.currentSrc || img.src;
-    });
+    try {
+        return Promise.resolve(paletteFromPixels(pixelsOf(img)));
+    } catch (error) {
+        return Promise.resolve(null);
+    }
 }
 
 // The canvas normalises any CSS colour to #rrggbb.
