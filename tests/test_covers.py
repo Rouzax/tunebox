@@ -1,11 +1,23 @@
+import logging
+import tempfile
+import threading
+from pathlib import Path
+
+import pytest
+
 from tests.fakes import make_track
+from tunebox import covers as covers_module
 from tunebox.catalogs import Found, SearchError
-from tunebox.covers import HISTORY, NOW, Cover, CoverService
-from tunebox.store import Store
+from tunebox.coverfiles import CoverFiles, name_for
+from tunebox.covers import HISTORY, NOW, CoverService
+from tunebox.http import HttpError
+from tunebox.store import CoverDecision, Store
 from tunebox.tracks import Track
 
 DAY = 86400.0
-URL = "https://example.invalid/a.jpg"
+JPG = b"\xff\xd8\xff\xe0" + b"\x01" * 64
+URL = "https://example.invalid/images/cover/abc/1000x1000-000000-80-0-0.jpg"
+LOCAL = f"/covers/{name_for(URL)}.jpg?v="
 
 
 class Finder:
@@ -20,8 +32,27 @@ class Finder:
         return self.result
 
 
-def service(finder: Finder, now: list[float], store: Store | None = None) -> CoverService:
-    return CoverService(store or Store(None), finder, clock=lambda: now[0])
+class Fetch:
+    def __init__(self, answer: bytes | HttpError = JPG) -> None:
+        self.answer = answer
+        self.urls: list[str] = []
+
+    def __call__(self, url: str) -> bytes:
+        self.urls.append(url)
+        if isinstance(self.answer, HttpError):
+            raise self.answer
+        return self.answer
+
+
+def service(
+    finder: Finder,
+    now: list[float],
+    store: Store | None = None,
+    fetch: Fetch | None = None,
+    folder: Path | None = None,
+) -> CoverService:
+    files = CoverFiles(folder or Path(tempfile.mkdtemp()), free=lambda: None, clock=lambda: now[0])
+    return CoverService(store or Store(None), finder, files, fetch or Fetch(), clock=lambda: now[0])
 
 
 def drain(covers: CoverService) -> None:
@@ -35,7 +66,8 @@ def test_lookup_after_a_search() -> None:
     assert covers.lookup(track) is None
     covers.request(track, NOW)
     assert covers.run_once()
-    assert covers.lookup(track) == Cover(URL, "album")
+    cover = covers.lookup(track)
+    assert cover is not None and cover.url.startswith(LOCAL) and cover.kind == "album"
     assert not covers.run_once()
 
 
@@ -43,7 +75,8 @@ def test_artist_photo_kind() -> None:
     covers = service(Finder(Found(URL, "artist", "deezer artist: Fisher")), [0.0])
     covers.request(make_track(), NOW)
     covers.run_once()
-    assert covers.lookup(make_track()) == Cover(URL, "artist")
+    cover = covers.lookup(make_track())
+    assert cover is not None and cover.url.startswith(LOCAL) and cover.kind == "artist"
 
 
 def test_unsearchable_tracks_are_never_queued() -> None:
@@ -115,12 +148,12 @@ def test_an_expired_hit_is_still_shown_until_replaced() -> None:
     assert covers.lookup(make_track()) is not None
 
 
-def test_decisions_persist_in_the_store() -> None:
+def test_decisions_persist_in_the_store(tmp_path: Path) -> None:
     store = Store(None)
-    first = service(Finder(Found(URL, "album", "m")), [0.0], store)
+    first = service(Finder(Found(URL, "album", "m")), [0.0], store, folder=tmp_path)
     first.request(make_track(), NOW)
     first.run_once()
-    second = service(Finder(), [1.0], store)
+    second = service(Finder(), [1.0], store, folder=tmp_path)
     assert second.lookup(make_track()) is not None
     second.request(make_track(), NOW)
     assert not second.run_once()
@@ -145,7 +178,8 @@ def test_a_failed_research_keeps_the_expired_cover() -> None:
     finder.result = SearchError("quota")
     covers.request(make_track(), NOW)
     assert covers.run_once()
-    assert covers.lookup(make_track()) == Cover(URL, "album")
+    cover = covers.lookup(make_track())
+    assert cover is not None and cover.url.startswith(LOCAL) and cover.kind == "album"
     now[0] = 91 * DAY + 599
     covers.request(make_track(), NOW)
     assert not covers.run_once()
@@ -160,3 +194,206 @@ def test_names_without_latin_letters_are_never_queued() -> None:
     covers.request(make_track("ЛСП", "Монетка"), NOW)
     covers.request(make_track("!!!", "Heart Of Hearts"), NOW)
     assert not covers.run_once()
+
+
+def test_a_search_downloads_the_600_image_in_the_same_job(tmp_path: Path) -> None:
+    fetch = Fetch()
+    covers = service(Finder(Found(URL, "album", "m")), [1000.0], fetch=fetch, folder=tmp_path)
+    track = make_track()
+    covers.request(track, NOW)
+    assert covers.run_once()
+    assert fetch.urls == [URL.replace("/1000x1000-", "/600x600-")]
+    cover = covers.lookup(track)
+    assert cover is not None and cover.url.startswith(LOCAL)
+    assert covers.remote_link(track) == URL
+    assert not covers.run_once()
+
+
+def test_an_existing_decision_without_a_file_is_downloaded_lazily(tmp_path: Path) -> None:
+    store = Store(None)
+    store.put_cover(CoverDecision(make_track().key, "cover", URL, "m", 1000.0))
+    finder, fetch = Finder(), Fetch()
+    covers = service(finder, [1000.0], store=store, fetch=fetch, folder=tmp_path)
+    assert covers.lookup(make_track()) is None
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    assert finder.calls == [] and len(fetch.urls) == 1
+    assert covers.lookup(make_track()) is not None
+
+
+def test_a_failing_download_is_tried_at_most_every_ten_minutes(tmp_path: Path) -> None:
+    now = [1000.0]
+    fetch = Fetch(HttpError("down"))
+    covers = service(Finder(Found(URL, "album", "m")), now, fetch=fetch, folder=tmp_path)
+    track = make_track()
+    covers.request(track, NOW)
+    covers.run_once()
+    covers.request(track, NOW)
+    assert not covers.run_once()
+    now[0] += 601
+    covers.request(track, NOW)
+    assert covers.run_once()
+    assert len(fetch.urls) == 2
+
+
+def test_repeated_download_failures_turn_into_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    now = [1000.0]
+    fetch = Fetch(HttpError("down", 503))
+    covers = service(Finder(Found(URL, "album", "m")), now, fetch=fetch, folder=tmp_path)
+    caplog.set_level(logging.INFO)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    for _ in range(2):
+        now[0] += 601
+        covers.request(make_track(), NOW)
+        covers.run_once()
+    levels = [r.levelno for r in caplog.records if r.getMessage() == "cover_download_failed"]
+    assert levels == [logging.INFO, logging.INFO, logging.WARNING]
+    fetch.answer = JPG
+    now[0] += 601
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    fetch.answer = HttpError("down", 503)
+    for path in tmp_path.iterdir():
+        path.unlink()
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    levels = [r.levelno for r in caplog.records if r.getMessage() == "cover_download_failed"]
+    assert levels[-1] == logging.INFO  # a success starts the count again
+
+
+def test_a_dead_link_is_searched_again_and_the_old_file_stays(tmp_path: Path) -> None:
+    now = [1000.0]
+    fetch = Fetch()
+    covers = service(Finder(Found(URL, "album", "m")), now, fetch=fetch, folder=tmp_path)
+    track = make_track()
+    covers.request(track, NOW)
+    covers.run_once()
+    now[0] += 91 * DAY  # the cover decision has expired
+    fetch.answer = HttpError("gone", 404)
+    covers.request(track, NOW)
+    covers.run_once()  # re-search returns the same link; its download is gone
+    assert covers.lookup(track) is not None  # the earlier file still serves
+    now[0] += 601
+    covers.request(track, NOW)
+    assert covers.run_once()  # outcome error: searched again after ten minutes
+
+
+def test_a_page_instead_of_an_image_counts_as_a_dead_link(tmp_path: Path) -> None:
+    store = Store(None)
+    covers = service(
+        Finder(Found(URL, "album", "m")),
+        [1000.0],
+        store=store,
+        fetch=Fetch(b"<html></html>"),
+        folder=tmp_path,
+    )
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    decision = store.get_cover(make_track().key)
+    assert decision is not None and decision.outcome == "error" and decision.url == URL
+
+
+def test_an_unwritable_folder_counts_as_a_failed_download(tmp_path: Path) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_bytes(b"")
+    now = [1000.0]
+    fetch = Fetch()
+    covers = service(Finder(Found(URL, "album", "m")), now, fetch=fetch, folder=blocker / "covers")
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    assert covers.lookup(make_track()) is None
+    covers.request(make_track(), NOW)
+    assert not covers.run_once()  # waits ten minutes like any failed download
+
+
+def test_a_deleted_file_gives_no_cover_and_is_fetched_again(tmp_path: Path) -> None:
+    fetch = Fetch()
+    covers = service(Finder(Found(URL, "album", "m")), [1000.0], fetch=fetch, folder=tmp_path)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    for path in tmp_path.iterdir():
+        path.unlink()
+    assert covers.lookup(make_track()) is None
+    covers.request(make_track(), NOW)
+    assert covers.run_once()
+    assert len(fetch.urls) == 2 and covers.lookup(make_track()) is not None
+
+
+def test_a_full_disk_skips_the_download_and_warns_once_an_hour(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    now = [1000.0]
+    files = CoverFiles(tmp_path, free=lambda: 1, clock=lambda: now[0])
+    covers = CoverService(
+        Store(None), Finder(Found(URL, "album", "m")), files, Fetch(), clock=lambda: now[0]
+    )
+    caplog.set_level(logging.DEBUG)
+    for title in ("A", "B"):
+        covers.request(make_track(title=title), NOW)
+        covers.run_once()
+    warnings = [
+        r
+        for r in caplog.records
+        if r.getMessage() == "cover_disk_low" and r.levelno == logging.WARNING
+    ]
+    assert len(warnings) == 1
+    assert covers.lookup(make_track(title="A")) is None
+
+
+def test_housekeeping_prunes_old_decisions_and_their_files(tmp_path: Path) -> None:
+    now = [1000.0]
+    store = Store(None)
+    covers = service(Finder(Found(URL, "album", "m")), now, store=store, folder=tmp_path)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    shared = "https://example.invalid/shared/1000x1000-x.jpg"
+    store.put_cover(CoverDecision("x|one", "cover", shared, "m", now[0] + 400 * DAY))
+    store.put_cover(CoverDecision("x|two", "cover", shared, "m", now[0] + 10 * DAY))
+    (tmp_path / f"{name_for(shared)}.jpg").write_bytes(JPG)
+    now[0] += 366 * DAY
+    covers.housekeep()
+    assert store.get_cover(make_track().key) is None
+    assert covers.remote_link(make_track()) is None
+    assert not (tmp_path / f"{name_for(URL)}.jpg").exists()
+    assert (tmp_path / f"{name_for(shared)}.jpg").exists()  # still named by x|one
+
+
+def test_the_worker_housekeeps_at_start_and_survives_a_crash(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    covers = service(Finder(), [1000.0])
+    stop = threading.Event()
+    calls: list[int] = []
+
+    def crash() -> None:
+        calls.append(1)
+        stop.set()
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(covers, "housekeep", crash)
+    covers.run_forever(stop)
+    assert calls == [1]
+    assert any(r.getMessage() == "cover_housekeeping_crashed" for r in caplog.records)
+
+
+def test_the_worker_housekeeps_again_once_idle_after_the_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finder = Finder()
+    covers = service(finder, [1000.0])
+    stop = threading.Event()
+    calls: list[int] = []
+
+    def housekeep() -> None:
+        calls.append(len(finder.calls))
+        if len(calls) == 2:
+            stop.set()
+
+    monkeypatch.setattr(covers, "housekeep", housekeep)
+    monkeypatch.setattr(covers_module, "HOUSEKEEP_S", 0)
+    covers.request(make_track(), NOW)
+    covers.run_forever(stop)
+    assert calls == [0, 1]  # at start, then after the queued search

@@ -20,6 +20,7 @@ from tunebox.bursts import Bursts
 from tunebox.catalogs import Catalogs
 from tunebox.channel import Channel
 from tunebox.config import ChannelConfig, ConfigError, ConfigState, load
+from tunebox.coverfiles import MAX_COVER, CoverFiles
 from tunebox.covers import CoverService
 from tunebox.disk import free_bytes
 from tunebox.logos import Logos
@@ -100,8 +101,13 @@ def main() -> int:
     if removed:
         event(log, logging.INFO, "logo_blobs_collected", removed=removed)
     store = Store(config.server.data_dir / "tunebox.db")
-    covers = CoverService(store, Catalogs(http.get).find)
     guard = Guard()
+    covers = CoverService(
+        store,
+        Catalogs(http.get).find,
+        CoverFiles(config.server.data_dir / "covers", free=free_space),
+        lambda url: guard.get(url, max_bytes=MAX_COVER),
+    )
     logos = Logos(config.server.data_dir / "logos", guard.get, blobs)
     bursts = Bursts(guard.stream)
 

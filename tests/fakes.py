@@ -15,6 +15,12 @@ STATION_ID = r"^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b"
 PLAYED_BY = r"\s*\(Played by ([^)]*)\)\s*$"
 RULES = Rules(station_id=re.compile(STATION_ID), played_by=re.compile(PLAYED_BY))
 FIXTURE = Path(__file__).parent / "fixtures" / "tracks-2026-10-16.psv"
+COVER_JPG = b"\xff\xd8\xff\xe0" + b"\x01" * 64
+
+
+def fetch_cover(_url: str) -> bytes:
+    """Stands in for the cover download: every link answers a small JPEG."""
+    return COVER_JPG
 
 
 @dataclass(frozen=True)

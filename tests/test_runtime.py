@@ -7,11 +7,12 @@ from typing import Any
 
 import pytest
 
-from tests.fakes import FakeHttp, FakeSource, NoJitter
+from tests.fakes import FakeHttp, FakeSource, NoJitter, fetch_cover
 from tunebox import runtime as runtime_module
 from tunebox.blobs import Blobs
 from tunebox.channel import Channel
 from tunebox.config import ChannelConfig, ChannelRow, ConfigState, Resolved
+from tunebox.coverfiles import CoverFiles
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
 from tunebox.runtime import LIVE_FIELDS, POLLER_FIELDS, Runtime, needs_restart
@@ -46,7 +47,8 @@ class Harness:
     def __init__(self, tmp_path: Path) -> None:
         self.settings = Settings(tmp_path / "t.db")
         self.store = Store(None)
-        self.covers = CoverService(self.store, lambda _track: None)
+        files = CoverFiles(tmp_path / "covers", free=lambda: None)
+        self.covers = CoverService(self.store, lambda _track: None, files, fetch_cover)
         self.made: list[tuple[str, Channel | None]] = []
         self.unbuildable: set[str] = set()
         self.logos = RecordingLogos(tmp_path / "logos")

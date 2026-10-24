@@ -364,8 +364,8 @@ class Channel:
                 "title": track.full_title,
                 "played_at": track.started_at,
             }
-            if cover := self._covers.lookup(track):
-                entry["artwork"] = cover.url
+            if artwork := self._covers.remote_link(track):
+                entry["artwork"] = artwork
             history.append(entry)
         body["history"] = history
         return body
@@ -376,8 +376,7 @@ class Channel:
         including one appearing or disappearing, as a new track."""
         with self._lock:
             if track.ident not in self._frozen_artwork:
-                cover = self._covers.lookup(track)
-                self._frozen_artwork[track.ident] = cover.url if cover else None
+                self._frozen_artwork[track.ident] = self._covers.remote_link(track)
                 live = {t.ident for t in self._recent}
                 for ident in [i for i in self._frozen_artwork if i not in live]:
                     del self._frozen_artwork[ident]

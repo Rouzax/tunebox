@@ -1,4 +1,5 @@
-"""Cover decisions: cached answers for request threads, one worker that searches."""
+"""Cover decisions: cached answers for request threads, one worker that
+searches the catalogues and downloads what they find into CoverFiles."""
 
 from __future__ import annotations
 
@@ -7,11 +8,14 @@ import itertools
 import logging
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
 from tunebox.catalogs import Found, SearchError
+from tunebox.coverfiles import CoverFiles, SaveResult, name_for, sized
+from tunebox.http import HttpError, HttpGet
 from tunebox.logs import bound, event
 from tunebox.matching import base_title
 from tunebox.store import CoverDecision, Outcome, Store
@@ -31,6 +35,16 @@ NOW = 0
 HISTORY = 1
 # Decisions held in memory; older ones are read back from the store on demand.
 MEMORY = 2000
+# A song still played is searched again at least every 90 days, so a decision
+# this old belongs to a song nobody has heard for about nine months.
+PRUNE_AFTER_S = 365 * 86400
+# Pause after a failed download of one cover before it is tried again.
+RETRY_S = 600
+DISK_WARN_S = 3600
+HOUSEKEEP_S = 86400
+# Consecutive failed downloads of one cover before they are logged as WARNING.
+LOUD_AFTER = 3
+JobKind = Literal["search", "download"]
 
 
 @dataclass(frozen=True)
@@ -60,17 +74,24 @@ class CoverService:
         self,
         store: Store,
         find: Callable[[Track], Found | None],
+        files: CoverFiles,
+        fetch: HttpGet,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._store = store
         self._find = find
+        self._files = files
+        self._fetch = fetch
         self._clock = clock
         self._lock = threading.Condition()
         self._decisions: dict[str, CoverDecision] = {}
         self._queue: list[tuple[int, int, str]] = []
-        self._pending: dict[str, tuple[int, Track]] = {}
+        self._pending: dict[str, tuple[int, Track, JobKind]] = {}
         self._searching: set[str] = set()
         self._seq = itertools.count()
+        # key -> (time of the last failed download, consecutive failures)
+        self._failed: dict[str, tuple[float, int]] = {}
+        self._disk_warned = -DISK_WARN_S
 
     def _known(self, key: str) -> CoverDecision | None:
         """Caller holds the lock."""
@@ -93,30 +114,61 @@ class CoverService:
         decision = self._known(key)
         return decision is not None and self._clock() - decision.decided_at < TTL[decision.outcome]
 
+    def _needs_download(self, key: str) -> bool:
+        """Caller holds the lock."""
+        decision = self._known(key)
+        if decision is None or decision.url is None:
+            return False
+        if self._files.path_for(decision.url) is not None:
+            return False
+        failed = self._failed.get(key)
+        return failed is None or self._clock() - failed[0] >= RETRY_S
+
     def lookup(self, track: Track) -> Cover | None:
-        """The known cover, even past its TTL: a stale cover beats none while
-        the worker looks again."""
+        """The local cover, even past its decision's TTL (a stale cover beats
+        none while the worker looks again), or None while it is not
+        downloaded: the player then shows the station's own images. The next
+        request() queues the missing download."""
         with self._lock:
             decision = self._known(track.key)
         if decision is None or decision.url is None:
             return None
-        return Cover(decision.url, "artist" if _is_artist_photo(decision) else "album")
+        path = self._files.path_for(decision.url)
+        address = self._files.address_for(decision.url) if path else None
+        if path is None or address is None:
+            return None
+        self._files.touch(path)
+        return Cover(address, "artist" if _is_artist_photo(decision) else "album")
+
+    def remote_link(self, track: Track) -> str | None:
+        """The catalogue link, for PawTunes, which counts a changed artwork
+        link as a new track."""
+        with self._lock:
+            decision = self._known(track.key)
+        return decision.url if decision else None
 
     def request(self, track: Track, priority: int) -> None:
         if not searchable(track):
             return
         with self._lock:
-            if track.key in self._searching or self._fresh(track.key):
+            if track.key in self._searching:
+                return
+            kind: JobKind
+            if not self._fresh(track.key):
+                kind = "search"
+            elif self._needs_download(track.key):
+                kind = "download"
+            else:
                 return
             pending = self._pending.get(track.key)
             if pending is not None and pending[0] <= priority:
                 return
-            self._pending[track.key] = (priority, track)
+            self._pending[track.key] = (priority, track, kind)
             heapq.heappush(self._queue, (priority, next(self._seq), track.key))
             self._lock.notify()
 
     def run_once(self) -> bool:
-        """Searches the most urgent queued track; False when nothing was queued."""
+        """Runs the most urgent queued job; False when nothing was queued."""
         with self._lock:
             while True:
                 if not self._queue:
@@ -127,22 +179,61 @@ class CoverService:
                 if pending is None or pending[0] != priority:
                     continue
                 del self._pending[key]
-                track = pending[1]
+                _, track, kind = pending
                 self._searching.add(key)
+                decision = self._known(key) if kind == "download" else None
                 break
         try:
-            self._search(track)
+            if decision is not None:
+                with bound("cover"):
+                    self._download(track, decision)
+            elif kind == "search":
+                self._search(track)
         finally:
             with self._lock:
                 self._searching.discard(track.key)
         return True
 
     def run_forever(self, stop: threading.Event) -> None:
+        self._housekeep_safely()
+        last = time.monotonic()
         while not stop.is_set():
-            if not self.run_once():
-                with self._lock:
-                    # The timeout lets a stop request through even without a new lookup.
-                    self._lock.wait(timeout=1.0)
+            if self.run_once():
+                continue
+            if time.monotonic() - last >= HOUSEKEEP_S:
+                self._housekeep_safely()
+                last = time.monotonic()
+                continue
+            with self._lock:
+                # The timeout lets a stop request through even without a new lookup.
+                self._lock.wait(timeout=1.0)
+
+    def _housekeep_safely(self) -> None:
+        try:
+            self.housekeep()
+        except Exception:  # cleanup must never stop the worker
+            log.error("cover_housekeeping_crashed", exc_info=True)
+
+    def housekeep(self) -> None:
+        """Forgets decisions for songs long unplayed, then removes the files
+        no remaining decision names and keeps the folder under its cap."""
+        removed = self._store.prune_covers(self._clock() - PRUNE_AFTER_S)
+        with self._lock:
+            for key in removed:
+                self._decisions.pop(key, None)
+                self._failed.pop(key, None)
+        keep = {name_for(link) for link in self._store.cover_links()}
+        report = self._files.clean(keep)
+        event(
+            log,
+            logging.INFO,
+            "cover_cache_cleaned",
+            decisions_removed=len(removed),
+            files_removed=report.files_removed,
+            bytes_freed=report.bytes_freed,
+            files=report.files,
+            bytes=report.bytes,
+        )
 
     def _search(self, track: Track) -> None:
         started = time.monotonic()
@@ -180,5 +271,90 @@ class CoverService:
                 title=track.title,
                 outcome=outcome,
                 match=found.match if found else None,
-                duration_ms=round((time.monotonic() - started) * 1000),
+                duration_ms=_ms_since(started),
             )
+            # Also when the link is unchanged: save() keeps identical bytes
+            # and replaces a cover the catalogue has updated.
+            if url is not None and outcome != "error":
+                self._download(track, decision)
+
+    def _download(self, track: Track, decision: CoverDecision) -> None:
+        link = decision.url
+        assert link is not None
+        started = time.monotonic()
+        host = urllib.parse.urlsplit(link).hostname or ""
+        try:
+            body = self._fetch(sized(link))
+        except HttpError as error:
+            if error.status in (404, 410):
+                self._dead(track, decision, "gone", host, started)
+            else:
+                self._failure(track.key, "unreachable", host, started, error.status)
+            return
+        result = self._files.save(link, body)
+        if result in (SaveResult.SAVED, SaveResult.UNCHANGED):
+            with self._lock:
+                self._failed.pop(track.key, None)
+            event(
+                log,
+                logging.DEBUG,
+                "cover_downloaded",
+                host=host,
+                bytes=len(body),
+                duration_ms=_ms_since(started),
+            )
+        elif result in (SaveResult.NOT_IMAGE, SaveResult.TOO_LARGE):
+            self._dead(track, decision, result.value, host, started)
+        elif result is SaveResult.DISK_LOW:
+            self._failure(track.key, "disk_low", host, started, quiet=True)
+            now = self._clock()
+            loud = now - self._disk_warned >= DISK_WARN_S
+            if loud:
+                self._disk_warned = now
+            event(
+                log,
+                logging.WARNING if loud else logging.DEBUG,
+                "cover_disk_low",
+                free_bytes=self._files.free(),
+            )
+        else:
+            self._failure(track.key, "unwritable", host, started)
+
+    def _dead(
+        self, track: Track, decision: CoverDecision, reason: str, host: str, started: float
+    ) -> None:
+        """A link that will not give an image: the error outcome, link kept,
+        searches again after its TTL, and a file saved earlier stays in use."""
+        dead = CoverDecision(track.key, "error", decision.url, decision.match, self._clock())
+        self._store.put_cover(dead)
+        with self._lock:
+            self._remember(dead)
+        self._failure(track.key, reason, host, started)
+
+    def _failure(
+        self,
+        key: str,
+        reason: str,
+        host: str,
+        started: float,
+        status: int | None = None,
+        quiet: bool = False,
+    ) -> None:
+        with self._lock:
+            count = self._failed.get(key, (0.0, 0))[1] + 1
+            self._failed[key] = (self._clock(), count)
+        if quiet:
+            return
+        event(
+            log,
+            logging.WARNING if count >= LOUD_AFTER else logging.INFO,
+            "cover_download_failed",
+            host=host,
+            reason=reason,
+            status=status,
+            duration_ms=_ms_since(started),
+        )
+
+
+def _ms_since(started: float) -> int:
+    return round((time.monotonic() - started) * 1000)

@@ -1,14 +1,17 @@
 import dataclasses
 import logging
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
-from tests.fakes import OWR_RULES, FakeSource, NoJitter, channel_config
+from tests.fakes import OWR_RULES, FakeSource, NoJitter, channel_config, fetch_cover
 from tunebox.catalogs import Found
 from tunebox.channel import ACTIVE_MS, FIRST_FETCH, STEADY_FETCH, Channel
 from tunebox.config import ChannelConfig, SourceConfig
+from tunebox.coverfiles import CoverFiles
 from tunebox.covers import CoverService
 from tunebox.sources.base import SourceError
 from tunebox.store import Store
@@ -49,7 +52,8 @@ def make(
 ) -> tuple[Channel, CoverService, Finder]:
     finder = Finder()
     store = store or Store(None)
-    covers = CoverService(store, finder, clock=lambda: clock.ms / 1000)
+    files = CoverFiles(Path(tempfile.mkdtemp()), free=lambda: None)
+    covers = CoverService(store, finder, files, fetch_cover, clock=lambda: clock.ms / 1000)
     channel = Channel(
         config or channel_config(),
         source,

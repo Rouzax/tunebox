@@ -186,3 +186,7 @@ def test_clean_survives_a_file_it_cannot_remove(
 
 def test_the_cap_constants_match_the_spec() -> None:
     assert (MAX_COVERS, LOW_WATER, MAX_COVER) == (500_000_000, 450_000_000, 2_000_000)
+
+
+def test_free_reports_the_injected_free_space(tmp_path: Path) -> None:
+    assert CoverFiles(tmp_path, free=lambda: 42).free() == 42

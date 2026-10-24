@@ -90,6 +90,9 @@ class CoverFiles:
         self._clock = clock
         self._touched: dict[str, float] = {}
 
+    def free(self) -> int | None:
+        return self._free()
+
     def path_for(self, link: str) -> Path | None:
         name = name_for(link)
         for kind in KINDS:

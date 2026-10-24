@@ -15,7 +15,7 @@ from typing import cast
 
 import pytest
 
-from tests.fakes import FakeSource, NoJitter, channel_config
+from tests.fakes import FakeSource, NoJitter, channel_config, fetch_cover
 from tests.test_admin import PASSWORD, SECRET
 from tunebox import crypto
 from tunebox.accounts import Accounts
@@ -24,6 +24,7 @@ from tunebox.blobs import Blobs
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import AdminConfig, ChannelConfig, PlayerConfig, StreamConfig
+from tunebox.coverfiles import CoverFiles
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
 from tunebox.logs import configure
@@ -81,7 +82,8 @@ def make_server(
     source = FakeSource()
     source.responses = [[RawEntry("FISHER", "Stay", 1_000_000)]]
     store = Store(None)
-    covers = CoverService(store, lambda _track: None)
+    files = CoverFiles(tmp_path / "covers", free=lambda: None)
+    covers = CoverService(store, lambda _track: None, files, fetch_cover)
     channel = Channel(
         channel_config(), source, covers, store, clock_ms=lambda: 2_000_000, rng=NoJitter()
     )
