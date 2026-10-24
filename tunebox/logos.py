@@ -34,7 +34,7 @@ CONTENT_TYPES = {
 }
 # Sharp at about 40 CSS px on a 3x screen.
 SMALL_PX = 128
-_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\.(png|jpg|webp|svg)$")
+_NAME = re.compile(r"[a-z0-9][a-z0-9-]*\.(png|jpg|webp|svg)")
 
 
 def sniff(body: bytes) -> str | None:
@@ -104,13 +104,13 @@ class Logos:
         return None
 
     def file(self, name: str, small: bool = False, default: bool = False) -> Path | None:
-        if not _NAME.match(name) or (small and not name.endswith(".png")):
+        if not _NAME.fullmatch(name) or (small and not name.endswith(".png")):
             return None
         path = self._folder(small, default) / name
         return path if path.is_file() else None
 
     def request(self, channel: ChannelConfig) -> None:
-        """Queues a channel whose logo is new or changed."""
+        """Queues a channel whose logo or default image is new or changed."""
         self._queue.put(channel)
 
     def run_forever(self, stop: threading.Event) -> None:
@@ -123,7 +123,8 @@ class Logos:
 
     def refresh(self, channel: ChannelConfig) -> None:
         """Downloads the logo when its address is new, or copies an uploaded
-        one, and keeps the small copy in step."""
+        one, and keeps the small copy in step; the default image is kept in
+        step the same way."""
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
         except OSError as error:
