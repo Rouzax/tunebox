@@ -15,12 +15,18 @@ from typing import Any, cast
 
 import pytest
 
-from tests.fakes import COVER_JPG, FakeSource, NoJitter, channel_config, fetch_cover
+from tests.fakes import (
+    COVER_JPG,
+    FakeSource,
+    NoJitter,
+    blob_store,
+    channel_config,
+    fetch_cover,
+)
 from tests.test_admin import PASSWORD, SECRET
 from tunebox import crypto
 from tunebox.accounts import Accounts
 from tunebox.admin import MAX_BODY, MAX_STATE_BODY, Admin, Request, Response, Route
-from tunebox.blobs import Blobs
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import AdminConfig, ChannelConfig, PlayerConfig, StreamConfig
@@ -100,7 +106,7 @@ def make_server(
     (logo_dir / "small" / "owr.png").write_bytes(b"\x89PNG\r\n\x1a\nsmall")
     (logo_dir / "default").mkdir()
     (logo_dir / "default" / "owr.jpg").write_bytes(b"\xff\xd8\xff\xe0default")
-    logos = Logos(logo_dir, lambda _url: b"", Blobs(tmp_path / "blobs"))
+    logos = Logos(logo_dir, lambda _url: b"", blob_store(tmp_path / "blobs"))
     channels: dict[str, Channel] = {"owr": channel}
     for config in extra:
         channels[config.id] = Channel(
@@ -529,7 +535,7 @@ def admin_parts(tmp_path: Path) -> Generator[tuple[TuneboxServer, Accounts]]:
         web_admin,
         settings=settings,
         pin=pin,
-        blobs=Blobs(tmp_path / "blobs"),
+        blobs=blob_store(tmp_path / "blobs"),
         free_space=lambda: None,
         apply=lambda: 0,
         samples=list,
@@ -587,7 +593,7 @@ def plain_server(tmp_path: Path) -> Generator[TuneboxServer]:
         web_admin,
         settings=settings,
         pin=pin,
-        blobs=Blobs(tmp_path / "blobs"),
+        blobs=blob_store(tmp_path / "blobs"),
         free_space=lambda: None,
         apply=lambda: 0,
         samples=list,
@@ -647,7 +653,7 @@ def test_plain_http_believes_a_trusted_proxy_about_the_client(tmp_path: Path) ->
         tmp_path,
         settings=settings,
         pin=pin,
-        blobs=Blobs(tmp_path / "blobs"),
+        blobs=blob_store(tmp_path / "blobs"),
         free_space=lambda: None,
         apply=lambda: 0,
         samples=list,
@@ -908,7 +914,7 @@ class Recorder(Admin):
             web,
             settings=settings,
             pin=pin,
-            blobs=Blobs(web.parent / "blobs"),
+            blobs=blob_store(web.parent / "blobs"),
             free_space=lambda: None,
             apply=lambda: 0,
             samples=list,

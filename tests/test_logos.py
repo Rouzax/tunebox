@@ -7,8 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.fakes import FakeHttp, channel_config
-from tunebox.blobs import Blobs
+from tests.fakes import FakeHttp, blob_store, channel_config
 from tunebox.http import HttpError
 from tunebox.logos import SMALL_PX, Logos, default_image_address, sniff
 from tunebox.png import Image, read, write
@@ -45,7 +44,7 @@ def test_sniff(body: bytes, kind: str | None) -> None:
 
 def test_fetch_saves_once_and_remembers_the_address(tmp_path: Path) -> None:
     http = FakeHttp(lambda _url: PNG)
-    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "blobs"))
     channels = [channel_config(logo=URL)]
     logos.refresh(channels[0])
     logos.refresh(channels[0])
@@ -57,7 +56,7 @@ def test_fetch_saves_once_and_remembers_the_address(tmp_path: Path) -> None:
 
 def test_the_logo_path_changes_with_the_file(tmp_path: Path) -> None:
     # Logos are cached for a year, so a replaced logo needs a new address.
-    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo=URL))
     before = logos.path_for("owr")
     os.utime(tmp_path / "owr.png", ns=(1, 1))
@@ -65,15 +64,15 @@ def test_the_logo_path_changes_with_the_file(tmp_path: Path) -> None:
 
 
 def test_a_changed_address_fetches_again_and_replaces_the_old_file(tmp_path: Path) -> None:
-    Logos(tmp_path, FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs")).refresh(
+    Logos(tmp_path, FakeHttp(lambda _url: PNG), blob_store(tmp_path / "blobs")).refresh(
         channel_config(logo=URL)
     )
     other = "https://example.invalid/owr.svg"
-    Logos(tmp_path, FakeHttp(lambda _url: SVG), Blobs(tmp_path / "blobs")).refresh(
+    Logos(tmp_path, FakeHttp(lambda _url: SVG), blob_store(tmp_path / "blobs")).refresh(
         channel_config(logo=other)
     )
     assert not (tmp_path / "owr.png").exists()
-    later = Logos(tmp_path, FakeHttp(lambda _url: b""), Blobs(tmp_path / "blobs"))
+    later = Logos(tmp_path, FakeHttp(lambda _url: b""), blob_store(tmp_path / "blobs"))
     assert (later.path_for("owr") or "").startswith("/logos/owr.svg?v=")
 
 
@@ -81,35 +80,36 @@ def test_a_page_instead_of_an_image_is_not_saved(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.WARNING)
-    logos = Logos(tmp_path, FakeHttp(lambda _url: b"<html>"), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: b"<html>"), blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo=URL))
     assert logos.path_for("owr") is None
     assert "logo_rejected" in caplog.text
 
 
 def test_a_failed_download_keeps_the_old_logo(tmp_path: Path) -> None:
-    Logos(tmp_path, FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs")).refresh(
+    Logos(tmp_path, FakeHttp(lambda _url: PNG), blob_store(tmp_path / "blobs")).refresh(
         channel_config(logo=URL)
     )
 
     def fail(_url: str) -> bytes:
         raise HttpError("down")
 
-    logos = Logos(tmp_path, fail, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, fail, blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo="https://example.invalid/new.png"))
     assert (logos.path_for("owr") or "").startswith("/logos/owr.png?v=")
 
 
 def test_channels_without_a_logo_are_skipped(tmp_path: Path) -> None:
     http = FakeHttp(lambda _url: PNG)
-    Logos(tmp_path, http, Blobs(tmp_path / "blobs")).refresh(channel_config())
+    Logos(tmp_path, http, blob_store(tmp_path / "blobs")).refresh(channel_config())
     assert http.urls == []
 
 
 @pytest.mark.parametrize("name", ["../owr.png", "owr.png/..", ".owr.tmp", "owr.url", "owr.exe", ""])
 def test_file_refuses_other_names(tmp_path: Path, name: str) -> None:
     (tmp_path / "owr.url").write_text(URL, encoding="utf-8")
-    assert Logos(tmp_path, FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs")).file(name) is None
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), blob_store(tmp_path / "blobs"))
+    assert logos.file(name) is None
 
 
 def test_an_unusable_folder_is_reported_not_raised(
@@ -117,7 +117,7 @@ def test_an_unusable_folder_is_reported_not_raised(
 ) -> None:
     blocker = tmp_path / "file"
     blocker.write_text("x", encoding="utf-8")
-    logos = Logos(blocker / "logos", FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs"))
+    logos = Logos(blocker / "logos", FakeHttp(lambda _url: PNG), blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo=URL))
     logos.refresh(channel_config(logo=URL))
     assert [r.getMessage() for r in caplog.records].count("logos_unavailable") == 1
@@ -127,7 +127,7 @@ def test_a_large_png_gets_a_small_copy_for_the_station_list(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO)
-    logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo=URL))
     small = read((tmp_path / "small" / "owr.png").read_bytes())
     assert (small.width, small.height) == (SMALL_PX, SMALL_PX // 2)
@@ -141,7 +141,7 @@ def test_logos_saved_before_get_their_small_copy_without_a_download(tmp_path: Pa
     (tmp_path / "owr.png").write_bytes(BIG_PNG)
     (tmp_path / "owr.url").write_text(URL, encoding="utf-8")
     http = FakeHttp(lambda _url: BIG_PNG)
-    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo=URL))
     assert http.urls == []
     assert logos.path_for("owr", small=True) is not None
@@ -149,17 +149,17 @@ def test_logos_saved_before_get_their_small_copy_without_a_download(tmp_path: Pa
 
 def test_a_logo_that_is_small_already_has_no_copy(tmp_path: Path) -> None:
     tiny = write(Image(64, 64, bytes((0, 0, 0, 255)) * 64 * 64))
-    logos = Logos(tmp_path, FakeHttp(lambda _url: tiny), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: tiny), blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo=URL))
     assert logos.path_for("owr", small=True) is None
 
 
 def test_a_replaced_logo_drops_or_renews_its_small_copy(tmp_path: Path) -> None:
-    Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), Blobs(tmp_path / "blobs")).refresh(
+    Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), blob_store(tmp_path / "blobs")).refresh(
         channel_config(logo=URL)
     )
     other = "https://example.invalid/owr.svg"
-    logos = Logos(tmp_path, FakeHttp(lambda _url: SVG), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: SVG), blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo=other))
     assert not (tmp_path / "small" / "owr.png").exists()
     assert logos.path_for("owr", small=True) is None
@@ -170,7 +170,7 @@ def test_an_unreadable_png_is_kept_as_it_is(
 ) -> None:
     caplog.set_level(logging.WARNING)
     broken = PNG[:8] + b"\x00\x00\x00\x0dIHDR" + b"\x00\x00\x02\x00" * 2 + b"\x08\x02\x00\x00\x00"
-    logos = Logos(tmp_path, FakeHttp(lambda _url: broken), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: broken), blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo=URL))
     assert (logos.path_for("owr") or "").startswith("/logos/owr.png?v=")
     assert logos.path_for("owr", small=True) is None
@@ -179,7 +179,7 @@ def test_an_unreadable_png_is_kept_as_it_is(
 
 def test_requested_logos_are_fetched_by_the_worker(tmp_path: Path) -> None:
     http = FakeHttp(lambda _url: PNG)
-    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "blobs"))
     logos.request(channel_config(logo=URL))
     stop = threading.Event()
     worker = threading.Thread(target=logos.run_forever, args=(stop,))
@@ -194,7 +194,7 @@ def test_requested_logos_are_fetched_by_the_worker(tmp_path: Path) -> None:
 
 
 def test_a_blob_logo_is_copied_like_a_download(tmp_path: Path) -> None:
-    blobs = Blobs(tmp_path / "blobs")
+    blobs = blob_store(tmp_path / "blobs")
     ref, _ = blobs.save(BIG_PNG)
     fetched: list[str] = []
     logos = Logos(tmp_path, FakeHttp(lambda url: fetched.append(url) or b""), blobs)
@@ -207,7 +207,7 @@ def test_a_blob_logo_is_copied_like_a_download(tmp_path: Path) -> None:
 
 
 def test_a_blob_logo_is_copied_once(tmp_path: Path) -> None:
-    blobs = Blobs(tmp_path / "blobs")
+    blobs = blob_store(tmp_path / "blobs")
     ref, _ = blobs.save(BIG_PNG)
     logos = Logos(tmp_path, FakeHttp(lambda _url: b""), blobs)
     logos.refresh(channel_config(logo=ref))
@@ -217,7 +217,7 @@ def test_a_blob_logo_is_copied_once(tmp_path: Path) -> None:
 
 
 def test_a_blob_logo_replaces_a_downloaded_one_of_another_kind(tmp_path: Path) -> None:
-    blobs = Blobs(tmp_path / "blobs")
+    blobs = blob_store(tmp_path / "blobs")
     ref, kind = blobs.save(SVG)
     logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), blobs)
     logos.refresh(channel_config(logo=URL))
@@ -233,7 +233,7 @@ def test_a_missing_blob_keeps_the_old_logo(
     (tmp_path / "owr.png").write_bytes(PNG)
     fetched: list[str] = []
     logos = Logos(
-        tmp_path, FakeHttp(lambda url: fetched.append(url) or b""), Blobs(tmp_path / "blobs")
+        tmp_path, FakeHttp(lambda url: fetched.append(url) or b""), blob_store(tmp_path / "blobs")
     )
     logos.refresh(channel_config(logo="blob:" + "2" * 64))
     assert (tmp_path / "owr.png").read_bytes() == PNG
@@ -242,7 +242,7 @@ def test_a_missing_blob_keeps_the_old_logo(
 
 
 def test_a_blob_logo_gives_way_to_an_address_again(tmp_path: Path) -> None:
-    blobs = Blobs(tmp_path / "blobs")
+    blobs = blob_store(tmp_path / "blobs")
     ref, _ = blobs.save(SVG)
     logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), blobs)
     logos.refresh(channel_config(logo=ref))
@@ -253,7 +253,7 @@ def test_a_blob_logo_gives_way_to_an_address_again(tmp_path: Path) -> None:
 
 
 def test_a_refresh_leaves_the_blob_folder_alone(tmp_path: Path) -> None:
-    blobs = Blobs(tmp_path / "blobs")
+    blobs = blob_store(tmp_path / "blobs")
     ref, _ = blobs.save(BIG_PNG)
     other, _ = blobs.save(SVG)
     stray = tmp_path / "blobs" / ".stray.tmp"
@@ -272,7 +272,7 @@ def test_a_blob_that_is_not_its_kind_is_not_copied(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.WARNING)
-    blobs = Blobs(tmp_path / "blobs")
+    blobs = blob_store(tmp_path / "blobs")
     ref, _ = blobs.save(PNG)
     stored = blobs.path(ref)
     assert stored is not None
@@ -284,7 +284,7 @@ def test_a_blob_that_is_not_its_kind_is_not_copied(
 
 def test_a_default_image_is_downloaded_beside_the_logo(tmp_path: Path) -> None:
     http = FakeHttp(lambda url: JPG if url == DEFAULT_URL else PNG)
-    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "blobs"))
     channel = channel_config(logo=URL, default_image=DEFAULT_URL)
     logos.refresh(channel)
     logos.refresh(channel)
@@ -298,7 +298,7 @@ def test_a_default_image_is_downloaded_beside_the_logo(tmp_path: Path) -> None:
 
 def test_a_changed_default_image_replaces_the_old_file(tmp_path: Path) -> None:
     bodies = {DEFAULT_URL: JPG, "https://example.invalid/other.png": PNG}
-    logos = Logos(tmp_path, FakeHttp(lambda url: bodies[url]), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda url: bodies[url]), blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(default_image=DEFAULT_URL))
     logos.refresh(channel_config(default_image="https://example.invalid/other.png"))
     assert sorted(p.name for p in (tmp_path / "default").iterdir()) == ["owr.png", "owr.url"]
@@ -309,7 +309,7 @@ def test_a_default_image_that_is_not_downloaded_removes_the_old_file(
     tmp_path: Path, value: str | None
 ) -> None:
     http = FakeHttp(lambda _url: JPG)
-    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(default_image=DEFAULT_URL))
     assert logos.path_for("owr", default=True) is not None
     logos.refresh(channel_config(default_image=value))
@@ -342,7 +342,7 @@ def test_an_unusable_default_image_is_not_fetched_and_warned_once(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     http = FakeHttp(lambda _url: PNG)
-    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "blobs"))
     channel = channel_config(default_image="http://example.invalid/d.jpg")
     with caplog.at_level(logging.WARNING):
         logos.refresh(channel)
@@ -355,7 +355,7 @@ def test_an_unusable_default_image_is_not_fetched_and_warned_once(
 def test_a_failure_removing_a_default_image_says_so(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    logos = Logos(tmp_path, FakeHttp(lambda _url: JPG), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: JPG), blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(default_image=DEFAULT_URL))
 
     def unlink(self: Path, missing_ok: bool = False) -> None:
@@ -369,7 +369,7 @@ def test_a_failure_removing_a_default_image_says_so(
 
 def test_forget_removes_everything_downloaded_for_a_channel(tmp_path: Path) -> None:
     http = FakeHttp(lambda url: BIG_PNG if url == URL else JPG)
-    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo=URL, default_image=DEFAULT_URL))
     logos.refresh(
         dataclasses.replace(channel_config(logo=URL, default_image=DEFAULT_URL), id="keep")
@@ -392,7 +392,7 @@ def test_forget_removes_everything_downloaded_for_a_channel(tmp_path: Path) -> N
 def test_forget_logs_what_it_cannot_remove(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), blob_store(tmp_path / "blobs"))
 
     def unlink(self: Path, missing_ok: bool = False) -> None:
         raise PermissionError("read-only")
@@ -406,7 +406,7 @@ def test_forget_logs_what_it_cannot_remove(
 
 def test_a_forget_queued_after_a_refresh_leaves_no_files(tmp_path: Path) -> None:
     http = FakeHttp(lambda url: BIG_PNG if url == URL else JPG)
-    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "blobs"))
     channel = channel_config(logo=URL, default_image=DEFAULT_URL)
     logos.request(channel)
     logos.forget(channel.id)
@@ -419,7 +419,7 @@ def test_a_forget_queued_after_a_refresh_leaves_no_files(tmp_path: Path) -> None
 
 
 def test_forget_removes_a_stale_partial_file(tmp_path: Path) -> None:
-    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), blob_store(tmp_path / "blobs"))
     for folder in (tmp_path, tmp_path / "small", tmp_path / "default"):
         folder.mkdir(exist_ok=True)
         (folder / ".owr.tmp").write_bytes(b"x")
@@ -430,7 +430,7 @@ def test_forget_removes_a_stale_partial_file(tmp_path: Path) -> None:
 
 def test_the_image_revision_changes_when_a_file_is_saved_or_removed(tmp_path: Path) -> None:
     http = FakeHttp(lambda url: BIG_PNG if url == URL else JPG)
-    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "blobs"))
     seen = [logos.revision()]
     logos.refresh(channel_config(logo=URL))
     seen.append(logos.revision())
@@ -445,7 +445,7 @@ def test_the_image_revision_changes_when_a_file_is_saved_or_removed(tmp_path: Pa
 
 
 def test_an_unchanged_refresh_keeps_the_image_revision(tmp_path: Path) -> None:
-    logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), blob_store(tmp_path / "blobs"))
     logos.refresh(channel_config(logo=URL))
     before = logos.revision()
     logos.refresh(channel_config(logo=URL))
@@ -455,7 +455,7 @@ def test_an_unchanged_refresh_keeps_the_image_revision(tmp_path: Path) -> None:
 def test_a_store_that_fails_before_touching_a_file_keeps_the_image_revision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), blob_store(tmp_path / "blobs"))
     before = logos.revision()
 
     def refuse(_self: Path, _data: bytes) -> int:
@@ -467,7 +467,7 @@ def test_a_store_that_fails_before_touching_a_file_keeps_the_image_revision(
 
 
 def test_the_image_revision_differs_between_instances(tmp_path: Path) -> None:
-    blobs = Blobs(tmp_path / "blobs")
+    blobs = blob_store(tmp_path / "blobs")
     first = Logos(tmp_path, FakeHttp(lambda _url: PNG), blobs)
     second = Logos(tmp_path, FakeHttp(lambda _url: PNG), blobs)
     assert first.revision() != second.revision()
@@ -475,7 +475,7 @@ def test_the_image_revision_differs_between_instances(tmp_path: Path) -> None:
 
 def test_forget_all_except_removes_only_gone_channels_files(tmp_path: Path) -> None:
     http = FakeHttp(lambda url: BIG_PNG if url == URL else JPG)
-    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "blobs"))
     for channel_id in ("gone", "live"):
         config = dataclasses.replace(
             channel_config(logo=URL, default_image=DEFAULT_URL), id=channel_id
@@ -499,6 +499,6 @@ def test_forget_all_except_removes_only_gone_channels_files(tmp_path: Path) -> N
 
 
 def test_forget_all_except_copes_with_a_missing_folder(tmp_path: Path) -> None:
-    logos = Logos(tmp_path / "none", FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs"))
+    logos = Logos(tmp_path / "none", FakeHttp(lambda _url: PNG), blob_store(tmp_path / "blobs"))
     logos.forget_all_except(set())
     assert not logos.run_once()

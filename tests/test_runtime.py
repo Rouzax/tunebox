@@ -7,9 +7,8 @@ from typing import Any
 
 import pytest
 
-from tests.fakes import FakeHttp, FakeSource, NoJitter, fetch_cover
+from tests.fakes import FakeHttp, FakeSource, NoJitter, blob_store, fetch_cover
 from tunebox import runtime as runtime_module
-from tunebox.blobs import Blobs
 from tunebox.channel import Channel
 from tunebox.config import ChannelConfig, ChannelRow, ConfigState, Resolved
 from tunebox.coverfiles import CoverFiles
@@ -36,7 +35,8 @@ def rows(*docs: dict[str, Any]) -> ConfigState:
 
 class RecordingLogos(Logos):
     def __init__(self, directory: Path) -> None:
-        super().__init__(directory, FakeHttp(lambda _url: b""), Blobs(directory.parent / "blobs"))
+        blobs = blob_store(directory.parent / "blobs")
+        super().__init__(directory, FakeHttp(lambda _url: b""), blobs)
         self.requested: list[str | None] = []
         self.requested_defaults: list[str | None] = []
         self.forgotten: list[str] = []
@@ -350,7 +350,7 @@ def test_logos_of_a_station_removed_while_stopped_are_deleted(tmp_path: Path) ->
     (folder / "gone.url").write_text("https://example.invalid/g.png", encoding="utf-8")
     (folder / "a.png").write_bytes(b"x")
     harness = Harness(tmp_path)
-    real = Logos(folder, FakeHttp(lambda _url: b""), Blobs(tmp_path / "blobs"))
+    real = Logos(folder, FakeHttp(lambda _url: b""), blob_store(tmp_path / "blobs"))
     harness.runtime = Runtime(harness.settings, harness.make, real)
     harness.commit(rows(doc("a")))
     harness.runtime.apply()
