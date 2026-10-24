@@ -367,6 +367,25 @@ def test_a_repeated_setup_finish_says_it_is_set_up(
     world.settings.close()
 
 
+def test_a_locked_address_trying_setup_is_logged_as_rate_limited(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        world = World(tmp_path, setup_page=True, account=False)
+    token = setup_token(caplog.records)
+    address = "2001:db8:1:2:3:4:5:6"
+    for _ in range(5):
+        world.call("POST", "/admin/api/setup/start", {"token": "wrong"}, client=address)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        refused = world.call("POST", "/admin/api/setup/start", {"token": token}, client=address)
+    assert (refused.status, json_of(refused)) == (401, {"error": "setup_refused"})
+    limited = [r for r in caplog.records if r.getMessage() == "admin_rate_limited"]
+    assert [r.__dict__["fields"]["why"] for r in limited] == ["address"]
+    assert limited[0].__dict__["fields"]["range"] == "2001:db8:1:2::/64"
+    world.settings.close()
+
+
 def test_setup_page_flow(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING):
         world = World(tmp_path, setup_page=True, account=False)

@@ -541,6 +541,10 @@ class Admin:
         return self.gate.known(request.cookie(self.known_cookie), self._accounts.generation())
 
     def _limited(self, request: Request, why: str) -> Response:
+        self._log_limited(request, why)
+        return _error(429, "slow_down")
+
+    def _log_limited(self, request: Request, why: str) -> None:
         # An address that is locked out keeps trying at its own pace; one
         # WARNING a second per address group, the rest at DEBUG.
         quiet = why == "address" and not self._lockouts.first(request.client)
@@ -552,7 +556,6 @@ class Admin:
             range=network(request.client),
             why=why,
         )
-        return _error(429, "slow_down")
 
     def _setup_open(self) -> bool:
         return (
@@ -573,6 +576,9 @@ class Admin:
         """A wrong token counts as a failed login for the address."""
         release = self.gate.reserve(request.client)
         if release is None:
+            # Answered like a wrong token, so the refusal tells nothing about
+            # the lockout; logged as the login path logs it.
+            self._log_limited(request, "address")
             return False
         if self._setup_open() and _same(token, self._setup_token or ""):
             release()
