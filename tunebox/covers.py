@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from tunebox.catalogs import Found, SearchError
-from tunebox.coverfiles import CoverFiles, SaveResult, name_for, sized
+from tunebox.coverfiles import CleanReport, CoverFiles, SaveResult, name_for, sized
 from tunebox.http import HttpError, HttpGet
 from tunebox.logs import bound, event
 from tunebox.matching import base_title
@@ -225,16 +225,7 @@ class CoverService:
         links = self._store.cover_links()
         # Unknown links must not read as "none": only the size cap then applies.
         report = self._files.clean(None if links is None else {name_for(link) for link in links})
-        event(
-            log,
-            logging.INFO,
-            "cover_cache_cleaned",
-            decisions_removed=len(removed),
-            files_removed=report.files_removed,
-            bytes_freed=report.bytes_freed,
-            files=report.files,
-            bytes=report.bytes,
-        )
+        _log_cleaned(report, len(removed), links is not None)
 
     def _search(self, track: Track) -> None:
         started = time.monotonic()
@@ -304,6 +295,9 @@ class CoverService:
         if result in (SaveResult.SAVED, SaveResult.UNCHANGED):
             with self._lock:
                 self._failed.pop(track.key, None)
+            if result is SaveResult.SAVED and self._files.over_cap():
+                # Only the size cap: the links are not looked up on this path.
+                _log_cleaned(self._files.clean(None), 0, links_known=False)
             event(
                 log,
                 logging.DEBUG,
@@ -367,6 +361,20 @@ class CoverService:
             status=status,
             duration_ms=_ms_since(started),
         )
+
+
+def _log_cleaned(report: CleanReport, decisions_removed: int, links_known: bool) -> None:
+    event(
+        log,
+        logging.INFO,
+        "cover_cache_cleaned",
+        decisions_removed=decisions_removed,
+        links_known=links_known,
+        files_removed=report.files_removed,
+        bytes_freed=report.bytes_freed,
+        files=report.files,
+        bytes=report.bytes,
+    )
 
 
 def _ms_since(started: float) -> int:

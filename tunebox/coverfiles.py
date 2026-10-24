@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import stat
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -94,9 +95,41 @@ class CoverFiles:
         self._free = free or (lambda: free_bytes(directory.parent))
         self._clock = clock
         self._touched: dict[str, float] = {}
+        # Bytes of the cover files in the folder; None until first needed. Held
+        # by the one lock because request threads and the worker both reach it.
+        self._total: int | None = None
+        self._total_lock = threading.Lock()
 
     def free(self) -> int | None:
         return self._free()
+
+    def total(self) -> int:
+        """Bytes of the cover files in the folder: scanned on first use, then
+        kept up to date by save() and clean()."""
+        with self._total_lock:
+            if self._total is None:
+                self._total = self._scan()
+            return self._total
+
+    def over_cap(self) -> bool:
+        return self.total() > MAX_COVERS
+
+    def _scan(self) -> int:
+        try:
+            listing = list(self._dir.iterdir())
+        except OSError:
+            return 0
+        total = 0
+        for path in listing:
+            if _NAME.fullmatch(path.name):
+                with contextlib.suppress(OSError):
+                    total += path.stat().st_size
+        return total
+
+    def _adjust(self, delta: int) -> None:
+        with self._total_lock:
+            if self._total is not None:
+                self._total += delta
 
     def _stat(self, link: str) -> tuple[Path, os.stat_result] | None:
         name = name_for(link)
@@ -132,7 +165,9 @@ class CoverFiles:
         kind = sniff_cover(body)
         if kind is None:
             return SaveResult.NOT_IMAGE
-        existing = self.path_for(link)
+        found = self._stat(link)
+        existing = found[0] if found else None
+        replaced = found[1].st_size if found else 0
         if existing is not None and existing.suffix == f".{kind}":
             with contextlib.suppress(OSError):
                 if existing.read_bytes() == body:
@@ -153,8 +188,11 @@ class CoverFiles:
                 partial.unlink(missing_ok=True)
             return SaveResult.UNAVAILABLE
         if existing is not None and existing != target:
-            with contextlib.suppress(OSError):
+            try:
                 existing.unlink(missing_ok=True)
+            except OSError:
+                replaced = 0  # still in the folder, so still in the total
+        self._adjust(len(body) - replaced)
         return SaveResult.SAVED
 
     def touch(self, path: Path) -> None:
@@ -214,6 +252,8 @@ class CoverFiles:
                 elif not path.exists():
                     total -= size  # gone by other means: no longer in the folder's total
         files = sum(1 for _, _, path in entries if path.exists())
+        with self._total_lock:
+            self._total = total
         return CleanReport(removed, freed, files, total)
 
     def _remove(self, path: Path) -> bool:

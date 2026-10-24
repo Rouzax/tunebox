@@ -305,3 +305,45 @@ def test_a_folder_named_like_a_cover_is_not_a_cover(tmp_path: Path) -> None:
     found = store.found(LINK)
     assert found is not None and found[0].suffix == ".png"
     assert found[1] == f"/covers/{found[0].name}?v={found[0].stat().st_mtime_ns:x}"
+
+
+def folder_bytes(tmp_path: Path) -> int:
+    return sum(p.stat().st_size for p in (tmp_path / "covers").glob("*.*") if p.is_file())
+
+
+def test_the_running_total_follows_saves_replacements_and_cleans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = files(tmp_path)
+    assert store.total() == 0
+    store.save(LINK, JPG)
+    store.save(OTHER, PNG)
+    assert store.total() == folder_bytes(tmp_path) == len(JPG) + len(PNG)
+    store.save(LINK, JPG + b"\x05" * 10)  # same kind, other bytes
+    assert store.total() == folder_bytes(tmp_path)
+    store.save(LINK, WEBP)  # another kind replaces the old file
+    assert store.total() == folder_bytes(tmp_path) == len(WEBP) + len(PNG)
+    store.save(LINK, WEBP)  # unchanged
+    assert store.total() == folder_bytes(tmp_path)
+    monkeypatch.setattr("tunebox.coverfiles.MAX_COVERS", 1)
+    monkeypatch.setattr("tunebox.coverfiles.LOW_WATER", len(WEBP))
+    report = store.clean(None)
+    assert store.total() == report.bytes == folder_bytes(tmp_path)
+    store.clean({name_for(LINK)})
+    assert store.total() == folder_bytes(tmp_path)
+
+
+def test_the_total_of_an_existing_folder_is_scanned_on_first_use(tmp_path: Path) -> None:
+    files(tmp_path).save(LINK, JPG)
+    (tmp_path / "covers" / "notes.txt").write_bytes(b"x" * 100)
+    fresh = files(tmp_path)
+    assert fresh.total() == len(JPG)
+    assert not fresh.over_cap()
+
+
+def test_over_cap_reads_the_current_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = files(tmp_path)
+    store.save(LINK, JPG)
+    assert not store.over_cap()
+    monkeypatch.setattr("tunebox.coverfiles.MAX_COVERS", len(JPG) - 1)
+    assert store.over_cap()

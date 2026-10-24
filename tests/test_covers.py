@@ -554,3 +554,27 @@ def test_a_download_whose_decision_was_pruned_does_nothing(tmp_path: Path) -> No
     covers.housekeep()
     assert covers.run_once()
     assert fetch.urls == [] and list(tmp_path.iterdir()) == []
+
+
+def test_a_download_that_crosses_the_cap_cleans_in_the_same_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("tunebox.coverfiles.MAX_COVERS", len(JPG) + len(JPG) // 2)
+    monkeypatch.setattr("tunebox.coverfiles.LOW_WATER", len(JPG))
+    caplog.set_level(logging.INFO)
+    urls = {"A": URL, "B": URL.replace("abc", "def")}
+
+    class ByTitle(Finder):
+        def __call__(self, track: Track) -> Found | None:
+            return Found(urls[track.title], "album", "m")
+
+    covers = service(ByTitle(), [1000.0], folder=tmp_path)
+    covers.request(make_track(title="A"), NOW)
+    assert covers.run_once()
+    assert len(list(tmp_path.glob("*.jpg"))) == 1
+    assert not [r for r in caplog.records if r.getMessage() == "cover_cache_cleaned"]
+    covers.request(make_track(title="B"), NOW)
+    assert covers.run_once()
+    assert len(list(tmp_path.glob("*.jpg"))) == 1
+    cleaned = [r for r in caplog.records if r.getMessage() == "cover_cache_cleaned"]
+    assert len(cleaned) == 1
