@@ -550,3 +550,28 @@ def test_a_rule_change_rereads_the_kept_list_and_keeps_the_pawtunes_freeze() -> 
     assert new.now_view()[0]["current"]["badge"] == "#8"
     # Decided before the change: PawTunes still gets no artwork for it.
     assert "artwork" not in new.pawtunes_view()
+
+
+def test_now_gives_a_local_cover_and_pawtunes_the_remote_link() -> None:
+    source = FakeSource()
+    source.responses = [[NEW, OLD]]
+    clock = Clock(1_300_000)
+    channel, covers, finder = make(source, clock)
+    finder.covers["My People"] = M_URL
+    channel.poll_once()
+    drain(covers)
+    current = channel.now_view()[0]["current"]
+    assert current["cover"].startswith("/covers/") and "?v=" in current["cover"]
+    assert channel.pawtunes_view()["artwork"] == M_URL
+
+
+def test_a_cover_arriving_changes_the_etag() -> None:
+    source = FakeSource()
+    source.responses = [[NEW, OLD]]
+    channel, covers, finder = make(source, Clock(1_300_000))
+    channel.poll_once()
+    _, before = channel.now_view()
+    finder.covers["My People"] = M_URL
+    drain(covers)
+    _, after = channel.now_view()
+    assert before != after

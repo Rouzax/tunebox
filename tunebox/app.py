@@ -102,10 +102,11 @@ def main() -> int:
         event(log, logging.INFO, "logo_blobs_collected", removed=removed)
     store = Store(config.server.data_dir / "tunebox.db")
     guard = Guard()
+    cover_files = CoverFiles(config.server.data_dir / "covers", free=free_space)
     covers = CoverService(
         store,
         Catalogs(http.get).find,
-        CoverFiles(config.server.data_dir / "covers", free=free_space),
+        cover_files,
         lambda url: guard.get(url, max_bytes=MAX_COVER),
     )
     logos = Logos(config.server.data_dir / "logos", guard.get, blobs)
@@ -155,6 +156,7 @@ def main() -> int:
             web_dir,
             pin,
             logos=logos,
+            covers=cover_files,
             bursts=bursts,
             admin=admin,
             trusted=config.server.trusted_proxies,

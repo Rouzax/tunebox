@@ -15,7 +15,7 @@ from typing import cast
 
 import pytest
 
-from tests.fakes import FakeSource, NoJitter, channel_config, fetch_cover
+from tests.fakes import COVER_JPG, FakeSource, NoJitter, channel_config, fetch_cover
 from tests.test_admin import PASSWORD, SECRET
 from tunebox import crypto
 from tunebox.accounts import Accounts
@@ -24,7 +24,7 @@ from tunebox.blobs import Blobs
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import AdminConfig, ChannelConfig, PlayerConfig, StreamConfig
-from tunebox.coverfiles import CoverFiles
+from tunebox.coverfiles import CoverFiles, name_for
 from tunebox.covers import CoverService
 from tunebox.logos import Logos
 from tunebox.logs import configure
@@ -55,6 +55,9 @@ def serve(httpd: TuneboxServer) -> None:
     thread.start()
 
 
+COVER_LINK = "https://example.invalid/images/cover/abc/1000x1000-x.jpg"
+
+
 def make_pin(tmp_path: Path) -> Pin:
     """A PIN in mode off on its own settings database (closed by conftest)."""
     return Pin(Settings(tmp_path / "pin.db"), lambda: b"k" * 32)
@@ -83,6 +86,7 @@ def make_server(
     source.responses = [[RawEntry("FISHER", "Stay", 1_000_000)]]
     store = Store(None)
     files = CoverFiles(tmp_path / "covers", free=lambda: None)
+    files.save(COVER_LINK, COVER_JPG)
     covers = CoverService(store, lambda _track: None, files, fetch_cover)
     channel = Channel(
         channel_config(), source, covers, store, clock_ms=lambda: 2_000_000, rng=NoJitter()
@@ -103,7 +107,14 @@ def make_server(
         (logo_dir / f"{config.id}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     snapshot = Snapshot(1, channels, PlayerConfig(52.0, 5.0, extra[0].id if extra else None))
     httpd = TuneboxServer(
-        ("127.0.0.1", 0), lambda: snapshot, web, pin, logos=logos, bursts=FakeBursts(), clock=clock
+        ("127.0.0.1", 0),
+        lambda: snapshot,
+        web,
+        pin,
+        logos=logos,
+        covers=files,
+        bursts=FakeBursts(),
+        clock=clock,
     )
     serve(httpd)
     return httpd
@@ -354,6 +365,28 @@ def test_logos_are_served_with_their_type(server: TuneboxServer) -> None:
     assert headers["content-type"] == "image/svg+xml"
     # A logo cannot run script even when opened directly.
     assert headers["content-security-policy"] == "sandbox"
+
+
+def test_covers_are_served_for_good(server: TuneboxServer) -> None:
+    status, headers, body = request(server, f"/covers/{name_for(COVER_LINK)}.jpg?v=1")
+    assert status == 200 and body == COVER_JPG
+    assert headers["content-type"] == "image/jpeg"
+    assert headers["cache-control"] == "max-age=31536000, immutable"
+    assert headers["content-security-policy"] == "sandbox"
+
+
+@pytest.mark.parametrize(
+    "path", ["/covers/missing.jpg", "/covers/..%2Ftunebox.db", "/covers/x.svg", "/covers/"]
+)
+def test_unknown_covers_are_not_found(server: TuneboxServer, path: str) -> None:
+    status, _, body = request(server, path)
+    assert (status, json.loads(body)) == (404, {"error": "not_found"})
+
+
+def test_the_player_csp_allows_only_local_images(server: TuneboxServer) -> None:
+    _, headers, _ = request(server, "/")
+    assert "img-src 'self' data:" in headers["content-security-policy"]
+    assert "img-src 'self' https:" not in headers["content-security-policy"]
 
 
 @pytest.mark.parametrize("path", ["/logos/missing.png", "/logos/..%2Fweb%2Findex.html", "/logos/"])
@@ -860,6 +893,7 @@ LOCKED = [
     "/api/channels/owr/now",
     "/logos/owr.png",
     "/logos/small/owr.png",
+    f"/covers/{name_for(COVER_LINK)}.jpg",
 ]
 
 
@@ -917,6 +951,14 @@ def test_a_locked_site_refuses_the_api_and_the_logos(site: PinWorld) -> None:
         status, headers, body = request(site.httpd, path)
         assert (status, json.loads(body)) == (401, {"error": "pin_required"}), path
         assert headers["cache-control"] == "no-store", path
+
+
+def test_a_granted_device_gets_the_covers(site: PinWorld) -> None:
+    grant = grant_of(site.httpd)
+    status, _, body = request(
+        site.httpd, f"/covers/{name_for(COVER_LINK)}.jpg", headers={"Cookie": grant}
+    )
+    assert (status, body) == (200, COVER_JPG)
 
 
 def test_a_locked_site_keeps_the_code_and_pawtunes_open(site: PinWorld) -> None:

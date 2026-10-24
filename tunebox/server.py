@@ -17,6 +17,7 @@ from tunebox.admin import ADMIN_HEADERS, Admin, Request, Response, content_lengt
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import Network, StreamConfig
+from tunebox.coverfiles import CoverFiles
 from tunebox.http_headers import single
 from tunebox.limits import Once, network
 from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
@@ -58,16 +59,18 @@ CONTENT_TYPES = {
 # Folders here carry their version in the name. Everything else (the player's
 # own code has no build step to fingerprint it) is revalidated on every load.
 IMMUTABLE_DIRS = ("vendor/",)
-# Covers come from catalogue CDNs and streams from redirect targets whose
-# hosts vary, hence any https host for images and media. http media is for
-# an http stream_url on a plain-http page; https pages block it anyway.
+COVER_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+# Covers, logos and default images are served by tunebox itself; streams
+# come from redirect targets whose hosts vary, hence any https host for
+# media. http media is for an http stream_url on a plain-http page; https
+# pages block it anyway.
 CSP = "; ".join(
     [
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self'",
         "font-src 'self'",
-        "img-src 'self' https: data:",
+        "img-src 'self' data:",
         "media-src https: http:",
         "connect-src 'self'",
         "frame-ancestors *",
@@ -95,9 +98,9 @@ def _query(target: str, name: str) -> list[str] | None:
 def _locked_route(parts: list[str]) -> bool:
     """What the PIN covers besides the pages (which _static judges by the
     file it would serve): the API except the PIN itself and PawTunes (which
-    knows nothing of a PIN), and the logos. Scripts, styles and fonts are
+    knows nothing of a PIN), and the logos and covers. Scripts, styles and fonts are
     the player's public code and stay open, so the PIN page can load."""
-    if parts[:1] == ["logos"]:
+    if parts[:1] in (["logos"], ["covers"]):
         return True
     return parts[:1] == ["api"] and parts[1:2] not in (["pin"], ["pawtunes"])
 
@@ -158,6 +161,7 @@ class TuneboxServer(ThreadingHTTPServer):
         web_dir: Path,
         pin: Pin,
         logos: Logos | None = None,
+        covers: CoverFiles | None = None,
         bursts: Bursts | None = None,
         admin: Admin | None = None,
         trusted: tuple[Network, ...] = (),
@@ -173,6 +177,7 @@ class TuneboxServer(ThreadingHTTPServer):
         self.bursts = bursts
         self.web_dir = web_dir.resolve()
         self.logos = logos
+        self.covers = covers
         super().__init__(address, Handler)
 
     def handle_error(self, request: object, client_address: object) -> None:
@@ -570,7 +575,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(404, {"error": "not_found"}, head)
         if parts and parts[0] == "logos":
             return self._logo(parts, head, hidden=set(channels) - set(visible))
+        if parts and parts[0] == "covers":
+            return self._cover(parts, head)
         return self._static(path, head, access)
+
+    def _cover(self, parts: list[str], head: bool) -> None:
+        covers = self.app.covers
+        target = None
+        if covers is not None and len(parts) == 2:
+            target = covers.file(urllib.parse.unquote(parts[1]))
+        if target is None:
+            return self._send_json(404, {"error": "not_found"}, head)
+        try:
+            body = target.read_bytes()
+        except OSError:
+            return self._send_json(404, {"error": "not_found"}, head)
+        headers = {
+            "Cache-Control": "max-age=31536000, immutable",
+            # An image opened directly cannot run anything on this origin.
+            "Content-Security-Policy": "sandbox",
+        }
+        self._send(200, body, COVER_TYPES[target.suffix.removeprefix(".")], head, headers)
 
     def _logo(self, parts: list[str], head: bool, hidden: set[str]) -> None:
         if urllib.parse.unquote(parts[-1]).split(".")[0] in hidden:
