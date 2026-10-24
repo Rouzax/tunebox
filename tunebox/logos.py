@@ -343,10 +343,13 @@ class Logos:
     def _store(self, channel_id: str, body: bytes, kind: str, source: str, folder: Path) -> None:
         """Makes body the channel's logo (or default image, by folder) and
         records source (an address or a blob reference) as what it came from."""
+        visible = False
         try:
             folder.mkdir(exist_ok=True)
             partial = folder / f".{channel_id}.tmp"
             partial.write_bytes(body)
+            # From here a served file may disappear or be replaced.
+            visible = True
             for other in EXTENSIONS:
                 if other != kind:
                     (folder / f"{channel_id}.{other}").unlink(missing_ok=True)
@@ -356,6 +359,8 @@ class Logos:
             event(log, logging.WARNING, "logo_failed", channel=channel_id, error=str(error))
             return
         finally:
-            # Also after a partial failure: the image may already have changed.
-            self._changed()
+            # Also after a failure past that point; before it nothing a player
+            # can see has changed, so the revision stays.
+            if visible:
+                self._changed()
         event(log, logging.INFO, "logo_saved", channel=channel_id, kind=kind, bytes=len(body))

@@ -452,6 +452,20 @@ def test_an_unchanged_refresh_keeps_the_image_revision(tmp_path: Path) -> None:
     assert logos.revision() == before
 
 
+def test_a_store_that_fails_before_touching_a_file_keeps_the_image_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), Blobs(tmp_path / "blobs"))
+    before = logos.revision()
+
+    def refuse(_self: Path, _data: bytes) -> int:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_bytes", refuse)
+    logos.refresh(channel_config(logo=URL))
+    assert logos.revision() == before
+
+
 def test_the_image_revision_differs_between_instances(tmp_path: Path) -> None:
     blobs = Blobs(tmp_path / "blobs")
     first = Logos(tmp_path, FakeHttp(lambda _url: PNG), blobs)

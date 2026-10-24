@@ -511,6 +511,9 @@ class Handler(BaseHTTPRequestHandler):
         }
         if parts == ["api", "channels"]:
             logos = self.app.logos
+            # Read before the listing: a save finishing while the addresses are
+            # looked up then shows as a newer revision on the next request.
+            images = logos.revision() if logos else ""
             listing = [
                 {
                     **channel.info(),
@@ -527,7 +530,7 @@ class Handler(BaseHTTPRequestHandler):
                 "Cache-Control": "no-cache",
                 "X-Tunebox-Version": str(snapshot.version),
                 "X-Tunebox-Pin-Revision": access.revision,
-                "X-Tunebox-Images": logos.revision() if logos else "",
+                "X-Tunebox-Images": images,
             }
             if len(visible) < len(channels):
                 # The player offers "More stations" for these.

@@ -96,8 +96,8 @@ class CoverFiles:
         self._clock = clock
         self._touched: dict[str, float] = {}
         # Bytes of the cover files in the folder; None until first needed. Only
-        # the cover worker saves and cleans, but the lock keeps the first scan
-        # and a read from any other thread consistent with those updates.
+        # the cover worker reaches it today; the lock keeps a reader on another
+        # thread consistent with the first scan and later updates.
         self._total: int | None = None
         self._total_lock = threading.Lock()
 

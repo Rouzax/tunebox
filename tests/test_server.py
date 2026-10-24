@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -1277,6 +1277,29 @@ def test_the_image_revision_is_sent_and_changes_the_now_etag(tmp_path: Path) -> 
         httpd, "/api/channels/owr/now", headers={"If-None-Match": headers["etag"]}
     )
     assert status == 200 and json.loads(body)["images"] == logos.revision()
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_the_image_revision_is_read_before_the_listing_is_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    httpd = make_server(tmp_path)
+    logos = httpd.logos
+    assert logos is not None
+    before = logos.revision()
+    original = logos.path_for
+
+    def bumping(*args: Any, **kwargs: Any) -> str | None:
+        monkeypatch.setattr(logos, "path_for", original)
+        logos.forget("owr")
+        logos.run_once()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(logos, "path_for", bumping)
+    _, listed, _ = request(httpd, "/api/channels")
+    assert logos.revision() != before
+    assert listed["x-tunebox-images"] == before
     httpd.shutdown()
     httpd.server_close()
 

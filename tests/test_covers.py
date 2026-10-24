@@ -738,8 +738,9 @@ def test_the_cleaning_log_says_whether_the_links_were_known(
     caplog.set_level(logging.INFO)
     covers.housekeep()
     cleaned = [r for r in caplog.records if r.getMessage() == "cover_cache_cleaned"]
+    assert len(cleaned) == 1
     fields = getattr(cleaned[0], "fields", {})
-    assert len(cleaned) == 1 and fields["links_known"] is known
+    assert fields["links_known"] is known
     assert fields["trigger"] == "daily"
 
 
@@ -753,5 +754,6 @@ def test_the_cleaning_after_a_download_names_its_trigger_and_no_links(
     covers.request(make_track(), NOW)
     covers.run_once()
     cleaned = [r for r in caplog.records if r.getMessage() == "cover_cache_cleaned"]
+    assert len(cleaned) == 1
     fields = getattr(cleaned[0], "fields", {})
-    assert len(cleaned) == 1 and fields["trigger"] == "cap" and fields["links_known"] is None
+    assert fields["trigger"] == "cap" and fields["links_known"] is None
