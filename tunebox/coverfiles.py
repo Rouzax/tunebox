@@ -221,6 +221,9 @@ class CoverFiles:
         LOW_WATER. Also removes partial files a crash left behind. A file
         that cannot be removed is logged and skipped."""
         removed = freed = 0
+        # Unreferenced files that could not be removed still take room, so
+        # they stay in the total the cap is judged by.
+        stuck = 0
         entries: list[tuple[float, int, Path]] = []
         try:
             listing = list(self._dir.iterdir())
@@ -241,9 +244,11 @@ class CoverFiles:
             if keep is not None and path.name.split(".")[0] not in keep:
                 if self._remove(path):
                     removed, freed = removed + 1, freed + info.st_size
+                elif path.exists():
+                    stuck += info.st_size
                 continue
             entries.append((info.st_atime, info.st_size, path))
-        total = sum(size for _, size, _ in entries)
+        total = stuck + sum(size for _, size, _ in entries)
         if total > MAX_COVERS:
             for _, size, path in sorted(entries, key=lambda e: e[0]):
                 if total <= LOW_WATER:

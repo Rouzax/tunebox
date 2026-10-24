@@ -184,6 +184,9 @@ def test_clean_survives_a_file_it_cannot_remove(
     monkeypatch.setattr(Path, "unlink", unlink)
     report = store.clean(set())
     assert report.files_removed == 1
+    # The file that stayed still takes room, so the cap keeps counting it.
+    assert report.bytes == len(JPG)
+    assert store.total() == len(JPG)
 
 
 def test_the_cap_constants_match_the_spec() -> None:
