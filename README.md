@@ -49,7 +49,9 @@ Behind the player:
 - **Covers you can trust.** tunebox looks each song up on Deezer, then on
   iTunes, and only accepts a cover when both the title and an artist match.
   When no song cover exists it shows a photo of the artist instead, and when
-  there is neither, no picture rather than the wrong one.
+  there is neither, no picture rather than the wrong one. tunebox
+  downloads each cover once and serves it itself, so listeners' browsers
+  never contact Deezer or iTunes.
 - **Tidy titles.** Station jingles and voice-overs are recognised and not
   shown as songs. Credits such as "(Played by ... at Tomorrowland)" are
   split off the title so a player can show them on their own line.
@@ -68,7 +70,9 @@ The example configuration has the three Tomorrowland channels ready to go;
 You need:
 
 - A Linux machine with **Docker** and the **Docker Compose** plugin.
-- About 100 MB of disk for the image, plus a few MB for its data.
+- About 100 MB of disk for the image, plus room for its data: a few MB,
+  and the cover cache, which grows to about 100 MB in normal use and never
+  past 500 MB.
 - Outgoing internet access to the radio station, Deezer and iTunes.
 - Optional: a reverse proxy (such as Nginx Proxy Manager, Caddy or Traefik)
   if you want to reach tunebox from your phone or car over HTTPS. Without
@@ -732,11 +736,12 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 - **Back up**: everything worth keeping is in the `data` folder:
   `tunebox.toml`, and `tunebox.db`, which holds the stations, settings and
   change history (with the admin panel on, the only copy of them), the
-  admin account and its sessions, the listening PIN, the covers and the
-  recent lists. Copy it while tunebox is stopped, or copy
+  admin account and its sessions, the listening PIN, the cover decisions
+  and the recent lists. Copy it while tunebox is stopped, or copy
   `tunebox.db-wal` along with it. `data/blobs/` holds the logos uploaded
   in the panel, the only copy of those images, so back it up with the
-  database.
+  database. `data/covers/` and `data/logos/` are caches that tunebox
+  fills again by itself; they need no backup.
 - **Reset** the recent lists and covers: stop tunebox, delete
   `data/tunebox.db`, `data/tunebox.db-wal` and `data/tunebox.db-shm`, and
   start it again. History refills from the stations and covers are looked
@@ -754,6 +759,19 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   why). The player loads list logos the first time a listener opens the
   station list, once per browser. Delete `data/logos/` to download the logo
   links and copy the uploads (from `data/blobs/`) again at the next start.
+  A station's `default_image`, when it is an `https://` link, is downloaded
+  the same way into `data/logos/default/`.
+- **Covers** are kept in `data/covers/`: tunebox downloads each cover once,
+  at 600x600, from the Deezer or iTunes link it found, and serves it
+  itself, so listeners' browsers never contact those hosts. A cover
+  appears in the player once its download is done; until then the player
+  shows the station's own image. The folder is capped at 500 MB: when it
+  grows past that, the covers played longest ago are removed. Covers of
+  songs that have not been played for about nine months are forgotten
+  (decision and file). Nothing is downloaded while less than 256 MiB would
+  stay free on the disk (`cover_disk_low` in the log). Delete
+  `data/covers/` to download the covers again as their songs are played;
+  right after that, songs show the station image for a few seconds.
 
 ## Troubleshooting
 
@@ -843,7 +861,7 @@ is reported at startup instead of being ignored.
 | `name` | yes | Shown during jingles. |
 | `streams` | yes, or `stream_url` | One or more `[[channels.streams]]` tables: `name` (required), `url` (required, `https://`), `codec` (`aac` or `mp3`), `kbps` (whole number). The first is the default. |
 | `stream_url` | instead of `streams` | One stream, `http://` or `https://`, named "Default". An `http://` stream only plays when the player page itself is plain http (on your own network); browsers block it on an https page. |
-| `default_image` | no | An image address for the player to show when a song has no cover. |
+| `default_image` | no | An image for the player to show when a song has no cover: an `https://` address, which tunebox downloads once like the logo and serves itself, or a path on tunebox starting with `/`. Other values (`http://`, `data:`, a relative path) are not used; the player shows the logo instead and the log says `default_image_unusable`. |
 | `source` | yes | `{ type = "triton", mount = "<feed mount>" }`, `{ type = "qmusic", station = "<station id>" }` or `{ type = "npo", site = "nporadio1" \| "nporadio2" \| "npo3fm" }`. |
 | `group` | no | Heading on the channel page. |
 | `logo` | no | `https://` address of the station logo, or an upload from the admin panel (`blob:` and 64 characters; see [Logos](#logos)). tunebox downloads a link once into the data folder and serves it from there, so listeners' browsers never contact that address. PNG, JPEG, WebP or SVG, up to 2 MB. |
@@ -874,7 +892,9 @@ is reported at startup instead of being ignored.
 For player developers. All answers are JSON.
 
 **`GET /api/channels`** lists the stations: `id`, `name`, `stream_url`,
-`default_image`, `group`, `streams` (each with `name`, `url`, `codec`,
+`default_image` (a path such as `/logos/default/owr.jpg?v=...`, the
+configured path, or `null` until the image is downloaded or when none is
+usable), `group`, `streams` (each with `name`, `url`, `codec`,
 `kbps`; `stream_url` is the first one's address) and `logo` (a path such as
 `/logos/owr.png?v=18df62ef34e6b8a7`, or `null` until the logo is downloaded
 or when none is configured) and `logo_small` (the same for the small copy
@@ -883,10 +903,11 @@ Ungrouped stations come first, then each group in order. The answer carries
 the configuration version in an `X-Tunebox-Version` header and is sent with
 `Cache-Control: no-cache`.
 
-**`GET /logos/<file>`** and **`GET /logos/small/<file>`** serve a
-downloaded logo and its small copy. Browsers may keep them for a
-year: the `v` in the path from `/api/channels` changes whenever the logo is
-downloaded again, so use that path as given. SVG logos are sent with a
+**`GET /logos/<file>`**, **`GET /logos/small/<file>`** and
+**`GET /logos/default/<file>`** serve a downloaded logo, its small copy and
+a downloaded default image. Browsers may keep them for a year: the `v` in
+the path from `/api/channels` changes whenever the image is downloaded
+again, so use that path as given. SVG logos are sent with a
 policy that keeps them from running script.
 
 **`GET /api/channels/<id>/now?buffer_s=<seconds>&stream=<name>`** answers what is playing:
@@ -896,7 +917,8 @@ policy that keeps them from running script.
              "artists": ["CAMELPHAT", "JOSH GIGANTE", "KUUDA"],
              "title": "So Good", "played_by": null,
              "started_at": 1792217024107,
-             "cover": "https://cdn-images.dzcdn.net/images/cover/.../1000x1000-000000-80-0-0.jpg",
+             "badge": null,
+             "cover": "/covers/0f3a9c41d2e87b5a6c1d0e9f8a7b6c5d.jpg?v=18df62ef34e6b8a7",
              "cover_kind": "album"},
  "upcoming": {"track": {"...": "..."}, "in_s": 14},
  "history": [{"...": "..."}],
@@ -926,10 +948,15 @@ policy that keeps them from running script.
   upcoming songs.
 - `played_by` is the credit without the "Played by" words, or `null`.
 - `started_at` is the song's start in milliseconds since 1970 (UTC).
-- `cover` is a Deezer or iTunes image address, or `null` while the lookup
-  runs or when nothing matched. `cover_kind` is `album`, `artist` (an artist
-  photo) or `null`. Both image hosts allow reading the pixels from another
-  site (for colour extraction).
+- `badge` is the label the channel's `badge` rule took out of the title,
+  such as a chart position (`#8`), or `null`.
+- `cover` is a path on tunebox (`/covers/<name>.jpg?v=...`), or `null`
+  while the cover is looked up or downloaded, or when nothing matched; show
+  the station's image then. `cover_kind` is `album`, `artist` (an artist
+  photo) or `null`. **`GET /covers/<file>`** serves the image; browsers may
+  keep it for a year, since a changed cover gets a new path. Covers come
+  from tunebox itself, so a page can read their pixels (for colour
+  extraction).
 - `stale_since` is when the station's feed stopped answering, in
   milliseconds since 1970, or `null`. The data shown is then the last known.
 - `version` is the configuration version. When it differs from the one
@@ -975,7 +1002,7 @@ While the PIN is on:
 
 - With **the whole player** locked and no grant, every page address
   answers with the PIN page, and `/api/*` (except `/api/pin` and
-  `/api/pawtunes`) and `/logos/` answer `401` with
+  `/api/pawtunes`), `/logos/` and `/covers/` answer `401` with
   `{"error": "pin_required"}`.
 - With **chosen stations** and no grant, `/api/channels` leaves out the
   stations with `needs_pin` and adds the header `X-Tunebox-Pin: more`;
