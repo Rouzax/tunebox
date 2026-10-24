@@ -57,6 +57,9 @@ class Store:
     def __init__(self, path: Path | None) -> None:
         self._lock = threading.Lock()
         self._reported = False
+        # True when a database was asked for but the server runs on the in-memory
+        # fallback, whose contents say nothing about what is on disk.
+        self.degraded = False
         self._db = self._open(path)
 
     def _open(self, path: Path | None) -> sqlite3.Connection:
@@ -69,6 +72,7 @@ class Store:
                 return db
             except (OSError, sqlite3.Error) as error:
                 self._report(error)
+                self.degraded = True
         db = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
         db.executescript(_SCHEMA)
         return db
@@ -118,7 +122,12 @@ class Store:
                 return []
         return [cast("str", row[0]) for row in rows]
 
-    def cover_links(self) -> set[str]:
+    def cover_links(self) -> set[str] | None:
+        """Every link a decision names, or None when that cannot be told
+        (unreadable database, or the in-memory fallback), so a caller never
+        mistakes "unknown" for "none"."""
+        if self.degraded:
+            return None
         with self._lock:
             try:
                 rows = self._db.execute(
@@ -126,7 +135,7 @@ class Store:
                 ).fetchall()
             except sqlite3.Error as error:
                 self._report(error)
-                return set()
+                return None
         return {cast("str", row[0]) for row in rows}
 
     def load_recent(self, channel: str) -> list[Track]:

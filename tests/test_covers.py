@@ -1,6 +1,7 @@
+import itertools
 import logging
-import tempfile
 import threading
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,22 @@ DAY = 86400.0
 JPG = b"\xff\xd8\xff\xe0" + b"\x01" * 64
 URL = "https://example.invalid/images/cover/abc/1000x1000-000000-80-0-0.jpg"
 LOCAL = f"/covers/{name_for(URL)}.jpg?v="
+
+
+_scratch: list[Path] = []
+_serial = itertools.count()
+
+
+@pytest.fixture(autouse=True)
+def scratch(tmp_path: Path) -> Generator[None]:
+    """A folder under pytest's tmp_path for every service a test builds without one."""
+    _scratch[:] = [tmp_path]
+    yield
+    _scratch.clear()
+
+
+def fresh_folder() -> Path:
+    return _scratch[0] / f"covers-{next(_serial)}"
 
 
 class Finder:
@@ -51,7 +68,7 @@ def service(
     fetch: Fetch | None = None,
     folder: Path | None = None,
 ) -> CoverService:
-    files = CoverFiles(folder or Path(tempfile.mkdtemp()), free=lambda: None, clock=lambda: now[0])
+    files = CoverFiles(folder or fresh_folder(), free=lambda: None, clock=lambda: now[0])
     return CoverService(store or Store(None), finder, files, fetch or Fetch(), clock=lambda: now[0])
 
 
@@ -320,6 +337,42 @@ def test_a_page_instead_of_an_image_counts_as_a_dead_link(tmp_path: Path) -> Non
     covers.run_once()
     decision = store.get_cover(make_track().key)
     assert decision is not None and decision.outcome == "error" and decision.url == URL
+
+
+def test_an_oversized_answer_counts_as_a_dead_link(tmp_path: Path) -> None:
+    store = Store(None)
+    fetch = Fetch(HttpError("too big", too_large=True))
+    covers = service(Finder(Found(URL, "album", "m")), [1000.0], store, fetch, tmp_path)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    decision = store.get_cover(make_track().key)
+    assert decision is not None and decision.outcome == "error" and decision.url == URL
+
+
+def test_housekeeping_keeps_every_file_when_the_links_are_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = Store(None)
+    covers = service(Finder(Found(URL, "album", "m")), [1000.0], store, folder=tmp_path)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    monkeypatch.setattr(store, "cover_links", lambda: None)
+    covers.housekeep()
+    assert (tmp_path / f"{name_for(URL)}.jpg").exists()
+
+
+def test_housekeeping_still_applies_the_cap_when_the_links_are_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("tunebox.coverfiles.MAX_COVERS", 1)
+    monkeypatch.setattr("tunebox.coverfiles.LOW_WATER", 0)
+    store = Store(None)
+    covers = service(Finder(Found(URL, "album", "m")), [1000.0], store, folder=tmp_path)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    monkeypatch.setattr(store, "cover_links", lambda: None)
+    covers.housekeep()
+    assert not (tmp_path / f"{name_for(URL)}.jpg").exists()
 
 
 def test_an_unwritable_folder_counts_as_a_failed_download(tmp_path: Path) -> None:

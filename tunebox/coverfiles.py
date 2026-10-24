@@ -31,7 +31,10 @@ MAX_COVERS = 500_000_000
 LOW_WATER = 450_000_000
 TOUCH_S = 86_400
 KINDS = ("jpg", "png", "webp")
-_NAME = re.compile(r"^[0-9a-f]{32}\.(jpg|png|webp)$")
+# A partial file is never in use for this long, so an older one is a crash's leftover.
+PARTIAL_STALE_S = 3600
+_NAME = re.compile(r"[0-9a-f]{32}\.(jpg|png|webp)")
+_PARTIAL = re.compile(r"\.[0-9a-f]+\.tmp")
 
 
 def sniff_cover(body: bytes) -> str | None:
@@ -151,19 +154,22 @@ class CoverFiles:
             return
         self._touched[path.name] = now
         with contextlib.suppress(OSError):
-            os.utime(path, (now, path.stat().st_mtime))
+            # Nanoseconds: a float mtime rounds and would change the address.
+            os.utime(path, ns=(int(now * 1e9), path.stat().st_mtime_ns))
 
     def file(self, name: str) -> Path | None:
-        if not _NAME.match(name):
+        if not _NAME.fullmatch(name):
             return None
         with contextlib.suppress(OSError):
             return inside(self._dir.resolve(), name)
         return None
 
-    def clean(self, keep: set[str]) -> CleanReport:
-        """Removes files no decision's link names, then the least recently
+    def clean(self, keep: set[str] | None) -> CleanReport:
+        """Removes files no decision's link names (all of them stay when keep
+        is None, the links being unknown), then the least recently
         handed-out files while the total is over MAX_COVERS, down to
-        LOW_WATER. A file that cannot be removed is logged and skipped."""
+        LOW_WATER. Also removes partial files a crash left behind. A file
+        that cannot be removed is logged and skipped."""
         removed = freed = 0
         entries: list[tuple[float, int, Path]] = []
         try:
@@ -171,13 +177,18 @@ class CoverFiles:
         except OSError:
             listing = []
         for path in listing:
-            if not _NAME.match(path.name):
+            partial = _PARTIAL.fullmatch(path.name) is not None
+            if not partial and not _NAME.fullmatch(path.name):
                 continue
             try:
                 info = path.stat()
             except OSError:
                 continue
-            if path.name.split(".")[0] not in keep:
+            if partial:
+                if self._clock() - info.st_mtime > PARTIAL_STALE_S:
+                    self._remove(path)
+                continue
+            if keep is not None and path.name.split(".")[0] not in keep:
                 if self._remove(path):
                     removed, freed = removed + 1, freed + info.st_size
                 continue

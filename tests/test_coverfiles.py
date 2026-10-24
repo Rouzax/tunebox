@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -130,7 +131,8 @@ def test_touch_sets_atime_once_a_day_and_keeps_mtime(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["..%2Ftunebox.db", "../tunebox.db", "x.svg", "x", f"{'a' * 32}.gif"]
+    "name",
+    ["..%2Ftunebox.db", "../tunebox.db", "x.svg", "x", f"{'a' * 32}.gif", f"{'a' * 32}.jpg\n"],
 )
 def test_file_refuses_other_names(tmp_path: Path, name: str) -> None:
     store = files(tmp_path)
@@ -190,3 +192,47 @@ def test_the_cap_constants_match_the_spec() -> None:
 
 def test_free_reports_the_injected_free_space(tmp_path: Path) -> None:
     assert CoverFiles(tmp_path, free=lambda: 42).free() == 42
+
+
+def test_touch_keeps_the_address_of_a_realistic_mtime(tmp_path: Path) -> None:
+    now = [1_792_300_000.0]
+    store = files(tmp_path, now=now)
+    store.save(LINK, JPG)
+    path = store.path_for(LINK)
+    assert path is not None
+    os.utime(path, ns=(1, 1_792_217_024_107_123_457))
+    before = store.address_for(LINK)
+    store.touch(path)
+    assert path.stat().st_atime == now[0]
+    assert store.address_for(LINK) == before
+
+
+def test_clean_without_links_only_applies_the_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = files(tmp_path)
+    store.save(LINK, JPG)
+    store.save(OTHER, PNG)
+    report = store.clean(None)
+    assert report.files_removed == 0 and report.files == 2
+    monkeypatch.setattr("tunebox.coverfiles.MAX_COVERS", len(PNG))
+    monkeypatch.setattr("tunebox.coverfiles.LOW_WATER", len(PNG))
+    path = store.path_for(LINK)
+    assert path is not None
+    os.utime(path, ns=(1, 1))
+    report = store.clean(None)
+    assert report.files_removed == 1 and store.path_for(LINK) is None
+    assert store.path_for(OTHER) is not None
+
+
+def test_clean_reclaims_old_partial_files_only(tmp_path: Path) -> None:
+    store = files(tmp_path, now=[time.time()])
+    store.save(LINK, JPG)
+    old = tmp_path / "covers" / ".0123456789abcdef.tmp"
+    fresh = tmp_path / "covers" / ".fedcba9876543210.tmp"
+    old.write_bytes(b"x")
+    fresh.write_bytes(b"x")
+    stamp = time.time() - 2 * 3600
+    os.utime(old, (stamp, stamp))
+    store.clean({name_for(LINK)})
+    assert not old.exists() and fresh.exists()

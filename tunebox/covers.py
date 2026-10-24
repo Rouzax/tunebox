@@ -222,8 +222,9 @@ class CoverService:
             for key in removed:
                 self._decisions.pop(key, None)
                 self._failed.pop(key, None)
-        keep = {name_for(link) for link in self._store.cover_links()}
-        report = self._files.clean(keep)
+        links = self._store.cover_links()
+        # Unknown links must not read as "none": only the size cap then applies.
+        report = self._files.clean(None if links is None else {name_for(link) for link in links})
         event(
             log,
             logging.INFO,
@@ -290,6 +291,8 @@ class CoverService:
         except HttpError as error:
             if error.status in (404, 410):
                 self._dead(track, decision, "gone", host, started)
+            elif error.too_large:
+                self._dead(track, decision, SaveResult.TOO_LARGE.value, host, started)
             else:
                 self._failure(track.key, "unreachable", host, started, error.status)
             return

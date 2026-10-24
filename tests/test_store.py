@@ -75,3 +75,14 @@ def test_cover_links_lists_every_stored_link() -> None:
     store.put_cover(CoverDecision("b", "artist", "https://example.invalid/1.jpg", "m", 1.0))
     store.put_cover(CoverDecision("c", "miss", None, None, 1.0))
     assert store.cover_links() == {"https://example.invalid/1.jpg"}
+
+
+def test_cover_links_are_unknown_on_the_in_memory_fallback(tmp_path: Path) -> None:
+    store = Store(tmp_path)  # a directory cannot be opened as a database
+    assert store.degraded and store.cover_links() is None
+
+
+def test_cover_links_are_unknown_when_the_read_fails() -> None:
+    store = Store(None)
+    store.close()
+    assert store.cover_links() is None

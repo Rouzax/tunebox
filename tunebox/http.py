@@ -17,11 +17,14 @@ HttpGet = Callable[[str], bytes]
 
 class HttpError(Exception):
     """status is the HTTP status of a refused answer, None for a transport
-    failure; a 404 or 410 tells a dead link from a host that is down."""
+    failure; a 404 or 410 tells a dead link from a host that is down.
+    too_large marks a body past the caller's size limit, which is the
+    answer's fault, not the network's."""
 
-    def __init__(self, message: str, status: int | None = None) -> None:
+    def __init__(self, message: str, status: int | None = None, too_large: bool = False) -> None:
         super().__init__(message)
         self.status = status
+        self.too_large = too_large
 
 
 def get(url: str, timeout: float = 10.0) -> bytes:

@@ -146,8 +146,9 @@ def test_a_drip_fed_answer_hits_the_deadline(port: int) -> None:
 
 
 def test_a_large_answer_is_refused(port: int) -> None:
-    with pytest.raises(HttpError, match="larger than"):
+    with pytest.raises(HttpError, match="larger than") as refused:
         guard().get(f"http://ok.test:{port}/body", max_bytes=3)
+    assert refused.value.too_large
 
 
 def test_stream_yields_until_closed(port: int) -> None:

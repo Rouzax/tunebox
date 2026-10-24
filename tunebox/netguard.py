@@ -192,7 +192,9 @@ class Guard:
             while chunk := response.read1(STREAM_CHUNK):
                 body += chunk
                 if len(body) > max_bytes:
-                    raise HttpError(f"{_short(url)}: response larger than {max_bytes} bytes")
+                    raise HttpError(
+                        f"{_short(url)}: response larger than {max_bytes} bytes", too_large=True
+                    )
                 if time.monotonic() > ends:
                     raise HttpError(f"{_short(url)}: took longer than {deadline_s:g} s")
             return bytes(body)
