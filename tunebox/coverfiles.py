@@ -1,0 +1,201 @@
+"""Cover images in covers/ under the data folder: one file per catalogue link,
+named by the link's SHA-256, so the file is the record and the database
+needs no column for it. A disposable cache like logos/: deleting it costs
+only downloads. Access time records when tunebox last handed a cover out
+(set explicitly, whatever the mount does); modification time versions the
+address, so a browser may keep a cover for good."""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import logging
+import os
+import re
+import secrets
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+
+from tunebox.disk import free_bytes, has_room
+from tunebox.logs import event
+from tunebox.paths import inside
+
+log = logging.getLogger(__name__)
+
+MAX_COVER = 2_000_000
+MAX_COVERS = 500_000_000
+# Cleaning stops here rather than at the cap, so it does not run on every download.
+LOW_WATER = 450_000_000
+TOUCH_S = 86_400
+KINDS = ("jpg", "png", "webp")
+_NAME = re.compile(r"^[0-9a-f]{32}\.(jpg|png|webp)$")
+
+
+def sniff_cover(body: bytes) -> str | None:
+    """The image kind by its first bytes; a host's Content-Type is not trusted.
+    Raster only: a cover is shown as an <img> and sampled on a canvas."""
+    if body.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if body.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def name_for(link: str) -> str:
+    return hashlib.sha256(link.encode("utf-8")).hexdigest()[:32]
+
+
+def sized(link: str) -> str:
+    """The link at 600x600: sharp at the largest cover the player draws
+    (about 512 CSS px) at a third of the 1000x1000 bytes. Deezer takes the
+    size in the path, Apple in the file name; other links stay as they are."""
+    if "/1000x1000-" in link:
+        return link.replace("/1000x1000-", "/600x600-", 1)
+    if link.endswith("/1000x1000bb.jpg"):
+        return link[: -len("1000x1000bb.jpg")] + "600x600bb.jpg"
+    return link
+
+
+class SaveResult(Enum):
+    SAVED = "saved"
+    UNCHANGED = "unchanged"
+    NOT_IMAGE = "not_image"
+    TOO_LARGE = "too_large"
+    DISK_LOW = "disk_low"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class CleanReport:
+    files_removed: int
+    bytes_freed: int
+    files: int
+    bytes: int
+
+
+class CoverFiles:
+    def __init__(
+        self,
+        directory: Path,
+        free: Callable[[], int | None] | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._dir = directory
+        self._free = free or (lambda: free_bytes(directory.parent))
+        self._clock = clock
+        self._touched: dict[str, float] = {}
+
+    def path_for(self, link: str) -> Path | None:
+        name = name_for(link)
+        for kind in KINDS:
+            path = self._dir / f"{name}.{kind}"
+            with contextlib.suppress(OSError):
+                if path.is_file():
+                    return path
+        return None
+
+    def address_for(self, link: str) -> str | None:
+        path = self.path_for(link)
+        if path is None:
+            return None
+        try:
+            version = path.stat().st_mtime_ns
+        except OSError:
+            return None
+        return f"/covers/{path.name}?v={version:x}"
+
+    def save(self, link: str, body: bytes) -> SaveResult:
+        if len(body) > MAX_COVER:
+            return SaveResult.TOO_LARGE
+        kind = sniff_cover(body)
+        if kind is None:
+            return SaveResult.NOT_IMAGE
+        existing = self.path_for(link)
+        if existing is not None and existing.suffix == f".{kind}":
+            with contextlib.suppress(OSError):
+                if existing.read_bytes() == body:
+                    return SaveResult.UNCHANGED
+        if not has_room(self._free(), len(body)):
+            return SaveResult.DISK_LOW
+        target = self._dir / f"{name_for(link)}.{kind}"
+        partial = self._dir / f".{secrets.token_hex(8)}.tmp"
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            with partial.open("wb") as out:
+                out.write(body)
+                out.flush()
+                os.fsync(out.fileno())
+            partial.replace(target)
+        except OSError:
+            with contextlib.suppress(OSError):
+                partial.unlink(missing_ok=True)
+            return SaveResult.UNAVAILABLE
+        if existing is not None and existing != target:
+            with contextlib.suppress(OSError):
+                existing.unlink(missing_ok=True)
+        return SaveResult.SAVED
+
+    def touch(self, path: Path) -> None:
+        """Marks the cover as handed out now, at most once a day per file;
+        the modification time, and so the address, stays."""
+        now = self._clock()
+        if now - self._touched.get(path.name, -TOUCH_S) < TOUCH_S:
+            return
+        self._touched[path.name] = now
+        with contextlib.suppress(OSError):
+            os.utime(path, (now, path.stat().st_mtime))
+
+    def file(self, name: str) -> Path | None:
+        if not _NAME.match(name):
+            return None
+        with contextlib.suppress(OSError):
+            return inside(self._dir.resolve(), name)
+        return None
+
+    def clean(self, keep: set[str]) -> CleanReport:
+        """Removes files no decision's link names, then the least recently
+        handed-out files while the total is over MAX_COVERS, down to
+        LOW_WATER. A file that cannot be removed is logged and skipped."""
+        removed = freed = 0
+        entries: list[tuple[float, int, Path]] = []
+        try:
+            listing = list(self._dir.iterdir())
+        except OSError:
+            listing = []
+        for path in listing:
+            if not _NAME.match(path.name):
+                continue
+            try:
+                info = path.stat()
+            except OSError:
+                continue
+            if path.name.split(".")[0] not in keep:
+                if self._remove(path):
+                    removed, freed = removed + 1, freed + info.st_size
+                continue
+            entries.append((info.st_atime, info.st_size, path))
+        total = sum(size for _, size, _ in entries)
+        if total > MAX_COVERS:
+            for _, size, path in sorted(entries, key=lambda e: e[0]):
+                if total <= LOW_WATER:
+                    break
+                if self._remove(path):
+                    removed, freed, total = removed + 1, freed + size, total - size
+        files = sum(1 for _, _, path in entries if path.exists())
+        return CleanReport(removed, freed, files, total)
+
+    def _remove(self, path: Path) -> bool:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return True
+        except OSError as error:
+            event(log, logging.WARNING, "cover_not_removed", file=path.name, error=str(error))
+            return False
+        self._touched.pop(path.name, None)
+        return True
