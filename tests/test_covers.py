@@ -1,7 +1,7 @@
 import itertools
 import logging
 import threading
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 import pytest
@@ -9,7 +9,7 @@ import pytest
 from tests.fakes import make_track
 from tunebox import covers as covers_module
 from tunebox.catalogs import Found, SearchError
-from tunebox.coverfiles import CoverFiles, name_for
+from tunebox.coverfiles import CoverFiles, SaveResult, name_for
 from tunebox.covers import HISTORY, NOW, CoverService
 from tunebox.http import HttpError
 from tunebox.store import CoverDecision, Store
@@ -50,13 +50,13 @@ class Finder:
 
 
 class Fetch:
-    def __init__(self, answer: bytes | HttpError = JPG) -> None:
+    def __init__(self, answer: bytes | Exception = JPG) -> None:
         self.answer = answer
         self.urls: list[str] = []
 
     def __call__(self, url: str) -> bytes:
         self.urls.append(url)
-        if isinstance(self.answer, HttpError):
+        if isinstance(self.answer, Exception):
             raise self.answer
         return self.answer
 
@@ -609,7 +609,8 @@ URL2 = URL.replace("abc", "def")
 
 
 def replaced_after_expiry(
-    fetch_answer: bytes | HttpError,
+    fetch_answer: bytes | Exception,
+    before_replacement: Callable[[], None] = lambda: None,
 ) -> tuple[CoverService, list[float], Fetch]:
     now = [1000.0]
     finder = Finder(Found(URL, "album", "m"))
@@ -620,6 +621,7 @@ def replaced_after_expiry(
     now[0] += 91 * DAY
     finder.result = Found(URL2, "album", "m2")
     fetch.answer = fetch_answer
+    before_replacement()
     covers.request(make_track(), NOW)
     assert covers.run_once()
     return covers, now, fetch
@@ -650,16 +652,38 @@ def test_a_failed_replacement_download_keeps_the_working_cover(answer: bytes | H
 def test_a_replacement_that_cannot_be_written_keeps_the_working_cover(tmp_path: Path) -> None:
     now = [1000.0]
     finder = Finder(Found(URL, "album", "m"))
-    free = [None]
+    free: list[int | None] = [None]
     files = CoverFiles(tmp_path, free=lambda: free[0], clock=lambda: now[0])
     covers = CoverService(Store(None), finder, files, Fetch(), clock=lambda: now[0])
     covers.request(make_track(), NOW)
     covers.run_once()
     now[0] += 91 * DAY
     finder.result = Found(URL2, "album", "m2")
-    free[0] = 1  # type: ignore[call-overload]
+    free[0] = 1
     covers.request(make_track(), NOW)
     covers.run_once()
+    cover = covers.lookup(make_track())
+    assert cover is not None and cover.url.startswith(LOCAL)
+    assert covers.remote_link(make_track()) == URL
+
+
+def test_a_replacement_whose_fetch_crashes_keeps_the_working_cover() -> None:
+    covers, _, _ = replaced_after_expiry(RuntimeError("boom"))
+    cover = covers.lookup(make_track())
+    assert cover is not None and cover.url.startswith(LOCAL)
+    assert covers.remote_link(make_track()) == URL
+
+
+def test_a_replacement_the_folder_refuses_keeps_the_working_cover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(_self: CoverFiles, _link: str, _body: bytes) -> SaveResult:
+        return SaveResult.UNAVAILABLE
+
+    def refuse() -> None:
+        monkeypatch.setattr(CoverFiles, "save", unavailable)
+
+    covers, _, _ = replaced_after_expiry(JPG, refuse)
     cover = covers.lookup(make_track())
     assert cover is not None and cover.url.startswith(LOCAL)
     assert covers.remote_link(make_track()) == URL
@@ -714,4 +738,20 @@ def test_the_cleaning_log_says_whether_the_links_were_known(
     caplog.set_level(logging.INFO)
     covers.housekeep()
     cleaned = [r for r in caplog.records if r.getMessage() == "cover_cache_cleaned"]
-    assert len(cleaned) == 1 and getattr(cleaned[0], "fields", {})["links_known"] is known
+    fields = getattr(cleaned[0], "fields", {})
+    assert len(cleaned) == 1 and fields["links_known"] is known
+    assert fields["trigger"] == "daily"
+
+
+def test_the_cleaning_after_a_download_names_its_trigger_and_no_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("tunebox.coverfiles.MAX_COVERS", 1)
+    monkeypatch.setattr("tunebox.coverfiles.LOW_WATER", 0)
+    covers = service(Finder(Found(URL, "album", "m")), [1000.0], folder=tmp_path)
+    caplog.set_level(logging.INFO)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    cleaned = [r for r in caplog.records if r.getMessage() == "cover_cache_cleaned"]
+    fields = getattr(cleaned[0], "fields", {})
+    assert len(cleaned) == 1 and fields["trigger"] == "cap" and fields["links_known"] is None

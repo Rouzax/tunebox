@@ -226,7 +226,7 @@ class CoverService:
         links = self._store.cover_links()
         # Unknown links must not read as "none": only the size cap then applies.
         report = self._files.clean(None if links is None else {name_for(link) for link in links})
-        _log_cleaned(report, len(removed), links is not None)
+        _log_cleaned(report, len(removed), "daily", links is not None)
 
     def _search(self, track: Track) -> None:
         started = time.monotonic()
@@ -299,6 +299,7 @@ class CoverService:
         decision to the caller, which keeps serving keep's cover."""
         link = decision.url
         assert link is not None
+        keeping = keep is not None
         started = time.monotonic()
         host = ""
         try:
@@ -310,9 +311,9 @@ class CoverService:
             result = self._files.save(link, body)
         except HttpError as error:
             if error.status in (404, 410):
-                self._dead(track, decision, "gone", host, started, keep)
+                self._dead(track, decision, "gone", host, started, keeping)
             elif error.too_large:
-                self._dead(track, decision, SaveResult.TOO_LARGE.value, host, started, keep)
+                self._dead(track, decision, SaveResult.TOO_LARGE.value, host, started, keeping)
             else:
                 self._failure(track.key, "unreachable", host, started, error.status)
             return False
@@ -326,7 +327,7 @@ class CoverService:
                 self._failed.pop(track.key, None)
             if result is SaveResult.SAVED and self._files.over_cap():
                 # Only the size cap: the links are not looked up on this path.
-                _log_cleaned(self._files.clean(None), 0, links_known=False)
+                _log_cleaned(self._files.clean(None), 0, "cap", None)
             event(
                 log,
                 logging.DEBUG,
@@ -337,7 +338,7 @@ class CoverService:
             )
             return True
         if result in (SaveResult.NOT_IMAGE, SaveResult.TOO_LARGE):
-            self._dead(track, decision, result.value, host, started, keep)
+            self._dead(track, decision, result.value, host, started, keeping)
         elif result is SaveResult.DISK_LOW:
             self._disk_low(track.key, host, started)
         else:
@@ -365,12 +366,12 @@ class CoverService:
         reason: str,
         host: str,
         started: float,
-        keep: CoverDecision | None,
+        keep: bool,
     ) -> None:
         """A link that will not give an image: the error outcome, link kept,
         searches again after its TTL, and a file saved earlier stays in use.
         With keep the caller stores the decision."""
-        if keep is None:
+        if not keep:
             self._settle(
                 CoverDecision(track.key, "error", decision.url, decision.match, self._clock())
             )
@@ -404,11 +405,15 @@ class CoverService:
         )
 
 
-def _log_cleaned(report: CleanReport, decisions_removed: int, links_known: bool) -> None:
+def _log_cleaned(
+    report: CleanReport, decisions_removed: int, trigger: str, links_known: bool | None
+) -> None:
+    """links_known is None when this clean did not look the links up."""
     event(
         log,
         logging.INFO,
         "cover_cache_cleaned",
+        trigger=trigger,
         decisions_removed=decisions_removed,
         links_known=links_known,
         files_removed=report.files_removed,
