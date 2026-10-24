@@ -903,7 +903,8 @@ usable), `group`, `streams` (each with `name`, `url`, `codec`,
 or when none is configured) and `logo_small` (the same for the small copy
 under `/logos/small/`, or `null` when there is none: use `logo` then).
 Ungrouped stations come first, then each group in order. The answer carries
-the configuration version in an `X-Tunebox-Version` header and is sent with
+the configuration version in an `X-Tunebox-Version` header and the image
+revision in an `X-Tunebox-Images` header, and is sent with
 `Cache-Control: no-cache`.
 
 **`GET /logos/<file>`**, **`GET /logos/small/<file>`** and
@@ -927,6 +928,7 @@ policy that keeps them from running script.
  "history": [{"...": "..."}],
  "stale_since": null,
  "version": 1,
+ "images": "3f9a2c1d.4",
  "stream": "High"}
 ```
 
@@ -964,6 +966,10 @@ policy that keeps them from running script.
   milliseconds since 1970, or `null`. The data shown is then the last known.
 - `version` is the configuration version. When it differs from the one
   `/api/channels` gave, fetch that list again: stations or streams changed.
+- `images` is the image revision: it changes whenever a logo or default
+  image is downloaded or removed, and after every restart. When it differs
+  from the `X-Tunebox-Images` header `/api/channels` gave, fetch that list
+  again: it names image addresses that were missing or have changed.
 - `stream` is the name of the stream tunebox used, or `null`.
 - A `404` with `{"error": "unknown_channel"}` means the station is gone;
   fetch `/api/channels` again.
