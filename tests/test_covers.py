@@ -476,3 +476,81 @@ def test_the_worker_housekeeps_again_once_idle_after_the_interval(
     covers.request(make_track(), NOW)
     covers.run_forever(stop)
     assert calls == [0, 1]  # at start, then after the queued search
+
+
+def test_full_disk_skips_do_not_count_toward_the_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    now = [1000.0]
+    free = [1]
+    files = CoverFiles(tmp_path, free=lambda: free[0], clock=lambda: now[0])
+    fetch = Fetch()
+    covers = CoverService(
+        Store(None), Finder(Found(URL, "album", "m")), files, fetch, clock=lambda: now[0]
+    )
+    caplog.set_level(logging.INFO)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    for _ in range(2):
+        now[0] += 601
+        covers.request(make_track(), NOW)
+        covers.run_once()
+    assert len(fetch.urls) == 3
+    free[0] = 10**12
+    fetch.answer = HttpError("down", 503)
+    now[0] += 601
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    levels = [r.levelno for r in caplog.records if r.getMessage() == "cover_download_failed"]
+    assert levels == [logging.INFO]
+
+
+def test_failed_downloads_are_remembered_for_a_bounded_number_of_covers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(covers_module, "MEMORY", 2)
+    covers = service(Finder(Found(URL, "album", "m")), [1000.0], fetch=Fetch(HttpError("x", 503)))
+    for title in ("A", "B", "C"):
+        covers.request(make_track(title=title), NOW)
+        covers.run_once()
+    assert list(covers._failed) == [  # pyright: ignore[reportPrivateUsage]
+        make_track(title="B").key,
+        make_track(title="C").key,
+    ]
+
+
+def test_a_queued_job_still_runs_after_housekeeping_crashed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finder = Finder()
+    covers = service(finder, [1000.0])
+    stop = threading.Event()
+    covers.request(make_track(), NOW)
+
+    def crash() -> None:
+        raise RuntimeError("bug")
+
+    def run_once() -> bool:
+        ran = real_run_once()
+        stop.set()
+        return ran
+
+    real_run_once = covers.run_once
+    monkeypatch.setattr(covers, "housekeep", crash)
+    monkeypatch.setattr(covers, "run_once", run_once)
+    covers.run_forever(stop)
+    assert finder.calls == [make_track().title]
+
+
+def test_a_download_whose_decision_was_pruned_does_nothing(tmp_path: Path) -> None:
+    now = [1000.0]
+    store = Store(None)
+    fetch = Fetch()
+    covers = service(Finder(), now, store=store, fetch=fetch, folder=tmp_path)
+    track = make_track()
+    store.put_cover(CoverDecision(track.key, "cover", URL, "m", now[0]))
+    covers.request(track, NOW)
+    now[0] += 366 * DAY
+    covers.housekeep()
+    assert covers.run_once()
+    assert fetch.urls == [] and list(tmp_path.iterdir()) == []

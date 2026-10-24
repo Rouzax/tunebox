@@ -133,10 +133,10 @@ class CoverService:
             decision = self._known(track.key)
         if decision is None or decision.url is None:
             return None
-        path = self._files.path_for(decision.url)
-        address = self._files.address_for(decision.url) if path else None
-        if path is None or address is None:
+        found = self._files.found(decision.url)
+        if found is None:
             return None
+        path, address = found
         self._files.touch(path)
         return Cover(address, "artist" if _is_artist_photo(decision) else "album")
 
@@ -315,7 +315,8 @@ class CoverService:
         elif result in (SaveResult.NOT_IMAGE, SaveResult.TOO_LARGE):
             self._dead(track, decision, result.value, host, started)
         elif result is SaveResult.DISK_LOW:
-            self._failure(track.key, "disk_low", host, started, quiet=True)
+            # Not the cover's fault: it sets the retry pause but is not a failure to count.
+            self._failure(track.key, "disk_low", host, started, quiet=True, counted=False)
             now = self._clock()
             loud = now - self._disk_warned >= DISK_WARN_S
             if loud:
@@ -348,10 +349,13 @@ class CoverService:
         started: float,
         status: int | None = None,
         quiet: bool = False,
+        counted: bool = True,
     ) -> None:
         with self._lock:
-            count = self._failed.get(key, (0.0, 0))[1] + 1
+            count = self._failed.pop(key, (0.0, 0))[1] + counted
             self._failed[key] = (self._clock(), count)
+            while len(self._failed) > MEMORY:
+                del self._failed[next(iter(self._failed))]
         if quiet:
             return
         event(
