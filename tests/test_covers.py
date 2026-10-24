@@ -495,7 +495,7 @@ def test_full_disk_skips_do_not_count_toward_the_warning(
         now[0] += 601
         covers.request(make_track(), NOW)
         covers.run_once()
-    assert len(fetch.urls) == 3
+    assert fetch.urls == []
     free[0] = 10**12
     fetch.answer = HttpError("down", 503)
     now[0] += 601
@@ -578,3 +578,28 @@ def test_a_download_that_crosses_the_cap_cleans_in_the_same_job(
     assert len(list(tmp_path.glob("*.jpg"))) == 1
     cleaned = [r for r in caplog.records if r.getMessage() == "cover_cache_cleaned"]
     assert len(cleaned) == 1
+
+
+def test_a_low_disk_skips_the_fetch_itself(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    now = [1000.0]
+    files = CoverFiles(tmp_path, free=lambda: 1, clock=lambda: now[0])
+    fetch = Fetch()
+    covers = CoverService(
+        Store(None), Finder(Found(URL, "album", "m")), files, fetch, clock=lambda: now[0]
+    )
+    caplog.set_level(logging.DEBUG)
+    for title in ("A", "B"):
+        covers.request(make_track(title=title), NOW)
+        covers.run_once()
+    assert fetch.urls == []
+    warnings = [
+        r
+        for r in caplog.records
+        if r.getMessage() == "cover_disk_low" and r.levelno == logging.WARNING
+    ]
+    assert len(warnings) == 1
+    assert not [r for r in caplog.records if r.getMessage() == "cover_download_failed"]
+    covers.request(make_track(title="A"), NOW)
+    assert not covers.run_once()  # the retry pause is set

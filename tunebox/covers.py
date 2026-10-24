@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from tunebox.catalogs import Found, SearchError
-from tunebox.coverfiles import CleanReport, CoverFiles, SaveResult, name_for, sized
+from tunebox.coverfiles import MAX_COVER, CleanReport, CoverFiles, SaveResult, name_for, sized
+from tunebox.disk import has_room
 from tunebox.http import HttpError, HttpGet
 from tunebox.logs import bound, event
 from tunebox.matching import base_title
@@ -277,6 +278,9 @@ class CoverService:
         host = ""
         try:
             host = urllib.parse.urlsplit(link).hostname or ""
+            if not has_room(self._files.free(), MAX_COVER):
+                self._disk_low(track.key, host, started)
+                return
             body = self._fetch(sized(link))
             result = self._files.save(link, body)
         except HttpError as error:
@@ -309,20 +313,23 @@ class CoverService:
         elif result in (SaveResult.NOT_IMAGE, SaveResult.TOO_LARGE):
             self._dead(track, decision, result.value, host, started)
         elif result is SaveResult.DISK_LOW:
-            # Not the cover's fault: it sets the retry pause but is not a failure to count.
-            self._failure(track.key, "disk_low", host, started, quiet=True, counted=False)
-            now = self._clock()
-            loud = now - self._disk_warned >= DISK_WARN_S
-            if loud:
-                self._disk_warned = now
-            event(
-                log,
-                logging.WARNING if loud else logging.DEBUG,
-                "cover_disk_low",
-                free_bytes=self._files.free(),
-            )
+            self._disk_low(track.key, host, started)
         else:
             self._failure(track.key, "unwritable", host, started)
+
+    def _disk_low(self, key: str, host: str, started: float) -> None:
+        """Not the cover's fault: it sets the retry pause but is not a failure to count."""
+        self._failure(key, "disk_low", host, started, quiet=True, counted=False)
+        now = self._clock()
+        loud = now - self._disk_warned >= DISK_WARN_S
+        if loud:
+            self._disk_warned = now
+        event(
+            log,
+            logging.WARNING if loud else logging.DEBUG,
+            "cover_disk_low",
+            free_bytes=self._files.free(),
+        )
 
     def _dead(
         self, track: Track, decision: CoverDecision, reason: str, host: str, started: float
