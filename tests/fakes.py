@@ -95,3 +95,22 @@ def channel_config(
         logo=logo,
         always=always,
     )
+
+
+OWR_STATION_ID = r"^(?:[A-Z]\d{4}(?: CH\d{2})? \d{2} [A-Za-z]{3} \d{4}\b|RECAP \d+-\d+$)"
+OWR_BADGE = r"^(#\d+)\s+|\s*\[((?:Top 30|Last Week)[^\]]*)\]\s*$"
+OWR_RULES = Rules(
+    station_id=re.compile(OWR_STATION_ID),
+    played_by=re.compile(PLAYED_BY),
+    badge=re.compile(OWR_BADGE),
+)
+OWR_TOP30 = Path(__file__).parent / "fixtures" / "owr-top30-2026-10-24.psv"
+
+
+def owr_top30() -> list[RawEntry]:
+    """The OWR feed during the Top 30 of 2026-10-24, newest first."""
+    rows: list[RawEntry] = []
+    for line in OWR_TOP30.read_text(encoding="utf-8").splitlines():
+        artist, title = (part.strip() for part in line.split("|"))
+        rows.append(RawEntry(artist, title, 1))
+    return rows

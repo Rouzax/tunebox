@@ -541,6 +541,25 @@
     opacity: .8;
 }
 
+/* A chart position or show label from the channel's badge rule, before the
+   title. The card's own colours swapped keep it readable by day and night. */
+.tunebox .onair .car-badge {
+    display:        inline-block;
+    margin-right:   .4em;
+    padding:        0 .45em;
+    font-size:      .62em;
+    font-weight:    600;
+    line-height:    1.6;
+    vertical-align: .18em;
+    border-radius:  .8em;
+    color:          var(--car-card);
+    background:     var(--car-card-ink);
+}
+
+.tunebox .onair .car-badge[hidden] {
+    display: none;
+}
+
 /* Wide windows (data-layout from layout.js): cover left, sized by height, text
    beside it. The page's ::before/::after auto margins (base.css) centre the row. */
 .tunebox[data-layout="wide"] {

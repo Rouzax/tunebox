@@ -629,8 +629,9 @@ codec = "mp3"
 kbps = 192
 
 [channels.rules]
-station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+station_id = '^(?:[A-Z]\d{4}(?: CH\d{2})? \d{2} [A-Za-z]{3} \d{4}\b|RECAP \d+-\d+$)'
 played_by = '\s*\(Played by ([^)]*)\)\s*$'
+badge = '^(#\d+)\s+|\s*\[((?:Top 30|Last Week)[^\]]*)\]\s*$'
 ```
 
 - **To remove a station**, delete its block.
@@ -856,6 +857,7 @@ is reported at startup instead of being ignored.
 |---|---|---|
 | `station_id` | none | A regular expression. An entry with no artist whose title matches it is a jingle: not shown as a song and not kept in history. |
 | `played_by` | none | A regular expression for a credit at the end of a title. Its first group (in parentheses) is kept as the credit; the match is removed from the title. |
+| `badge` | none | A regular expression for a label in the title, such as a chart position. The first of its groups that took part in the match is shown as a badge before the title, on the now-playing screen and in Recently played; the match is removed from the title, so the cover search and the song's identity use the plain title. With alternatives, each in its own group, one pattern can take a prefix or a suffix. A title that is nothing but the match is left whole. The PawTunes feed keeps the full title. |
 | `artist_separator` | `","` | What separates several artists. Only this splits: `&`, `.` and `/` inside a name are kept. |
 
 ### Environment variables

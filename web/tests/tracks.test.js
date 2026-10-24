@@ -11,11 +11,17 @@ test('a track gets three lines', () => {
         title: 'Miracle',
         artist: 'ADRIATIQUE, WHOMADEWHO',
         playedBy: 'WhoMadeWho Crystal Garden TML 24',
+        badge: '',
     });
 });
 
+test('a badge comes with the title', () => {
+    const chart = {...TRACK, title: 'Sad Girls', played_by: null, badge: '#8'};
+    assert.deepEqual(displayLines(chart, 'OWR'), {title: 'Sad Girls', artist: TRACK.artist, playedBy: '', badge: '#8'});
+});
+
 test('no current track shows the channel name', () => {
-    assert.deepEqual(displayLines(null, 'Daybreak Sessions'), {title: 'Daybreak Sessions', artist: '', playedBy: ''});
+    assert.deepEqual(displayLines(null, 'Daybreak Sessions'), {title: 'Daybreak Sessions', artist: '', playedBy: '', badge: ''});
 });
 
 test('a trailing separator on the artist is trimmed', () => {

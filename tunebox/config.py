@@ -512,15 +512,16 @@ def _source(table: dict[str, Any], where: str) -> SourceConfig:
 
 
 # The rule keys that hold a regular expression; rulecheck guards exactly these.
-PATTERN_RULES = ("station_id", "played_by")
+PATTERN_RULES = ("station_id", "played_by", "badge")
 
 
 def _rules(table: dict[str, Any], where: str) -> Rules:
     _no_unknown(table, {*PATTERN_RULES, "artist_separator"}, where)
     patterns = {key: _pattern(table, key, f"{where}.{key}") for key in PATTERN_RULES}
-    played_by = patterns["played_by"]
-    if played_by is not None and played_by.groups < 1:
-        raise ConfigError(f"{where}.played_by: needs a group for the part to keep")
+    for key in ("played_by", "badge"):
+        pattern = patterns[key]
+        if pattern is not None and pattern.groups < 1:
+            raise ConfigError(f"{where}.{key}: needs a group for the part to keep")
     separator = _str(table, "artist_separator", f"{where}.artist_separator", ",")
     if not separator:
         raise ConfigError(f"{where}.artist_separator: must not be empty")

@@ -286,6 +286,20 @@ button {
     text-overflow: ellipsis;
 }
 
+/* Inside the cut title, but first: the badge itself is never cut. */
+.tunebox .history-list .badge {
+    display:        inline-block;
+    margin-right:   .4em;
+    padding:        0 .45em;
+    font-size:      .75em;
+    font-weight:    600;
+    line-height:    1.5;
+    vertical-align: .1em;
+    border-radius:  .75em;
+    color:          var(--car-card);
+    background:     var(--car-card-ink);
+}
+
 .tunebox .history-list .artist,
 .tunebox .history-list .ago {
     font-size: .85rem;

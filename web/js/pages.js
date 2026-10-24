@@ -80,7 +80,11 @@ export function bindPages(app) {
                 }
             });
             const what = element('div', 'what');
-            what.append(element('div', 'title', track.title), element('div', 'artist', track.artist));
+            const title = element('div', 'title', track.title);
+            if (track.badge) {
+                title.prepend(element('span', 'badge', track.badge));
+            }
+            what.append(title, element('div', 'artist', track.artist));
             item.append(image, what, element('span', 'ago', timeAgo(track.started_at, now)));
             return item;
         });

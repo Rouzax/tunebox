@@ -1,7 +1,7 @@
 import pytest
 
-from tests.fakes import RULES, fixture_rows, make_track
-from tunebox.tracks import MAX_TITLE, RawEntry, Rules, clean, norm
+from tests.fakes import OWR_RULES, RULES, fixture_rows, make_track, owr_top30
+from tunebox.tracks import MAX_TITLE, RawEntry, Rules, clean, norm, reclean
 
 
 def test_norm_drops_accents_apostrophes_and_punctuation() -> None:
@@ -101,3 +101,60 @@ def test_text_encoded_twice_is_repaired(sent: str, shown: str) -> None:
     track = make_track(sent, sent)
     assert track.artist == shown
     assert track.title == shown
+
+
+def test_owr_chart_positions_become_badges() -> None:
+    by_title = {e.title: clean(e, OWR_RULES, 1) for e in owr_top30()}
+    sad = by_title["#8 Sad Girls"]
+    assert (sad.badge, sad.title, sad.full_title) == ("#8", "Sad Girls", "#8 Sad Girls")
+    assert sad.key == make_track("DAVID GUETTA, BEBE REXHA", "Sad Girls").key
+    positions = [t for t in by_title.values() if t.full_title.startswith("#")]
+    assert len(positions) == 23
+    assert all(t.badge == t.full_title.split()[0] for t in positions)
+    assert all(not t.title.startswith("#") for t in positions)
+
+
+def test_owr_bracketed_labels_become_badges() -> None:
+    by_title = {e.title: clean(e, OWR_RULES, 1) for e in owr_top30()}
+    jungle = by_title["Jungle [Top 30 Throwback]"]
+    assert (jungle.badge, jungle.title) == ("Top 30 Throwback", "Jungle")
+    last = by_title["Happiness Is So Sad [Last Week's #1]"]
+    assert (last.badge, last.title) == ("Last Week's #1", "Happiness Is So Sad")
+
+
+def test_owr_recaps_and_chart_hour_ids_are_station_ids() -> None:
+    ids = [clean(e, OWR_RULES, 1) for e in owr_top30() if not e.artist]
+    assert len(ids) == 7
+    assert all(t.kind == "station_id" for t in ids)
+    assert all(t.kind == "track" for e in owr_top30() if e.artist for t in [clean(e, OWR_RULES, 1)])
+
+
+def test_other_titles_keep_no_badge() -> None:
+    for entry in owr_top30():
+        track = clean(entry, OWR_RULES, 1)
+        if not entry.title.startswith("#") and "[" not in entry.title:
+            assert track.badge is None, entry
+            assert track.title == clean(entry, RULES, 1).title, entry
+
+
+def test_a_badge_and_played_by_together() -> None:
+    raw = RawEntry("ALEX WANN", "#3 Set Me Free (Played by Alex Wann)", 1)
+    track = clean(raw, OWR_RULES, 1)
+    assert (track.badge, track.title, track.played_by) == ("#3", "Set Me Free", "Alex Wann")
+
+
+def test_a_title_that_is_only_a_badge_stays_whole() -> None:
+    track = clean(RawEntry("X", "[Top 30 Throwback]", 1), OWR_RULES, 1)
+    assert (track.badge, track.title) == (None, "[Top 30 Throwback]")
+
+
+def test_reclean_reads_a_track_with_new_rules() -> None:
+    old = clean(RawEntry("DAVID GUETTA, BEBE REXHA,", "#8 Sad Girls", 5), RULES, 5)
+    assert old.badge is None
+    new = reclean(old, OWR_RULES)
+    assert (new.badge, new.title, new.started_at) == ("#8", "Sad Girls", 5)
+    assert new.artists == old.artists
+    assert reclean(new, RULES) == old
+    jingle = clean(RawEntry("", "RECAP 20-11", 5), RULES, 5)
+    assert jingle.kind == "track"
+    assert reclean(jingle, OWR_RULES).kind == "station_id"

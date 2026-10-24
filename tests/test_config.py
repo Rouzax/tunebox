@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from tests.fakes import OWR_BADGE, OWR_STATION_ID
 from tunebox import config
 from tunebox.config import (
     AdminConfig,
@@ -51,6 +52,7 @@ def test_defaults_without_rules_are_neutral(tmp_path: Path) -> None:
     channel = parse(minimal(), tmp_path).channels[0]
     assert channel.rules.station_id is None
     assert channel.rules.played_by is None
+    assert channel.rules.badge is None
     assert channel.rules.artist_separator == ","
     assert channel.history_size == 50
     assert channel.default_image is None
@@ -73,6 +75,8 @@ def test_channel_overrides_a_default(tmp_path: Path) -> None:
         (minimal(source={"type": "triton"}), "channels[0].source.mount"),
         (minimal(rules={"station_id": "("}), "channels[0].rules.station_id"),
         (minimal(rules={"played_by": "Played by"}), "channels[0].rules.played_by"),
+        (minimal(rules={"badge": "^#\\d+ "}), "channels[0].rules.badge"),
+        (minimal(rules={"badge": "["}), "channels[0].rules.badge"),
         (minimal(rules={"artist_separator": ""}), "channels[0].rules.artist_separator"),
         (minimal(history_size=0), "channels[0].history_size"),
         (minimal(delay_s="7"), "channels[0].delay_s"),
@@ -210,6 +214,10 @@ def test_example_station_list_loads() -> None:
         c.streams and all(s.url.startswith("https://") for s in c.streams) for c in config.channels
     )
     assert [c.id for c in config.channels if c.always] == ["owr", "daybreak", "anthems"]
+    for channel in config.channels[:3]:
+        rules = channel.rules
+        assert rules.station_id and rules.station_id.pattern == OWR_STATION_ID
+        assert rules.badge and rules.badge.pattern == OWR_BADGE
     text = STATIONS.read_text(encoding="utf-8")
     # Copied from an LMS favorites list: none of its TuneIn tracking parameters.
     assert "serial=" not in text and "partnerId" not in text

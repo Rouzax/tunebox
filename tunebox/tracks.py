@@ -28,6 +28,10 @@ class Rules:
     # Group 1 is the "who played it" part that is kept.
     played_by: re.Pattern[str] | None = None
     artist_separator: str = ","
+    # The first group that took part in the match is the badge (a chart
+    # position, a show label); the whole match leaves the title. Alternatives
+    # with their own group let one pattern take a prefix or a suffix.
+    badge: re.Pattern[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,7 @@ class Track:
     played_by: str | None
     started_at: int
     key: str
+    badge: str | None = None
 
     @property
     def ident(self) -> tuple[int, str]:
@@ -103,6 +108,13 @@ def clean(raw: RawEntry, rules: Rules, seen_at_ms: int) -> Track:
     if rules.played_by is not None and (match := rules.played_by.search(full_title)):
         played_by = _tidy(match.group(1)) or None
         title = _tidy(full_title[: match.start()])
+    badge = None
+    if rules.badge is not None and (match := rules.badge.search(title)):
+        rest = _tidy(title[: match.start()] + " " + title[match.end() :])
+        # A title that is nothing but the badge stays as it is.
+        if rest:
+            badge = next((_tidy(g) for g in match.groups() if g is not None), "") or None
+            title = rest
 
     is_station_id = (
         not artist and rules.station_id is not None and bool(rules.station_id.match(full_title))
@@ -117,4 +129,14 @@ def clean(raw: RawEntry, rules: Rules, seen_at_ms: int) -> Track:
         played_by=played_by,
         started_at=started_at,
         key=f"{_key_part(' '.join(artists))}|{_key_part(title)}",
+        badge=badge,
+    )
+
+
+def reclean(track: Track, rules: Rules) -> Track:
+    """The track as the given rules read it. A stored or carried track was
+    cleaned by the rules of its day; its artist and full title are the
+    tidied feed text, which clean() reads back unchanged."""
+    return clean(
+        RawEntry(track.artist, track.full_title, track.started_at), rules, track.started_at
     )

@@ -57,13 +57,16 @@ async function steadyCard() {
     }
     const nodes = ['.car-title', '.car-artist', '.car-played'].map((s) => document.querySelector(s));
     const playedLine = nodes[2].closest('.car-line');
-    const kept = [...nodes.map((n) => n.textContent), playedLine.hidden];
+    const badge = document.querySelector('.car-badge');
+    const kept = [...nodes.map((n) => n.textContent), playedLine.hidden, badge.textContent, badge.hidden];
     const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
-    const measure = async (title, artist, played) => {
+    const measure = async (title, artist, played, label) => {
         nodes[0].textContent = title;
         nodes[1].textContent = artist;
         nodes[2].textContent = played;
         playedLine.hidden = !played;
+        badge.textContent = label;
+        badge.hidden = !label;
         await settle();
         return {
             card: document.querySelector('.onair').getBoundingClientRect().height,
@@ -73,10 +76,12 @@ async function steadyCard() {
     };
     // Three times over, too long for any window.
     const longer = (text) => [text, text, text].join(' ');
-    const long = await measure(longer(kept[0]), longer(kept[1]), longer(kept[2] || 'Somebody With A Long Name Mainstage'));
-    const short = await measure('Rain', 'Kaytranada', '');
+    const long = await measure(longer(kept[0]), longer(kept[1]), longer(kept[2] || 'Somebody With A Long Name Mainstage'), 'Last Week\'s #1');
+    const short = await measure('Rain', 'Kaytranada', '', '');
     nodes.forEach((n, i) => { n.textContent = kept[i]; });
     playedLine.hidden = kept[3];
+    badge.textContent = kept[4];
+    badge.hidden = kept[5];
     await settle();
     const problems = [];
     if (Math.abs(long.card - short.card) > 0.5 || Math.abs(long.cover - short.cover) > 0.5) {
@@ -316,11 +321,25 @@ function inspect(page, slack) {
             // balanced wrapping spreads long text evenly over more lines
             // than are shown, so the visible ones end short ("MEDUZA,...").
             if (wide && line.scrollHeight > line.clientHeight + 1) {
-                const shown = [...words.getClientRects()].filter((r) => r.bottom <= edges.bottom + 1 && r.width > 0);
-                const tops = [...new Set(shown.map((r) => Math.round(r.top)))];
-                for (const top of tops) {
-                    const used = shown.filter((r) => Math.round(r.top) === top)
-                        .reduce((a, r) => ({left: Math.min(a.left, r.left), right: Math.max(a.right, r.right)}), {left: Infinity, right: -Infinity});
+                // Visible when its middle is inside the line: Poppins' glyph box
+                // is taller than the line height, so a shown piece's bottom
+                // can pass the line's bottom.
+                const shown = [...words.getClientRects()].filter((r) => (r.top + r.bottom) / 2 <= edges.bottom && r.width > 0);
+                // A piece belongs to the line its vertical middle falls in: a
+                // smaller, raised box (the badge) starts lower than the text
+                // beside it but sits on the same line.
+                const rows = [];
+                for (const r of [...shown].sort((a, b) => a.height - b.height || a.top - b.top).reverse()) {
+                    const middle = (r.top + r.bottom) / 2;
+                    const row = rows.find((w) => middle >= w.top && middle <= w.bottom);
+                    if (row) {
+                        row.left = Math.min(row.left, r.left);
+                        row.right = Math.max(row.right, r.right);
+                    } else {
+                        rows.push({top: r.top, bottom: r.bottom, left: r.left, right: r.right});
+                    }
+                }
+                for (const used of rows) {
                     if (used.right - used.left < 0.6 * edges.width) {
                         problems.push(`"${line.textContent.slice(0, 30)}" is cut off with a short line (${Math.round(used.right - used.left)} of ${Math.round(edges.width)} px)`);
                         break;
@@ -508,6 +527,9 @@ async function run() {
                             document.querySelector('.car-artist').textContent = ${JSON.stringify(LONG_ARTIST)};
                             document.querySelector('.car-played').textContent = ${JSON.stringify(LONG_PLAYED)};
                             document.querySelector('.car-played').closest('.car-line').hidden = false;
+                            const badge = document.querySelector('.car-badge');
+                            badge.textContent = 'Top 30 Throwback';
+                            badge.hidden = false;
                         })()`);
                         for (const page of PAGES) {
                             await evaluate(`(() => {

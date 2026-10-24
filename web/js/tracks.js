@@ -1,16 +1,18 @@
 // What to show for a track. The server has already split the Played-by
-// credit off the title and recognised station IDs (current is null then).
+// credit and the badge off the title and recognised station IDs (current is
+// null then).
 export const DEFAULT_COVER = 'icons/cover.svg';
 
 export function displayLines(track, channelName) {
     if (!track || !track.title) {
-        return {title: channelName, artist: '', playedBy: ''};
+        return {title: channelName, artist: '', playedBy: '', badge: ''};
     }
     return {
         title: track.title,
         // A trailing separator is left on some multi-artist entries.
         artist: (track.artist || '').replace(/[\s,]+$/, ''),
         playedBy: track.played_by || '',
+        badge: track.badge || '',
     };
 }
 

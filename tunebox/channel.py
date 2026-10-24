@@ -17,7 +17,7 @@ from tunebox.logs import bound, event
 from tunebox.sources.base import Source, SourceError
 from tunebox.store import Store
 from tunebox.timeline import Timeline, build
-from tunebox.tracks import Track, clean
+from tunebox.tracks import Track, clean, reclean
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +62,9 @@ class Channel:
         self._clock = clock_ms
         self._rng = rng or random.Random()
         self._lock = threading.Lock()
-        self._recent: list[Track] = store.load_recent(config.id)[: config.history_size]
+        # Stored tracks were cleaned by the rules of their day.
+        stored = store.load_recent(config.id)[: config.history_size]
+        self._recent: list[Track] = [reclean(t, config.rules) for t in stored]
         self._polled = False
         self._retired = False
         self._failures = 0
@@ -109,8 +111,14 @@ class Channel:
         recent list, PawTunes' artwork decisions, the activity window and,
         when the source is the same, the freshness of the last poll."""
         with old._lock:
-            self._recent = list(old._recent)[: self.config.history_size]
-            self._frozen_artwork = dict(old._frozen_artwork)
+            # A restart for new rules shows the kept list as those rules read it;
+            # PawTunes' artwork stays frozen under the track's new identity.
+            kept = old._recent[: self.config.history_size]
+            self._recent = [reclean(t, self.config.rules) for t in kept]
+            renamed = {a.ident: b.ident for a, b in zip(kept, self._recent, strict=True)}
+            self._frozen_artwork = {
+                renamed.get(ident, ident): url for ident, url in old._frozen_artwork.items()
+            }
             self._active_until = old._active_until
             fresh = old._fresh.is_set() and old.config.source == self.config.source
         if fresh:
@@ -286,6 +294,7 @@ class Channel:
             "artists": list(track.artists),
             "title": track.title,
             "played_by": track.played_by,
+            "badge": track.badge,
             "started_at": track.started_at,
             "cover": cover.url if cover else None,
             "cover_kind": cover.kind if cover else None,

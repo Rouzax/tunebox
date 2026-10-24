@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from tests.fakes import FakeSource, NoJitter, channel_config
+from tests.fakes import OWR_RULES, FakeSource, NoJitter, channel_config
 from tunebox.catalogs import Found
 from tunebox.channel import ACTIVE_MS, FIRST_FETCH, STEADY_FETCH, Channel
 from tunebox.config import ChannelConfig, SourceConfig
@@ -97,7 +97,7 @@ def test_now_view_applies_the_delay() -> None:
     assert body["upcoming"]["in_s"] == 4
     assert body["history"] == []
     assert body["stale_since"] is None
-    keys = {"artist", "artists", "title", "played_by", "started_at", "cover", "cover_kind"}
+    keys = {"artist", "artists", "title", "played_by", "badge", "started_at", "cover", "cover_kind"}
     assert set(body["current"]) == keys
 
 
@@ -499,3 +499,50 @@ def test_recent_titles_lists_the_full_titles() -> None:
     channel, _, _ = make(source, Clock(1_300_000))
     channel.poll_once()
     assert channel.recent_titles() == ["My People", "Stay"]
+
+
+CHART = RawEntry("DAVID GUETTA, BEBE REXHA", "#8 Sad Girls", 1_200_000)
+RECAP = RawEntry("", "RECAP 20-11", 1_250_000)
+
+
+def test_the_badge_reaches_the_player_and_the_full_title_pawtunes() -> None:
+    source = FakeSource()
+    source.responses = [[CHART, OLD]]
+    clock = Clock(1_230_000)
+    config = dataclasses.replace(channel_config(), rules=OWR_RULES)
+    channel, _, finder = make(source, clock, config)
+    channel.poll_once()
+    current = channel.now_view()[0]["current"]
+    assert (current["badge"], current["title"]) == ("#8", "Sad Girls")
+    assert "#8 Sad Girls" not in finder.calls
+    assert channel.pawtunes_view()["title"] == "#8 Sad Girls"
+
+
+def test_stored_tracks_are_read_with_the_current_rules() -> None:
+    store = Store(None)
+    source = FakeSource()
+    source.responses = [[RECAP, CHART, OLD]]
+    channel, _, _ = make(source, Clock(1_300_000), store=store)
+    channel.poll_once()
+    assert channel.now_view()[0]["current"]["title"] == "RECAP 20-11"
+    config = dataclasses.replace(channel_config(), rules=OWR_RULES)
+    restarted, _, _ = make(FakeSource(), Clock(1_300_000), config, store=store)
+    history = restarted.now_view()[0]["history"]
+    assert [(t["badge"], t["title"]) for t in history] == [("#8", "Sad Girls"), (None, "Stay")]
+
+
+def test_a_rule_change_rereads_the_kept_list_and_keeps_the_pawtunes_freeze() -> None:
+    source = FakeSource()
+    source.responses = [[CHART, OLD]]
+    clock = Clock(1_300_000)
+    old, covers, finder = make(source, clock)
+    old.poll_once()
+    assert "artwork" not in old.pawtunes_view()
+    finder.covers["Sad Girls"] = M_URL
+    finder.covers["#8 Sad Girls"] = M_URL
+    drain(covers)
+    config = dataclasses.replace(channel_config(), rules=OWR_RULES)
+    new = Channel(config, FakeSource(), covers, Store(None), clock_ms=clock, carry=old)
+    assert new.now_view()[0]["current"]["badge"] == "#8"
+    # Decided before the change: PawTunes still gets no artwork for it.
+    assert "artwork" not in new.pawtunes_view()

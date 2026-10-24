@@ -30,8 +30,9 @@ codec = "mp3"
 kbps = 192
 
 [channels.rules]
-station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+station_id = '^(?:[A-Z]\d{4}(?: CH\d{2})? \d{2} [A-Za-z]{3} \d{4}\b|RECAP \d+-\d+$)'
 played_by = '\s*\(Played by ([^)]*)\)\s*$'
+badge = '^(#\d+)\s+|\s*\[((?:Top 30|Last Week)[^\]]*)\]\s*$'
 
 [[channels]]
 id = "daybreak"
@@ -60,8 +61,9 @@ codec = "mp3"
 kbps = 128
 
 [channels.rules]
-station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+station_id = '^(?:[A-Z]\d{4}(?: CH\d{2})? \d{2} [A-Za-z]{3} \d{4}\b|RECAP \d+-\d+$)'
 played_by = '\s*\(Played by ([^)]*)\)\s*$'
+badge = '^(#\d+)\s+|\s*\[((?:Top 30|Last Week)[^\]]*)\]\s*$'
 
 [[channels]]
 id = "anthems"
@@ -83,8 +85,9 @@ codec = "mp3"
 kbps = 128
 
 [channels.rules]
-station_id = '^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b'
+station_id = '^(?:[A-Z]\d{4}(?: CH\d{2})? \d{2} [A-Za-z]{3} \d{4}\b|RECAP \d+-\d+$)'
 played_by = '\s*\(Played by ([^)]*)\)\s*$'
+badge = '^(#\d+)\s+|\s*\[((?:Top 30|Last Week)[^\]]*)\]\s*$'
 
 [[channels]]
 id = "radio-538"

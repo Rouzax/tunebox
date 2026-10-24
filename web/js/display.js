@@ -9,6 +9,7 @@ export function bindDisplay(app) {
     const channelLine = root.querySelector('.current-channel');
     const logo = root.querySelector('.car-station-logo');
     const title = root.querySelector('.car-title');
+    const badge = root.querySelector('.car-badge');
     const artist = root.querySelector('.car-artist');
     const played = root.querySelector('.car-played');
     const image = root.querySelector('img.artwork');
@@ -72,6 +73,8 @@ export function bindDisplay(app) {
         change(() => {
             channelShown = channel;
             title.textContent = lines.title;
+            badge.textContent = lines.badge;
+            badge.hidden = !lines.badge;
             artist.textContent = lines.artist;
             played.textContent = lines.playedBy;
             played.closest('.car-line').hidden = !lines.playedBy;

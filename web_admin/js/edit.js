@@ -11,6 +11,7 @@ const NUMBERS = {
 const RULES = {
     station_id: ['Station-ID pattern', 'Titles matching this are jingles, not tracks.'],
     played_by: ['Played-by pattern', 'Needs a group: the part to keep, e.g. \\s*\\(Played by ([^)]*)\\)\\s*$'],
+    badge: ['Badge pattern', 'Needs a group: the first group that matches is shown before the title, and the match leaves it, e.g. ^(#\\d+)\\s+ for a chart position.'],
     artist_separator: ['Artist separator', 'Between artists in the feed; a comma when empty.'],
 };
 
