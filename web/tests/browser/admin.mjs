@@ -1455,6 +1455,40 @@ async function run() {
             return left ? 'the code form stayed after Cancel' : null;
         });
 
+        await step('logging out at the code prompt with unsaved edits asks first, where it can be answered', async () => {
+            await untickSecond();
+            await click('.logout');
+            const leave = `[...document.querySelectorAll('#shell .view button')].find((b) => b.textContent.trim() === 'Leave without saving')`;
+            if (!(await until(leave))) {
+                return `no question about the unsaved edits (message: ${await message()})`;
+            }
+            if (await evaluate(`Boolean(document.querySelector('.shell-code form.confirm-code'))`)) {
+                return 'the code prompt stayed open beside the question';
+            }
+            if (await evaluate(`Boolean(${leave}.closest('[inert]'))`)) {
+                return 'the question is inside the inert view';
+            }
+            // A real mouse press: an inert view takes none.
+            const box = await evaluate(`(() => {
+                const r = ${leave}.getBoundingClientRect();
+                return {x: r.left + r.width / 2, y: r.top + r.height / 2, seen: r.bottom > 0 && r.top < innerHeight};
+            })()`);
+            if (!box.seen) {
+                return 'the question is out of sight';
+            }
+            for (const type of ['mousePressed', 'mouseReleased']) {
+                await send('Input.dispatchMouseEvent', {type, x: box.x, y: box.y, button: 'left', clickCount: 1});
+            }
+            if (!(await until(`!document.querySelector('#login').hidden`))) {
+                return 'the answer did not log out';
+            }
+            const again = await pageLogin();
+            if (again) {
+                return again;
+            }
+            return (await hidden()) ? null : 'stored without needs_pin';
+        });
+
         await step('unticking Needs the PIN asks for a code', async () => {
             await untickSecond();
             await typeCode();

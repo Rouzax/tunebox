@@ -158,7 +158,9 @@ const ctx = {
     },
 };
 
-let saving = false;
+// The save in progress, settled once its view is usable again; null when
+// none is.
+let saving = null;
 
 // One save at a time: a second click before the first answer would send
 // the same version again and be refused as stale. The page is inert
@@ -172,7 +174,10 @@ async function once(send, done, retry, early) {
     if (saving) {
         return {ok: false};
     }
-    saving = true;
+    let ended;
+    saving = new Promise((resolve) => {
+        ended = resolve;
+    });
     view.inert = true;
     message('');
     try {
@@ -188,10 +193,6 @@ async function once(send, done, retry, early) {
                 return {ok: false};
             }
             if (!typed) {
-                // Logging out cancels the prompt; the login says nothing of saving.
-                if (!ctx.config) {
-                    return {ok: false};
-                }
                 if (!onForm()) {
                     route();
                 }
@@ -214,9 +215,10 @@ async function once(send, done, retry, early) {
         }
         return {ok: false};
     } finally {
-        saving = false;
         view.inert = false;
         codeArea.replaceChildren();
+        saving = null;
+        ended();
     }
 }
 
@@ -527,12 +529,6 @@ const logout = guarded(async () => {
         return;
     }
     setCsrf(null);
-    // A save waiting at the code prompt ends as cancelled, so the next
-    // login can save again.
-    const cancel = codeArea.querySelector('.confirm-code .quiet');
-    if (cancel) {
-        cancel.click();
-    }
     ctx.config = null;
     ctx.unsaved = null;
     pending = null;
@@ -542,7 +538,15 @@ const logout = guarded(async () => {
     show('login');
 });
 
-document.querySelector('.logout').addEventListener('click', () => {
+document.querySelector('.logout').addEventListener('click', async () => {
+    // A save waiting at the code prompt holds the view inert, where the
+    // page's question about unsaved edits could not be answered: the save
+    // ends as cancelled first, so the next login can save again.
+    const cancel = codeArea.querySelector('.confirm-code .quiet');
+    if (cancel && saving) {
+        cancel.click();
+        await saving;
+    }
     if (mayLeave(logout)) {
         logout();
     }
