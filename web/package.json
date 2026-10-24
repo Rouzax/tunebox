@@ -1,4 +1,7 @@
 {
   "private": true,
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "audiomotion-analyzer": "4.5.4"
+  }
 }

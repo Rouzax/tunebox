@@ -31,3 +31,12 @@ jobs:
         run: .venv/bin/pre-commit run --all-files --show-diff-on-failure
       - name: Push-stage checks
         run: .venv/bin/pre-commit run --all-files --hook-stage pre-push
+
+  image-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the image and start it
+        run: scripts/image_smoke.sh

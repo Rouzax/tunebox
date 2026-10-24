@@ -1,0 +1,40 @@
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  automerge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Reads Dependabot's PR metadata only. The PR's code is never checked
+      # out here, so nothing from the update runs with a write token.
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      # Qualifies: the Docker base image (a new digest for the same tag, or a
+      # minor or patch tag) and GitHub Actions minor or patch updates. A merge
+      # reaches the live site the next night through :latest, so --auto waits
+      # for the ruleset's required checks: the test suite and a build and start
+      # of the image itself. Majors, Python dev tools and the vendored npm
+      # packages (which must be vendored by hand) stay manual.
+      - name: Enable auto-merge
+        if: >-
+          (steps.meta.outputs.package-ecosystem == 'docker' &&
+           steps.meta.outputs.update-type != 'version-update:semver-major') ||
+          (steps.meta.outputs.package-ecosystem == 'github_actions' &&
+           (steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+            steps.meta.outputs.update-type == 'version-update:semver-patch'))
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

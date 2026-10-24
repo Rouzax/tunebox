@@ -16,6 +16,14 @@ carries the version, which is also what makes browsers fetch it again),
 regenerate `SHA256SUMS`, and update the import path in `web/js/visualizer.js`
 or `web/css/fonts.css`.
 
+`audiomotion-analyzer` is also pinned in `web/package.json`, so Dependabot
+opens a pull request when a new version is published. That pull request
+changes only the pin and fails `vendor.test.js` ("... is vendored") on
+purpose, and it is never merged automatically: vendor the new version as
+above on its branch, update the pin's folder in `VERSIONED_FILE` if the file
+name changed, and the check passes. Nothing is installed from
+`web/package.json`; it exists for Dependabot and the test.
+
 Icons: edit `scripts/icons.txt` and run `.venv/bin/python scripts/vendor_icons.py`.
 It fetches from the pinned commit, rebuilds `icons.svg` and rewrites that
 folder's lines in `SHA256SUMS`.

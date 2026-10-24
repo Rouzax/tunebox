@@ -18,3 +18,11 @@ updates:
       interval: weekly
     cooldown:
       default-days: 3
+  # The vendored player libraries named in web/package.json. A PR here fails
+  # CI on purpose until the new version is vendored by hand (web/vendor/README.md).
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3

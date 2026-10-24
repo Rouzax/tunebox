@@ -33,3 +33,26 @@ test('every vendored file is recorded', () => {
     const present = filesUnder(VENDOR).filter((path) => !['SHA256SUMS', 'README.md'].includes(path));
     assert.deepEqual(present.filter((path) => !recorded.has(path)), []);
 });
+
+// Dependabot reads web/package.json; the browser loads web/vendor/. A bumped
+// pin without the new files vendored fails here, so that PR cannot merge.
+// Each pinned package names the vendored file whose header carries its version.
+const VERSIONED_FILE = {'audiomotion-analyzer': 'audioMotion-analyzer.js'};
+
+test('every pinned npm package is the version vendored and imported', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    const pins = Object.entries(pkg.devDependencies || {});
+    assert.ok(pins.length > 0);
+    const sources = readdirSync(new URL('../js/', import.meta.url).pathname)
+        .map((name) => readFileSync(new URL(`../js/${name}`, import.meta.url), 'utf8'))
+        .join('\n');
+    for (const [name, version] of pins) {
+        assert.match(version, /^\d+\.\d+\.\d+$/, `${name} is pinned exactly`);
+        const folder = `${name}-${version}`;
+        assert.ok(statSync(join(VENDOR, folder)).isDirectory(), `${folder} is vendored`);
+        assert.ok(VERSIONED_FILE[name], `${name} has a versioned file listed`);
+        const header = readFileSync(join(VENDOR, folder, VERSIONED_FILE[name]), 'utf8').slice(0, 400);
+        assert.match(header, new RegExp(`@version ${version.replace(/\./g, '\\.')}\\b`), `${folder} holds ${version}`);
+        assert.ok(sources.includes(`vendor/${folder}/`), `the player imports ${folder}`);
+    }
+});
