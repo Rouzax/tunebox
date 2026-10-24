@@ -305,13 +305,15 @@ class Channel:
         version: int = 0,
         stream: str | None = None,
         pin: str = "off.0",
+        images: str = "",
     ) -> tuple[dict[str, Any], str]:
         """buffer_s is how far the asking player plays behind the live stream.
         Counting it here, rather than in the player, keeps the switch time a
         relative countdown that a wrong device clock cannot shift. version is
         the configuration version; it is in the ETag, so a player on an
         unchanged track still learns of a change; pin, the PIN revision, is
-        in the body for the same reason."""
+        in the body for the same reason, as is images, the logo and default
+        image revision."""
         timeline, stale = self._timeline(self.config.delay_s + buffer_s)
         current = timeline.current
         history = list(timeline.history)
@@ -336,6 +338,7 @@ class Channel:
             "version": version,
             "stream": stream,
             "pin": pin,
+            "images": images,
         }
         return body, _etag(body)
 

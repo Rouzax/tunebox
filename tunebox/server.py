@@ -527,6 +527,7 @@ class Handler(BaseHTTPRequestHandler):
                 "Cache-Control": "no-cache",
                 "X-Tunebox-Version": str(snapshot.version),
                 "X-Tunebox-Pin-Revision": access.revision,
+                "X-Tunebox-Images": logos.revision() if logos else "",
             }
             if len(visible) < len(channels):
                 # The player offers "More stations" for these.
@@ -561,8 +562,13 @@ class Handler(BaseHTTPRequestHandler):
                 bursts.request(stream)
                 buffer_s += bursts.burst_s(stream.url)
             name = stream.name if stream else None
+            logos = self.app.logos
             body, etag = channel.now_view(
-                buffer_s, version=snapshot.version, stream=name, pin=access.revision
+                buffer_s,
+                version=snapshot.version,
+                stream=name,
+                pin=access.revision,
+                images=logos.revision() if logos else "",
             )
             if etag_matches(self.headers.get("If-None-Match"), etag):
                 return self._not_modified(etag)

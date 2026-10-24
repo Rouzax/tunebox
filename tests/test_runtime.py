@@ -1,7 +1,7 @@
 import dataclasses
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Collection, Generator
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,7 @@ class RecordingLogos(Logos):
         self.requested: list[str | None] = []
         self.requested_defaults: list[str | None] = []
         self.forgotten: list[str] = []
+        self.swept: list[frozenset[str]] = []
 
     def request(self, channel: ChannelConfig) -> None:
         self.requested.append(channel.logo)
@@ -47,6 +48,9 @@ class RecordingLogos(Logos):
 
     def forget(self, channel_id: str) -> None:
         self.forgotten.append(channel_id)
+
+    def forget_all_except(self, live_ids: Collection[str]) -> None:
+        self.swept.append(frozenset(live_ids))
 
 
 class Harness:
@@ -319,3 +323,37 @@ def test_a_removed_channel_loses_its_downloaded_files(harness: Harness) -> None:
     harness.commit(rows(doc("a")))
     harness.runtime.apply()
     assert harness.logos.forgotten == ["b"]
+
+
+def test_the_first_apply_sweeps_logos_of_channels_that_are_not_live(harness: Harness) -> None:
+    harness.commit(rows(doc("a"), doc("b")))
+    harness.runtime.apply()
+    harness.commit(rows(doc("a")))
+    harness.runtime.apply()
+    assert harness.logos.swept == [frozenset({"a", "b"})]
+
+
+def test_a_failed_first_apply_does_not_sweep(harness: Harness) -> None:
+    harness.unbuildable.add("bad")
+    harness.commit(rows(doc("a"), doc("bad")))
+    harness.runtime.apply()
+    assert harness.logos.swept == []
+    harness.unbuildable.clear()
+    harness.runtime.apply()
+    assert harness.logos.swept == [frozenset({"a", "bad"})]
+
+
+def test_logos_of_a_station_removed_while_stopped_are_deleted(tmp_path: Path) -> None:
+    folder = tmp_path / "logos"
+    folder.mkdir()
+    (folder / "gone.png").write_bytes(b"x")
+    (folder / "gone.url").write_text("https://example.invalid/g.png", encoding="utf-8")
+    (folder / "a.png").write_bytes(b"x")
+    harness = Harness(tmp_path)
+    real = Logos(folder, FakeHttp(lambda _url: b""), Blobs(tmp_path / "blobs"))
+    harness.runtime = Runtime(harness.settings, harness.make, real)
+    harness.commit(rows(doc("a")))
+    harness.runtime.apply()
+    while real.run_once():
+        pass
+    assert sorted(p.name for p in folder.iterdir()) == ["a.png"]

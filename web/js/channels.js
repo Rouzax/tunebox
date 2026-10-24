@@ -79,8 +79,10 @@ export function canPlay(stream, canPlayType) {
 }
 
 // The station list is out of date when /now names another configuration
-// version or another PIN revision than the list was loaded with.
+// version, PIN revision or logo and default image revision than the list
+// was loaded with.
 export function listOutdated(body, app) {
     return (body.version !== undefined && body.version !== app.version)
-        || (body.pin !== undefined && body.pin !== app.pinRevision);
+        || (body.pin !== undefined && body.pin !== app.pinRevision)
+        || (body.images !== undefined && body.images !== app.images);
 }

@@ -80,6 +80,7 @@ class Runtime:
         self._lock = threading.Lock()
         self._live: dict[str, _Live] = {}
         self._retired: list[threading.Thread] = []
+        self._logos_swept = False
         self.snapshot = EMPTY
 
     def apply(self) -> int:
@@ -151,6 +152,11 @@ class Runtime:
                     if self._logos is not None:
                         self._logos.forget(channel_id)
             self._live = live
+            if self._logos is not None and not self._logos_swept:
+                # Files of a station removed while tunebox was stopped; later
+                # removals are forgotten above as they happen.
+                self._logos_swept = True
+                self._logos.forget_all_except(live)
             self._retired = [thread for thread in self._retired if thread.is_alive()]
             channels = MappingProxyType({cid: entry.channel for cid, entry in live.items()})
             self.snapshot = Snapshot(version, channels, resolved.player)

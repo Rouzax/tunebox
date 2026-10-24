@@ -10,8 +10,10 @@ from __future__ import annotations
 import logging
 import queue
 import re
+import secrets
 import stat
 import threading
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -36,6 +38,8 @@ CONTENT_TYPES = {
 # Sharp at about 40 CSS px on a 3x screen.
 SMALL_PX = 128
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*\.(png|jpg|webp|svg)")
+# What a channel leaves in a folder: its image or recorded source, or a partial file.
+_CHANNEL_FILE = re.compile(r"\.?([a-z0-9][a-z0-9-]*)\.(?:png|jpg|webp|svg|url|tmp)")
 
 
 def sniff(body: bytes) -> str | None:
@@ -74,6 +78,15 @@ def default_image_address(value: str | None, downloaded: str | None) -> str | No
     return value if _is_local_path(value) else None
 
 
+def _unlink(path: Path) -> bool:
+    """Removes a file; False when there was none."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class _Forget:
     channel_id: str
@@ -87,6 +100,23 @@ class Logos:
         self._queue: queue.Queue[ChannelConfig | _Forget] = queue.Queue()
         self._unavailable_reported = False
         self._unusable_reported: set[tuple[str, str]] = set()
+        # The apply thread, request threads (revision reads) and the logo worker
+        # all reach the counter. The random part makes a restart differ from any
+        # revision a player already holds.
+        self._boot = secrets.token_hex(4)
+        self._changes = 0
+        self._changes_lock = threading.Lock()
+
+    def revision(self) -> str:
+        """Changes whenever a logo, small logo or default image is saved or
+        removed, and differs between runs; the player compares it to know its
+        station list names stale image addresses."""
+        with self._changes_lock:
+            return f"{self._boot}.{self._changes}"
+
+    def _changed(self) -> None:
+        with self._changes_lock:
+            self._changes += 1
 
     def _folder(self, small: bool, default: bool = False) -> Path:
         if default:
@@ -171,7 +201,8 @@ class Logos:
                 event(log, logging.WARNING, "default_image_unusable", channel=channel.id)
         for name in (*(f"{channel.id}.{ext}" for ext in EXTENSIONS), f"{channel.id}.url"):
             try:
-                (folder / name).unlink(missing_ok=True)
+                if _unlink(folder / name):
+                    self._changed()
             except OSError as error:
                 event(
                     log,
@@ -189,6 +220,23 @@ class Logos:
         channel, so a refresh cannot bring the files back."""
         self._queue.put(_Forget(channel_id))
 
+    def forget_all_except(self, live_ids: Collection[str]) -> None:
+        """Queues the removal of the files of every channel that has some in
+        the logo folders but is not live: those of a station removed while
+        tunebox was stopped. Names that are not a channel's files are left."""
+        gone: set[str] = set()
+        for folder in (self._dir, self._dir / "small", self._dir / "default"):
+            try:
+                names = [path.name for path in folder.iterdir()]
+            except OSError:
+                continue
+            for name in names:
+                found = _CHANNEL_FILE.fullmatch(name)
+                if found and found.group(1) not in live_ids:
+                    gone.add(found.group(1))
+        for channel_id in sorted(gone):
+            self.forget(channel_id)
+
     def _remove_files(self, channel_id: str) -> None:
         """The logo and its small copy, and the default image, each with its
         recorded source, and a partial file a crash left. A missing file is fine."""
@@ -202,7 +250,8 @@ class Logos:
         ]
         for path in paths:
             try:
-                path.unlink(missing_ok=True)
+                if _unlink(path):
+                    self._changed()
             except OSError as error:
                 event(
                     log,
@@ -220,7 +269,8 @@ class Logos:
         copy = self._dir / "small" / f"{channel_id}.png"
         try:
             if not original.is_file():
-                copy.unlink(missing_ok=True)
+                if _unlink(copy):
+                    self._changed()
                 return
             if copy.is_file() and copy.stat().st_mtime_ns >= original.stat().st_mtime_ns:
                 return
@@ -235,12 +285,14 @@ class Logos:
             small = None
         try:
             if small is None:
-                copy.unlink(missing_ok=True)
+                if _unlink(copy):
+                    self._changed()
                 return
             copy.parent.mkdir(exist_ok=True)
             partial = copy.parent / f".{channel_id}.tmp"
             partial.write_bytes(small)
             partial.replace(copy)
+            self._changed()
         except OSError as error:
             event(log, logging.WARNING, "logo_not_shrunk", channel=channel_id, error=str(error))
             return
@@ -303,4 +355,7 @@ class Logos:
         except OSError as error:
             event(log, logging.WARNING, "logo_failed", channel=channel_id, error=str(error))
             return
+        finally:
+            # Also after a partial failure: the image may already have changed.
+            self._changed()
         event(log, logging.INFO, "logo_saved", channel=channel_id, kind=kind, bytes=len(body))

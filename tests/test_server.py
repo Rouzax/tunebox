@@ -302,10 +302,14 @@ def test_now_adds_the_burst_of_the_stream_played(
     original = channel.now_view
 
     def spy(
-        buffer_s: float = 0, version: int = 0, stream: str | None = None, pin: str = "off.0"
+        buffer_s: float = 0,
+        version: int = 0,
+        stream: str | None = None,
+        pin: str = "off.0",
+        images: str = "",
     ) -> tuple[dict[str, object], str]:
         seen.append(buffer_s)
-        return original(buffer_s, version, stream, pin)
+        return original(buffer_s, version, stream, pin, images)
 
     monkeypatch.setattr(channel, "now_view", spy)
     status, _, _ = request(server, "/api/channels/owr/now?buffer_s=2.5&stream=0")
@@ -1255,6 +1259,24 @@ def test_a_pin_change_changes_the_now_etag(tmp_path: Path) -> None:
     assert status == 200 and json.loads(body)["pin"] == "stations.1"
     _, listed, _ = request(httpd, "/api/channels")
     assert listed["x-tunebox-pin-revision"] == "stations.1"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_the_image_revision_is_sent_and_changes_the_now_etag(tmp_path: Path) -> None:
+    httpd = make_server(tmp_path)
+    logos = httpd.logos
+    assert logos is not None
+    _, listed, _ = request(httpd, "/api/channels")
+    assert listed["x-tunebox-images"] == logos.revision()
+    _, headers, body = request(httpd, "/api/channels/owr/now")
+    assert json.loads(body)["images"] == logos.revision()
+    logos.forget("owr")
+    logos.run_once()
+    status, _, body = request(
+        httpd, "/api/channels/owr/now", headers={"If-None-Match": headers["etag"]}
+    )
+    assert status == 200 and json.loads(body)["images"] == logos.revision()
     httpd.shutdown()
     httpd.server_close()
 

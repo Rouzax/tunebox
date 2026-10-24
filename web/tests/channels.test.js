@@ -86,3 +86,10 @@ test('a new pin revision refreshes the stations', () => {
     assert.equal(listOutdated({version: 4, pin: 'stations.1'}, app), true);
     assert.equal(listOutdated({version: 3}, app), false);
 });
+
+test('a new image revision refreshes the stations', () => {
+    const app = {version: 3, pinRevision: 'stations.1', images: 'ab.1'};
+    assert.equal(listOutdated({version: 3, pin: 'stations.1', images: 'ab.1'}, app), false);
+    assert.equal(listOutdated({version: 3, pin: 'stations.1', images: 'ab.2'}, app), true);
+    assert.equal(listOutdated({version: 3, pin: 'stations.1'}, app), false);
+});

@@ -426,3 +426,65 @@ def test_forget_removes_a_stale_partial_file(tmp_path: Path) -> None:
     logos.forget("owr")
     assert logos.run_once()
     assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
+
+
+def test_the_image_revision_changes_when_a_file_is_saved_or_removed(tmp_path: Path) -> None:
+    http = FakeHttp(lambda url: BIG_PNG if url == URL else JPG)
+    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    seen = [logos.revision()]
+    logos.refresh(channel_config(logo=URL))
+    seen.append(logos.revision())
+    logos.refresh(channel_config(logo=URL, default_image=DEFAULT_URL))
+    seen.append(logos.revision())
+    logos.refresh(channel_config(logo=URL, default_image=None))
+    seen.append(logos.revision())
+    logos.forget("owr")
+    logos.run_once()
+    seen.append(logos.revision())
+    assert len(set(seen)) == len(seen)
+
+
+def test_an_unchanged_refresh_keeps_the_image_revision(tmp_path: Path) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), Blobs(tmp_path / "blobs"))
+    logos.refresh(channel_config(logo=URL))
+    before = logos.revision()
+    logos.refresh(channel_config(logo=URL))
+    assert logos.revision() == before
+
+
+def test_the_image_revision_differs_between_instances(tmp_path: Path) -> None:
+    blobs = Blobs(tmp_path / "blobs")
+    first = Logos(tmp_path, FakeHttp(lambda _url: PNG), blobs)
+    second = Logos(tmp_path, FakeHttp(lambda _url: PNG), blobs)
+    assert first.revision() != second.revision()
+
+
+def test_forget_all_except_removes_only_gone_channels_files(tmp_path: Path) -> None:
+    http = FakeHttp(lambda url: BIG_PNG if url == URL else JPG)
+    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    for channel_id in ("gone", "live"):
+        config = dataclasses.replace(
+            channel_config(logo=URL, default_image=DEFAULT_URL), id=channel_id
+        )
+        logos.refresh(config)
+    (tmp_path / "README.txt").write_text("not a channel file", encoding="utf-8")
+    (tmp_path / "Odd Name.png").write_bytes(PNG)
+    logos.forget_all_except({"live"})
+    while logos.run_once():
+        pass
+    left = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*") if p.is_file())
+    assert left == [
+        "Odd Name.png",
+        "README.txt",
+        "default/live.jpg",
+        "default/live.url",
+        "live.png",
+        "live.url",
+        "small/live.png",
+    ]
+
+
+def test_forget_all_except_copes_with_a_missing_folder(tmp_path: Path) -> None:
+    logos = Logos(tmp_path / "none", FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs"))
+    logos.forget_all_except(set())
+    assert not logos.run_once()

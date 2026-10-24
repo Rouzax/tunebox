@@ -21,6 +21,9 @@ export function createApi(fetchFn) {
         // different one there means this list is out of date.
         // pin: the listening PIN's revision; /now reports it too, and a
         // different one there means this list is out of date.
+        // images: the logo and default image revision; /now reports it too,
+        // and a different one there means the addresses in this list are out
+        // of date.
         // more: stations wait behind the listening PIN ("chosen stations").
         async channels() {
             const response = await get('/api/channels');
@@ -29,6 +32,7 @@ export function createApi(fetchFn) {
                 version: Number(response.headers.get('X-Tunebox-Version')) || 0,
                 more: response.headers.get('X-Tunebox-Pin') === 'more',
                 pin: response.headers.get('X-Tunebox-Pin-Revision') || '',
+                images: response.headers.get('X-Tunebox-Images') || '',
             };
         },
         // The listening PIN: 204 when accepted (the answer sets the grant

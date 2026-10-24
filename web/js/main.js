@@ -73,6 +73,7 @@ async function start(root) {
         channels: listing.channels,
         version: listing.version,
         pinRevision: listing.pin,
+        images: listing.images,
         morePin: listing.more,
         embed: params.get('embed') === '1',
         channel: null,
@@ -183,6 +184,7 @@ async function start(root) {
             app.channels = fresh.channels;
             app.version = fresh.version;
             app.pinRevision = fresh.pin;
+            app.images = fresh.images;
             app.morePin = fresh.more;
             const kept = keepSelection(app.channels, app.channel.id, app.stream && app.stream.name, playable);
             if (kept) {
