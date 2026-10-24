@@ -966,8 +966,9 @@ policy that keeps them from running script.
   milliseconds since 1970, or `null`. The data shown is then the last known.
 - `version` is the configuration version. When it differs from the one
   `/api/channels` gave, fetch that list again: stations or streams changed.
-- `images` is the image revision: it changes whenever a logo or default
-  image is downloaded or removed, and after every restart. When it differs
+- `images` is the image revision: it changes whenever a logo, its small
+  copy or a default image is saved (downloaded or copied from an upload)
+  or removed, and after every restart. When it differs
   from the `X-Tunebox-Images` header `/api/channels` gave, fetch that list
   again: it names image addresses that were missing or have changed.
 - `stream` is the name of the stream tunebox used, or `null`.
