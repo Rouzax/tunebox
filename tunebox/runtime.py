@@ -135,7 +135,9 @@ class Runtime:
                         old.channel.replace_config(config)
                         live[config.id] = old
                     if self._logos is not None and (
-                        previous is None or previous.logo != config.logo
+                        previous is None
+                        or previous.logo != config.logo
+                        or previous.default_image != config.default_image
                     ):
                         self._logos.request(config)
             except Exception as error:  # noqa: BLE001 - a thread that cannot start keeps the live set

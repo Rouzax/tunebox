@@ -38,9 +38,11 @@ class RecordingLogos(Logos):
     def __init__(self, directory: Path) -> None:
         super().__init__(directory, FakeHttp(lambda _url: b""), Blobs(directory.parent / "blobs"))
         self.requested: list[str | None] = []
+        self.requested_defaults: list[str | None] = []
 
     def request(self, channel: ChannelConfig) -> None:
         self.requested.append(channel.logo)
+        self.requested_defaults.append(channel.default_image)
 
 
 class Harness:
@@ -153,6 +155,19 @@ def test_only_new_or_changed_logos_are_requested(harness: Harness) -> None:
     assert harness.logos.requested == [
         "https://example.invalid/a.png",
         "https://example.invalid/b.png",
+    ]
+
+
+def test_a_changed_default_image_is_requested(harness: Harness) -> None:
+    harness.commit(rows(doc("a", default_image="https://example.invalid/a.jpg")))
+    harness.runtime.apply()
+    harness.commit(rows(doc("a", default_image="https://example.invalid/a.jpg", name="X")))
+    harness.runtime.apply()
+    harness.commit(rows(doc("a", default_image="https://example.invalid/b.jpg")))
+    harness.runtime.apply()
+    assert harness.logos.requested_defaults == [
+        "https://example.invalid/a.jpg",
+        "https://example.invalid/b.jpg",
     ]
 
 

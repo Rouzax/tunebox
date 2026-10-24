@@ -293,7 +293,6 @@ def test_info_and_status() -> None:
         "id": "owr",
         "name": "One World Radio",
         "stream_url": "https://example.invalid/stream.aac",
-        "default_image": None,
         "group": None,
         "streams": [
             {

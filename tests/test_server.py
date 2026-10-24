@@ -98,6 +98,8 @@ def make_server(
     (logo_dir / "x.svg").write_bytes(b"<svg></svg>")
     (logo_dir / "small").mkdir()
     (logo_dir / "small" / "owr.png").write_bytes(b"\x89PNG\r\n\x1a\nsmall")
+    (logo_dir / "default").mkdir()
+    (logo_dir / "default" / "owr.jpg").write_bytes(b"\xff\xd8\xff\xe0default")
     logos = Logos(logo_dir, lambda _url: b"", Blobs(tmp_path / "blobs"))
     channels: dict[str, Channel] = {"owr": channel}
     for config in extra:
@@ -105,6 +107,7 @@ def make_server(
             config, FakeSource(), covers, store, clock_ms=lambda: 2_000_000, rng=NoJitter()
         )
         (logo_dir / f"{config.id}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (logo_dir / "default" / f"{config.id}.jpg").write_bytes(b"\xff\xd8\xff\xe0default")
     snapshot = Snapshot(1, channels, PlayerConfig(52.0, 5.0, extra[0].id if extra else None))
     httpd = TuneboxServer(
         ("127.0.0.1", 0),
@@ -400,6 +403,46 @@ def test_channel_list_gives_the_logo_path(server: TuneboxServer) -> None:
     listed = json.loads(body)[0]
     assert listed["logo"].startswith("/logos/owr.png?v=")
     assert listed["logo_small"].startswith("/logos/small/owr.png?v=")
+
+
+def test_channel_list_gives_only_local_default_images(tmp_path: Path) -> None:
+    def station(channel_id: str, default_image: str | None) -> ChannelConfig:
+        return dataclasses.replace(
+            channel_config(default_image=default_image), id=channel_id, name=channel_id
+        )
+
+    httpd = make_server(
+        tmp_path,
+        extra=(
+            station("remote", "https://example.invalid/d.jpg"),
+            station("local", "/img/station.png"),
+            station("plain", "http://example.invalid/d.jpg"),
+            station("bare", None),
+        ),
+    )
+    try:
+        listed = {
+            c["id"]: c["default_image"] for c in json.loads(request(httpd, "/api/channels")[2])
+        }
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert listed["remote"].startswith("/logos/default/remote.jpg?v=")
+    assert listed["local"] == "/img/station.png"
+    assert listed["plain"] is None
+    assert listed["bare"] is None
+
+
+def test_default_images_are_served_like_logos(server: TuneboxServer) -> None:
+    status, headers, body = request(server, "/logos/default/owr.jpg?v=1")
+    assert status == 200
+    assert headers["content-type"] == "image/jpeg"
+    assert body.endswith(b"default")
+    assert headers["cache-control"] == "max-age=31536000, immutable"
+    assert headers["content-security-policy"] == "sandbox"
+    assert request(server, "/logos/default/missing.jpg")[0] == 404
+    assert request(server, "/logos/default/")[0] == 404
+    assert request(server, "/logos/default/..%2Fowr.png")[0] == 404
 
 
 def test_small_logos_are_served(server: TuneboxServer) -> None:
@@ -1053,7 +1096,7 @@ def test_hidden_stations_are_left_out_until_the_pin(stations: PinWorld) -> None:
     assert [c["id"] for c in json.loads(body)] == ["owr"]
     assert headers["x-tunebox-pin"] == "more"
     assert headers["cache-control"].startswith("private")
-    for path in ["/api/channels/secret/now", "/logos/secret.png"]:
+    for path in ["/api/channels/secret/now", "/logos/secret.png", "/logos/default/secret.jpg"]:
         assert request(stations.httpd, path)[0] == 404, path
     assert json.loads(request(stations.httpd, "/api/player")[2])["default_channel"] is None
     assert request(stations.httpd, "/")[0] == 200
@@ -1061,7 +1104,7 @@ def test_hidden_stations_are_left_out_until_the_pin(stations: PinWorld) -> None:
     status, headers, body = request(stations.httpd, "/api/channels", headers={"Cookie": cookie})
     assert [c["id"] for c in json.loads(body)] == ["owr", "secret"]
     assert "x-tunebox-pin" not in headers
-    for path in ["/api/channels/secret/now", "/logos/secret.png"]:
+    for path in ["/api/channels/secret/now", "/logos/secret.png", "/logos/default/secret.jpg"]:
         assert request(stations.httpd, path, headers={"Cookie": cookie})[0] == 200, path
     player = json.loads(request(stations.httpd, "/api/player", headers={"Cookie": cookie})[2])
     assert player["default_channel"] == "secret"

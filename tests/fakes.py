@@ -85,12 +85,13 @@ def channel_config(
     always: bool = False,
     group: str | None = None,
     logo: str | None = None,
+    default_image: str | None = None,
 ) -> ChannelConfig:
     return ChannelConfig(
         id="owr",
         name="One World Radio",
         streams=(StreamConfig("Default", "https://example.invalid/stream.aac", None, None),),
-        default_image=None,
+        default_image=default_image,
         source=SourceConfig("triton", {"mount": "OWR_INTERNATIONAL"}),
         rules=RULES,
         delay_s=delay_s,

@@ -21,7 +21,7 @@ from tunebox.coverfiles import CoverFiles
 from tunebox.http_headers import single
 from tunebox.limits import Once, network
 from tunebox.logos import CONTENT_TYPES as LOGO_TYPES
-from tunebox.logos import Logos
+from tunebox.logos import Logos, default_image_address
 from tunebox.logs import bound, event
 from tunebox.netguard import OTHER_FORWARDING, client_address, nearby, trusted_peer
 from tunebox.paths import inside
@@ -513,6 +513,10 @@ class Handler(BaseHTTPRequestHandler):
             listing = [
                 {
                     **channel.info(),
+                    "default_image": default_image_address(
+                        channel.config.default_image,
+                        logos.path_for(cid, default=True) if logos else None,
+                    ),
                     "logo": logos.path_for(cid) if logos else None,
                     "logo_small": logos.path_for(cid, small=True) if logos else None,
                 }
@@ -603,9 +607,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(404, {"error": "not_found"}, head)
         logos = self.app.logos
         small = len(parts) == 3 and parts[1] == "small"
+        default = len(parts) == 3 and parts[1] == "default"
         target = None
-        if logos and (len(parts) == 2 or small):
-            target = logos.file(urllib.parse.unquote(parts[-1]), small=small)
+        if logos and (len(parts) == 2 or small or default):
+            target = logos.file(urllib.parse.unquote(parts[-1]), small=small, default=default)
         if target is None:
             return self._send_json(404, {"error": "not_found"}, head)
         kind = target.suffix.removeprefix(".")

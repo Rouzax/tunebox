@@ -9,7 +9,7 @@ import pytest
 from tests.fakes import FakeHttp, channel_config
 from tunebox.blobs import Blobs
 from tunebox.http import HttpError
-from tunebox.logos import SMALL_PX, Logos, sniff
+from tunebox.logos import SMALL_PX, Logos, default_image_address, sniff
 from tunebox.png import Image, read, write
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
@@ -17,6 +17,7 @@ JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
 WEBP = b"RIFF\x10\x00\x00\x00WEBPVP8 " + b"\x00" * 8
 SVG = b'<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 URL = "https://example.invalid/owr.png"
+DEFAULT_URL = "https://example.invalid/default.jpg"
 BIG_PNG = write(Image(300, 150, bytes((200, 30, 30, 255)) * 300 * 150))
 
 
@@ -278,3 +279,73 @@ def test_a_blob_that_is_not_its_kind_is_not_copied(
     Logos(tmp_path, FakeHttp(lambda _url: b""), blobs).refresh(channel_config(logo=ref))
     assert not (tmp_path / "owr.png").exists()
     assert "logo_rejected" in caplog.text
+
+
+def test_a_default_image_is_downloaded_beside_the_logo(tmp_path: Path) -> None:
+    http = FakeHttp(lambda url: JPG if url == DEFAULT_URL else PNG)
+    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    channel = channel_config(logo=URL, default_image=DEFAULT_URL)
+    logos.refresh(channel)
+    logos.refresh(channel)
+    assert sorted(http.urls) == sorted([URL, DEFAULT_URL])
+    assert (tmp_path / "default" / "owr.jpg").read_bytes() == JPG
+    assert (tmp_path / "default" / "owr.url").read_text(encoding="utf-8") == DEFAULT_URL
+    assert (logos.path_for("owr", default=True) or "").startswith("/logos/default/owr.jpg?v=")
+    assert logos.file("owr.jpg", default=True) == tmp_path / "default" / "owr.jpg"
+    assert logos.file("owr.jpg") is None
+
+
+def test_a_changed_default_image_replaces_the_old_file(tmp_path: Path) -> None:
+    bodies = {DEFAULT_URL: JPG, "https://example.invalid/other.png": PNG}
+    logos = Logos(tmp_path, FakeHttp(lambda url: bodies[url]), Blobs(tmp_path / "blobs"))
+    logos.refresh(channel_config(default_image=DEFAULT_URL))
+    logos.refresh(channel_config(default_image="https://example.invalid/other.png"))
+    assert sorted(p.name for p in (tmp_path / "default").iterdir()) == ["owr.png", "owr.url"]
+
+
+@pytest.mark.parametrize("value", ["/img/station.png", None, "data:image/png;base64,AAAA"])
+def test_a_default_image_that_is_not_downloaded_removes_the_old_file(
+    tmp_path: Path, value: str | None
+) -> None:
+    http = FakeHttp(lambda _url: JPG)
+    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos.refresh(channel_config(default_image=DEFAULT_URL))
+    assert logos.path_for("owr", default=True) is not None
+    logos.refresh(channel_config(default_image=value))
+    assert logos.path_for("owr", default=True) is None
+    assert not (tmp_path / "default" / "owr.url").exists()
+    assert http.urls == [DEFAULT_URL]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("https://example.invalid/d.jpg", "/logos/default/owr.jpg?v=1"),
+        ("/img/station.png", "/img/station.png"),
+        ("//elsewhere.invalid/d.jpg", None),
+        ("http://example.invalid/d.jpg", None),
+        ("data:image/png;base64,AAAA", None),
+        ("img/station.png", None),
+        (None, None),
+    ],
+)
+def test_default_image_address(value: str | None, expected: str | None) -> None:
+    assert default_image_address(value, "/logos/default/owr.jpg?v=1") == expected
+
+
+def test_an_https_default_image_not_yet_downloaded_has_no_address() -> None:
+    assert default_image_address("https://example.invalid/d.jpg", None) is None
+
+
+def test_an_unusable_default_image_is_not_fetched_and_warned_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    http = FakeHttp(lambda _url: PNG)
+    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    channel = channel_config(default_image="http://example.invalid/d.jpg")
+    with caplog.at_level(logging.WARNING):
+        logos.refresh(channel)
+        logos.refresh(channel)
+    assert http.urls == []
+    warnings = [r for r in caplog.records if r.getMessage() == "default_image_unusable"]
+    assert len(warnings) == 1

@@ -258,7 +258,6 @@ class Channel:
             "name": self.config.name,
             # The first stream's address, kept for clients written before streams.
             "stream_url": self.config.stream_url,
-            "default_image": self.config.default_image,
             "group": self.config.group,
             "streams": [
                 {"name": s.name, "url": s.url, "codec": s.codec, "kbps": s.kbps}
