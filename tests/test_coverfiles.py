@@ -236,3 +236,62 @@ def test_clean_reclaims_old_partial_files_only(tmp_path: Path) -> None:
     os.utime(old, (stamp, stamp))
     store.clean({name_for(LINK)})
     assert not old.exists() and fresh.exists()
+
+
+def test_clean_counts_only_files_this_call_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = files(tmp_path)
+    store.save(LINK, JPG)
+    store.save(OTHER, PNG)
+    real_unlink = Path.unlink
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if self.suffix == ".jpg":
+            real_unlink(self)  # taken by someone else an instant before this call
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    report = store.clean(set())
+    assert (report.files_removed, report.bytes_freed) == (1, len(PNG))
+
+
+def test_clean_counts_the_partial_files_it_reclaims(tmp_path: Path) -> None:
+    store = files(tmp_path, now=[time.time()])
+    store.save(LINK, JPG)
+    old = tmp_path / "covers" / ".0123456789abcdef.tmp"
+    old.write_bytes(b"xyz")
+    stamp = time.time() - 2 * 3600
+    os.utime(old, (stamp, stamp))
+    report = store.clean({name_for(LINK)})
+    assert (report.files_removed, report.bytes_freed) == (1, 3)
+    assert report.files == 1
+
+
+def test_file_is_none_for_a_well_formed_name_without_a_file(tmp_path: Path) -> None:
+    store = files(tmp_path)
+    store.save(LINK, JPG)
+    assert store.file(f"{'a' * 32}.jpg") is None
+
+
+def test_free_defaults_to_the_space_beside_the_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list[Path] = []
+
+    def free_bytes(path: Path) -> int:
+        asked.append(path)
+        return 77
+
+    monkeypatch.setattr("tunebox.coverfiles.free_bytes", free_bytes)
+    assert CoverFiles(tmp_path / "covers").free() == 77
+    assert asked == [tmp_path]
+
+
+def test_found_gives_the_file_and_its_address(tmp_path: Path) -> None:
+    store = files(tmp_path)
+    assert store.found(LINK) is None
+    store.save(LINK, JPG)
+    path, address = store.found(LINK) or (None, "")
+    assert path == store.path_for(LINK)
+    assert address == store.address_for(LINK)

@@ -31,6 +31,7 @@ MAX_COVERS = 500_000_000
 LOW_WATER = 450_000_000
 TOUCH_S = 86_400
 KINDS = ("jpg", "png", "webp")
+CONTENT_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 # A partial file is never in use for this long, so an older one is a crash's leftover.
 PARTIAL_STALE_S = 3600
 _NAME = re.compile(r"[0-9a-f]{32}\.(jpg|png|webp)")
@@ -105,7 +106,8 @@ class CoverFiles:
                     return path
         return None
 
-    def address_for(self, link: str) -> str | None:
+    def found(self, link: str) -> tuple[Path, str] | None:
+        """The file for the link and its address, from one stat of the file."""
         path = self.path_for(link)
         if path is None:
             return None
@@ -113,7 +115,11 @@ class CoverFiles:
             version = path.stat().st_mtime_ns
         except OSError:
             return None
-        return f"/covers/{path.name}?v={version:x}"
+        return path, f"/covers/{path.name}?v={version:x}"
+
+    def address_for(self, link: str) -> str | None:
+        found = self.found(link)
+        return found[1] if found else None
 
     def save(self, link: str, body: bytes) -> SaveResult:
         if len(body) > MAX_COVER:
@@ -185,8 +191,8 @@ class CoverFiles:
             except OSError:
                 continue
             if partial:
-                if self._clock() - info.st_mtime > PARTIAL_STALE_S:
-                    self._remove(path)
+                if self._clock() - info.st_mtime > PARTIAL_STALE_S and self._remove(path):
+                    removed, freed = removed + 1, freed + info.st_size
                 continue
             if keep is not None and path.name.split(".")[0] not in keep:
                 if self._remove(path):
@@ -200,14 +206,18 @@ class CoverFiles:
                     break
                 if self._remove(path):
                     removed, freed, total = removed + 1, freed + size, total - size
+                elif not path.exists():
+                    total -= size  # gone by other means: no longer in the folder's total
         files = sum(1 for _, _, path in entries if path.exists())
         return CleanReport(removed, freed, files, total)
 
     def _remove(self, path: Path) -> bool:
+        """True only when this call removed the file; one that vanished
+        meanwhile, or could not be removed, is False."""
         try:
             path.unlink()
         except FileNotFoundError:
-            return True
+            return False
         except OSError as error:
             event(log, logging.WARNING, "cover_not_removed", file=path.name, error=str(error))
             return False

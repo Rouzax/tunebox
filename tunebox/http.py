@@ -16,10 +16,12 @@ HttpGet = Callable[[str], bytes]
 
 
 class HttpError(Exception):
-    """status is the HTTP status of a refused answer, None for a transport
-    failure; a 404 or 410 tells a dead link from a host that is down.
-    too_large marks a body past the caller's size limit, which is the
-    answer's fault, not the network's."""
+    """status is set only when the host answered with an HTTP error status
+    (from get() and from the guarded fetch); it is None for a transport
+    failure, a refused address and an oversized body. A 404 or 410 tells a
+    dead link from a host that is down. too_large is set only by the guarded
+    fetch, for a body past the caller's max_bytes: the answer's fault, not
+    the network's. get() has a fixed cap and does not set it."""
 
     def __init__(self, message: str, status: int | None = None, too_large: bool = False) -> None:
         super().__init__(message)
@@ -32,6 +34,8 @@ def get(url: str, timeout: float = 10.0) -> bytes:
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body: bytes = response.read(MAX_BYTES + 1)
+    except urllib.error.HTTPError as error:
+        raise HttpError(f"{url.split('?')[0]}: {error}", error.code) from error
     except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as error:
         raise HttpError(f"{url.split('?')[0]}: {error}") from error
     if len(body) > MAX_BYTES:

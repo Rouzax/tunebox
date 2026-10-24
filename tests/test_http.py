@@ -57,3 +57,15 @@ def test_stream_turns_http_errors_into_http_error(base: str) -> None:
 def test_stream_turns_refused_connections_into_http_error() -> None:
     with pytest.raises(http.HttpError):
         next(http.stream("http://127.0.0.1:9/x", timeout=2))
+
+
+def test_get_reports_the_status_of_an_http_error(base: str) -> None:
+    with pytest.raises(http.HttpError) as caught:
+        http.get(f"{base}/missing")
+    assert caught.value.status == 404 and not caught.value.too_large
+
+
+def test_get_has_no_status_for_a_refused_connection() -> None:
+    with pytest.raises(http.HttpError) as caught:
+        http.get("http://127.0.0.1:9/x", timeout=2)
+    assert caught.value.status is None

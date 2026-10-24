@@ -86,3 +86,21 @@ def test_cover_links_are_unknown_when_the_read_fails() -> None:
     store = Store(None)
     store.close()
     assert store.cover_links() is None
+
+
+def test_prune_is_empty_when_the_delete_fails() -> None:
+    store = Store(None)
+    store.close()
+    assert store.prune_covers(1.0) == []
+
+
+def test_links_are_unknown_once_a_write_has_failed() -> None:
+    store = Store(None)
+    store.put_cover(CoverDecision("a", "cover", URL, "m", 1.0))
+    assert store.cover_links() == {URL}
+    store._db.execute(  # pyright: ignore[reportPrivateUsage]
+        "CREATE TRIGGER refuse BEFORE INSERT ON covers BEGIN SELECT RAISE(ABORT, 'full'); END"
+    )
+    store.put_cover(CoverDecision("b", "cover", "https://example.invalid/b.jpg", "m", 1.0))
+    assert store.get_cover("b") is None
+    assert store.cover_links() is None

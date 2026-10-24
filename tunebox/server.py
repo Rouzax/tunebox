@@ -17,6 +17,7 @@ from tunebox.admin import ADMIN_HEADERS, Admin, Request, Response, content_lengt
 from tunebox.bursts import Bursts
 from tunebox.channel import Channel
 from tunebox.config import Network, StreamConfig
+from tunebox.coverfiles import CONTENT_TYPES as COVER_TYPES
 from tunebox.coverfiles import CoverFiles
 from tunebox.http_headers import single
 from tunebox.limits import Once, network
@@ -59,7 +60,6 @@ CONTENT_TYPES = {
 # Folders here carry their version in the name. Everything else (the player's
 # own code has no build step to fingerprint it) is revalidated on every load.
 IMMUTABLE_DIRS = ("vendor/",)
-COVER_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 # Covers, logos and default images are served by tunebox itself; streams
 # come from redirect targets whose hosts vary, hence any https host for
 # media. http media is for an http stream_url on a plain-http page; https
@@ -98,8 +98,9 @@ def _query(target: str, name: str) -> list[str] | None:
 def _locked_route(parts: list[str]) -> bool:
     """What the PIN covers besides the pages (which _static judges by the
     file it would serve): the API except the PIN itself and PawTunes (which
-    knows nothing of a PIN), and the logos and covers. Scripts, styles and fonts are
-    the player's public code and stay open, so the PIN page can load."""
+    knows nothing of a PIN), and the logos and covers. Scripts, styles and
+    fonts are the player's public code and stay open, so the PIN page can
+    load."""
     if parts[:1] in (["logos"], ["covers"]):
         return True
     return parts[:1] == ["api"] and parts[1:2] not in (["pin"], ["pawtunes"])

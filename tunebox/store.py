@@ -60,6 +60,9 @@ class Store:
         # True when a database was asked for but the server runs on the in-memory
         # fallback, whose contents say nothing about what is on disk.
         self.degraded = False
+        # Set by the first write that fails: decisions may then be missing from
+        # the database, so its list of links no longer says which files are unused.
+        self._write_failed = False
         self._db = self._open(path)
 
     def _open(self, path: Path | None) -> sqlite3.Connection:
@@ -76,6 +79,10 @@ class Store:
         db = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
         db.executescript(_SCHEMA)
         return db
+
+    def _write_error(self, error: Exception) -> None:
+        self._write_failed = True
+        self._report(error)
 
     def _report(self, error: Exception) -> None:
         if not self._reported:
@@ -108,7 +115,7 @@ class Store:
             try:
                 self._db.execute("INSERT OR REPLACE INTO covers VALUES (?, ?, ?, ?, ?)", row)
             except sqlite3.Error as error:
-                self._report(error)
+                self._write_error(error)
 
     def prune_covers(self, older_than: float) -> list[str]:
         """Deletes decisions last made before older_than; returns their keys."""
@@ -118,15 +125,15 @@ class Store:
                     "DELETE FROM covers WHERE decided_at < ? RETURNING key", (older_than,)
                 ).fetchall()
             except sqlite3.Error as error:
-                self._report(error)
+                self._write_error(error)
                 return []
         return [cast("str", row[0]) for row in rows]
 
     def cover_links(self) -> set[str] | None:
         """Every link a decision names, or None when that cannot be told
-        (unreadable database, or the in-memory fallback), so a caller never
-        mistakes "unknown" for "none"."""
-        if self.degraded:
+        (unreadable database, the in-memory fallback, or a write that failed
+        in this process), so a caller never mistakes "unknown" for "none"."""
+        if self.degraded or self._write_failed:
             return None
         with self._lock:
             try:
@@ -184,4 +191,4 @@ class Store:
             except sqlite3.Error as error:
                 if self._db.in_transaction:
                     self._db.execute("ROLLBACK")
-                self._report(error)
+                self._write_error(error)

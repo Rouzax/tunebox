@@ -1583,3 +1583,12 @@ def test_a_pin_body_that_exhausts_the_parser_is_a_bad_request_not_a_crash(
         )
     assert status == 400
     assert not any(r.getMessage() == "request_crashed" for r in caplog.records)
+
+
+def test_a_granted_device_gets_the_covers_privately(site: PinWorld) -> None:
+    grant = grant_of(site.httpd)
+    _, headers, _ = request(
+        site.httpd, f"/covers/{name_for(COVER_LINK)}.jpg", headers={"Cookie": grant}
+    )
+    assert headers["cache-control"].startswith("private, ")
+    assert headers["vary"] == "Cookie"
