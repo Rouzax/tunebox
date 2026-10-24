@@ -11,6 +11,10 @@ data=$(mktemp -d)
 
 cleanup() {
     docker rm -f "$name" >/dev/null 2>&1 || true
+    # tunebox writes its folders as the image's user, which the runner's user
+    # may not be, so they are removed from inside the image as root.
+    docker run --rm --user 0:0 -v "$data:/data" --entrypoint find "$tag" \
+        /data -mindepth 1 -delete >/dev/null 2>&1 || true
     rm -rf "$data"
 }
 trap cleanup EXIT INT TERM
