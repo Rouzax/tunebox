@@ -603,3 +603,115 @@ def test_a_low_disk_skips_the_fetch_itself(
     assert not [r for r in caplog.records if r.getMessage() == "cover_download_failed"]
     covers.request(make_track(title="A"), NOW)
     assert not covers.run_once()  # the retry pause is set
+
+
+URL2 = URL.replace("abc", "def")
+
+
+def replaced_after_expiry(
+    fetch_answer: bytes | HttpError,
+) -> tuple[CoverService, list[float], Fetch]:
+    now = [1000.0]
+    finder = Finder(Found(URL, "album", "m"))
+    fetch = Fetch()
+    covers = service(finder, now, fetch=fetch)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    now[0] += 91 * DAY
+    finder.result = Found(URL2, "album", "m2")
+    fetch.answer = fetch_answer
+    covers.request(make_track(), NOW)
+    assert covers.run_once()
+    return covers, now, fetch
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(HttpError("gone", 404), id="gone"),
+        pytest.param(HttpError("down", 503), id="unreachable"),
+        pytest.param(b"<html>", id="not-an-image"),
+        pytest.param(b"\xff\xd8\xff" + b"\x00" * 3_000_000, id="too-large"),
+    ],
+)
+def test_a_failed_replacement_download_keeps_the_working_cover(answer: bytes | HttpError) -> None:
+    covers, now, _ = replaced_after_expiry(answer)
+    cover = covers.lookup(make_track())
+    assert cover is not None and cover.url.startswith(LOCAL)
+    assert covers.remote_link(make_track()) == URL
+    now[0] += 599
+    covers.request(make_track(), NOW)
+    assert not covers.run_once()
+    now[0] += 2
+    covers.request(make_track(), NOW)
+    assert covers.run_once()  # searched again after the error pause
+
+
+def test_a_replacement_that_cannot_be_written_keeps_the_working_cover(tmp_path: Path) -> None:
+    now = [1000.0]
+    finder = Finder(Found(URL, "album", "m"))
+    free = [None]
+    files = CoverFiles(tmp_path, free=lambda: free[0], clock=lambda: now[0])
+    covers = CoverService(Store(None), finder, files, Fetch(), clock=lambda: now[0])
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    now[0] += 91 * DAY
+    finder.result = Found(URL2, "album", "m2")
+    free[0] = 1  # type: ignore[call-overload]
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    cover = covers.lookup(make_track())
+    assert cover is not None and cover.url.startswith(LOCAL)
+    assert covers.remote_link(make_track()) == URL
+
+
+def test_a_successful_replacement_switches_to_the_new_cover() -> None:
+    covers, _, fetch = replaced_after_expiry(JPG)
+    cover = covers.lookup(make_track())
+    assert cover is not None and cover.url.startswith(f"/covers/{name_for(URL2)}.jpg")
+    assert covers.remote_link(make_track()) == URL2
+    assert len(fetch.urls) == 2  # downloaded once, not again after storing
+
+
+class Flaky(Fetch):
+    crashing = True
+
+    def __call__(self, url: str) -> bytes:
+        if self.crashing:
+            self.urls.append(url)
+            raise RuntimeError("bug")
+        return super().__call__(url)
+
+
+def test_crashes_do_not_count_toward_the_warning(caplog: pytest.LogCaptureFixture) -> None:
+    now = [1000.0]
+    fetch = Flaky(HttpError("down", 503))
+    covers = service(Finder(Found(URL, "album", "m")), now, fetch=fetch)
+    caplog.set_level(logging.INFO)
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    for _ in range(3):
+        now[0] += 601
+        covers.request(make_track(), NOW)
+        covers.run_once()
+    assert len(fetch.urls) == 4
+    fetch.crashing = False
+    now[0] += 601
+    covers.request(make_track(), NOW)
+    covers.run_once()
+    levels = [r.levelno for r in caplog.records if r.getMessage() == "cover_download_failed"]
+    assert levels == [logging.INFO]
+
+
+@pytest.mark.parametrize("known", [True, False])
+def test_the_cleaning_log_says_whether_the_links_were_known(
+    known: bool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = Store(None)
+    covers = service(Finder(), [1000.0], store)
+    if not known:
+        monkeypatch.setattr(store, "cover_links", lambda: None)
+    caplog.set_level(logging.INFO)
+    covers.housekeep()
+    cleaned = [r for r in caplog.records if r.getMessage() == "cover_cache_cleaned"]
+    assert len(cleaned) == 1 and getattr(cleaned[0], "fields", {})["links_known"] is known

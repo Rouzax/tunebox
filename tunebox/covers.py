@@ -253,9 +253,16 @@ class CoverService:
                 if previous is not None:
                     url, match = previous.url, previous.match
             decision = CoverDecision(track.key, outcome, url, match, self._clock())
-            self._store.put_cover(decision)
-            with self._lock:
-                self._remember(decision)
+            replaced = self._working_cover_replaced_by(track, found) if found else None
+            # With a working cover to replace, switch only once the new image is
+            # on disk; until then the old one keeps serving, with the error pause
+            # before the next search.
+            if replaced is not None and not self._download(track, decision, replaced):
+                outcome = "error"
+                decision = CoverDecision(
+                    track.key, outcome, replaced.url, replaced.match, self._clock()
+                )
+            self._settle(decision)
             event(
                 log,
                 logging.INFO,
@@ -268,10 +275,28 @@ class CoverService:
             )
             # Also when the link is unchanged: save() keeps identical bytes
             # and replaces a cover the catalogue has updated.
-            if url is not None and outcome != "error":
+            if replaced is None and url is not None and outcome != "error":
                 self._download(track, decision)
 
-    def _download(self, track: Track, decision: CoverDecision) -> None:
+    def _settle(self, decision: CoverDecision) -> None:
+        self._store.put_cover(decision)
+        with self._lock:
+            self._remember(decision)
+
+    def _working_cover_replaced_by(self, track: Track, found: Found) -> CoverDecision | None:
+        """The earlier decision when its file is on disk and the search found
+        another link, i.e. a cover that must not be lost to a failed download."""
+        with self._lock:
+            previous = self._known(track.key)
+        if previous is None or previous.url is None or previous.url == found.url:
+            return None
+        return previous if self._files.path_for(previous.url) is not None else None
+
+    def _download(
+        self, track: Track, decision: CoverDecision, keep: CoverDecision | None = None
+    ) -> bool:
+        """True when the image is on disk. With keep, a failure leaves the
+        decision to the caller, which keeps serving keep's cover."""
         link = decision.url
         assert link is not None
         started = time.monotonic()
@@ -280,22 +305,22 @@ class CoverService:
             host = urllib.parse.urlsplit(link).hostname or ""
             if not has_room(self._files.free(), MAX_COVER):
                 self._disk_low(track.key, host, started)
-                return
+                return False
             body = self._fetch(sized(link))
             result = self._files.save(link, body)
         except HttpError as error:
             if error.status in (404, 410):
-                self._dead(track, decision, "gone", host, started)
+                self._dead(track, decision, "gone", host, started, keep)
             elif error.too_large:
-                self._dead(track, decision, SaveResult.TOO_LARGE.value, host, started)
+                self._dead(track, decision, SaveResult.TOO_LARGE.value, host, started, keep)
             else:
                 self._failure(track.key, "unreachable", host, started, error.status)
-            return
+            return False
         except Exception:  # one broken download must not stop the worker
             log.error("cover_download_crashed", exc_info=True, extra={"fields": {"host": host}})
-            # Counted for the retry pause only; the crash is already logged.
-            self._failure(track.key, "crashed", host, started, quiet=True)
-            return
+            # Sets the retry pause only; the crash is already logged.
+            self._failure(track.key, "crashed", host, started, quiet=True, counted=False)
+            return False
         if result in (SaveResult.SAVED, SaveResult.UNCHANGED):
             with self._lock:
                 self._failed.pop(track.key, None)
@@ -310,12 +335,14 @@ class CoverService:
                 bytes=len(body),
                 duration_ms=_ms_since(started),
             )
-        elif result in (SaveResult.NOT_IMAGE, SaveResult.TOO_LARGE):
-            self._dead(track, decision, result.value, host, started)
+            return True
+        if result in (SaveResult.NOT_IMAGE, SaveResult.TOO_LARGE):
+            self._dead(track, decision, result.value, host, started, keep)
         elif result is SaveResult.DISK_LOW:
             self._disk_low(track.key, host, started)
         else:
             self._failure(track.key, "unwritable", host, started)
+        return False
 
     def _disk_low(self, key: str, host: str, started: float) -> None:
         """Not the cover's fault: it sets the retry pause but is not a failure to count."""
@@ -332,14 +359,21 @@ class CoverService:
         )
 
     def _dead(
-        self, track: Track, decision: CoverDecision, reason: str, host: str, started: float
+        self,
+        track: Track,
+        decision: CoverDecision,
+        reason: str,
+        host: str,
+        started: float,
+        keep: CoverDecision | None,
     ) -> None:
         """A link that will not give an image: the error outcome, link kept,
-        searches again after its TTL, and a file saved earlier stays in use."""
-        dead = CoverDecision(track.key, "error", decision.url, decision.match, self._clock())
-        self._store.put_cover(dead)
-        with self._lock:
-            self._remember(dead)
+        searches again after its TTL, and a file saved earlier stays in use.
+        With keep the caller stores the decision."""
+        if keep is None:
+            self._settle(
+                CoverDecision(track.key, "error", decision.url, decision.match, self._clock())
+            )
         self._failure(track.key, reason, host, started)
 
     def _failure(
