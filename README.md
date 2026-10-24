@@ -73,7 +73,8 @@ You need:
 - About 100 MB of disk for the image, plus room for its data: a few MB,
   and the cover cache, which grows to about 100 MB in normal use and never
   past 500 MB.
-- Outgoing internet access to the radio station, Deezer and iTunes.
+- Outgoing internet access to the radio station, Deezer and iTunes, and to
+  the hosts of any logo or default image you link.
 - Optional: a reverse proxy (such as Nginx Proxy Manager, Caddy or Traefik)
   if you want to reach tunebox from your phone or car over HTTPS. Without
   one, tunebox is reachable only from the machine it runs on.
@@ -761,17 +762,19 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   links and copy the uploads (from `data/blobs/`) again at the next start.
   A station's `default_image`, when it is an `https://` link, is downloaded
   the same way into `data/logos/default/`.
-- **Covers** are kept in `data/covers/`: tunebox downloads each cover once,
-  at 600x600, from the Deezer or iTunes link it found, and serves it
-  itself, so listeners' browsers never contact those hosts. A cover
-  appears in the player once its download is done; until then the player
-  shows the station's own image. The folder is capped at 500 MB: when it
-  grows past that, the covers played longest ago are removed. Covers of
-  songs that have not been played for about nine months are forgotten
-  (decision and file). Nothing is downloaded while less than 256 MiB would
-  stay free on the disk (`cover_disk_low` in the log). Delete
-  `data/covers/` to download the covers again as their songs are played;
-  right after that, songs show the station image for a few seconds.
+- **Covers** are kept in `data/covers/`: tunebox downloads each cover
+  once, at 600x600 (both hosts offer that size), from the Deezer or iTunes
+  link it found, and serves it itself, so listeners' browsers never
+  contact those hosts. A cover appears in the player once its download is
+  done; until then the player shows the station's own image. The folder is
+  capped at 500 MB: when it grows past that, the covers played longest ago
+  are removed. A cover whose last lookup is more than a year old is
+  forgotten (decision and file); a song still played is looked up again at
+  least every 90 days, so only songs unplayed for most of a year go.
+  Nothing is downloaded while less than 256 MiB would stay free on the
+  disk (`cover_disk_low` in the log). Delete `data/covers/` to download
+  the covers again as their songs are played; until each download is done,
+  songs show the station image.
 
 ## Troubleshooting
 
