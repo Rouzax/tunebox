@@ -282,16 +282,22 @@ class CoverService:
         link = decision.url
         assert link is not None
         started = time.monotonic()
-        host = urllib.parse.urlsplit(link).hostname or ""
+        host = ""
         try:
+            host = urllib.parse.urlsplit(link).hostname or ""
             body = self._fetch(sized(link))
+            result = self._files.save(link, body)
         except HttpError as error:
             if error.status in (404, 410):
                 self._dead(track, decision, "gone", host, started)
             else:
                 self._failure(track.key, "unreachable", host, started, error.status)
             return
-        result = self._files.save(link, body)
+        except Exception:  # one broken download must not stop the worker
+            log.error("cover_download_crashed", exc_info=True, extra={"fields": {"host": host}})
+            # Counted for the retry pause only; the crash is already logged.
+            self._failure(track.key, "crashed", host, started, quiet=True)
+            return
         if result in (SaveResult.SAVED, SaveResult.UNCHANGED):
             with self._lock:
                 self._failed.pop(track.key, None)

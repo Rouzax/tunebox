@@ -196,6 +196,32 @@ def test_names_without_latin_letters_are_never_queued() -> None:
     assert not covers.run_once()
 
 
+class CrashingFetch(Fetch):
+    def __call__(self, url: str) -> bytes:
+        self.urls.append(url)
+        raise RuntimeError("bug")
+
+
+def test_a_crashing_download_does_not_stop_the_worker(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    now = [1000.0]
+    fetch = CrashingFetch()
+    covers = service(Finder(Found(URL, "album", "m")), now, fetch=fetch, folder=tmp_path)
+    covers.request(make_track("A", "One"), NOW)
+    covers.request(make_track("B", "Two"), NOW)
+    assert covers.run_once()
+    assert covers.run_once()
+    assert len(fetch.urls) == 2 and covers.lookup(make_track("A", "One")) is None
+    crashes = [r for r in caplog.records if r.getMessage() == "cover_download_crashed"]
+    assert len(crashes) == 2 and crashes[0].levelno == logging.ERROR
+    covers.request(make_track("A", "One"), NOW)
+    assert not covers.run_once()  # waits ten minutes like any failed download
+    now[0] += 601
+    covers.request(make_track("A", "One"), NOW)
+    assert covers.run_once()
+
+
 def test_a_search_downloads_the_600_image_in_the_same_job(tmp_path: Path) -> None:
     fetch = Fetch()
     covers = service(Finder(Found(URL, "album", "m")), [1000.0], fetch=fetch, folder=tmp_path)
