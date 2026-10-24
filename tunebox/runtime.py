@@ -148,6 +148,8 @@ class Runtime:
             for channel_id, gone in self._live.items():
                 if channel_id not in live:
                     self._retire(gone)
+                    if self._logos is not None:
+                        self._logos.forget(channel_id)
             self._live = live
             self._retired = [thread for thread in self._retired if thread.is_alive()]
             channels = MappingProxyType({cid: entry.channel for cid, entry in live.items()})

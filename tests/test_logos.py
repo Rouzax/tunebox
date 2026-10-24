@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import os
 import threading
@@ -349,3 +350,52 @@ def test_an_unusable_default_image_is_not_fetched_and_warned_once(
     assert http.urls == []
     warnings = [r for r in caplog.records if r.getMessage() == "default_image_unusable"]
     assert len(warnings) == 1
+
+
+def test_a_failure_removing_a_default_image_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: JPG), Blobs(tmp_path / "blobs"))
+    logos.refresh(channel_config(default_image=DEFAULT_URL))
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    logos.refresh(channel_config(default_image=None))
+    failed = [r for r in caplog.records if r.getMessage() == "logo_failed"]
+    assert failed and all(getattr(r, "fields", {}).get("kind") == "default" for r in failed)
+
+
+def test_forget_removes_everything_downloaded_for_a_channel(tmp_path: Path) -> None:
+    http = FakeHttp(lambda url: BIG_PNG if url == URL else JPG)
+    logos = Logos(tmp_path, http, Blobs(tmp_path / "blobs"))
+    logos.refresh(channel_config(logo=URL, default_image=DEFAULT_URL))
+    logos.refresh(
+        dataclasses.replace(channel_config(logo=URL, default_image=DEFAULT_URL), id="keep")
+    )
+    assert (tmp_path / "small" / "owr.png").exists()
+    logos.forget("owr")
+    logos.forget("owr")  # nothing left is fine
+    left = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*") if p.is_file())
+    assert left == [
+        "default/keep.jpg",
+        "default/keep.url",
+        "keep.png",
+        "keep.url",
+        "small/keep.png",
+    ]
+
+
+def test_forget_logs_what_it_cannot_remove(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), Blobs(tmp_path / "blobs"))
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    logos.forget("owr")
+    failed = [r for r in caplog.records if r.getMessage() == "logo_failed"]
+    assert failed and all(getattr(r, "fields", {}).get("kind") == "forget" for r in failed)

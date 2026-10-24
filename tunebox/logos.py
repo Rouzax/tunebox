@@ -132,7 +132,7 @@ class Logos:
                 self._unavailable_reported = True
                 event(log, logging.WARNING, "logos_unavailable", error=str(error))
             return
-        if channel.logo and not self._current(channel.id, channel.logo, self._dir):
+        if channel.logo and not self._current(channel.id, channel.logo, self._dir, default=False):
             if BLOB_REF.fullmatch(channel.logo):
                 self._copy_blob(channel.id, channel.logo)
             else:
@@ -147,7 +147,7 @@ class Logos:
         value = channel.default_image
         folder = self._folder(False, default=True)
         if value is not None and value.startswith("https://"):
-            if not self._current(channel.id, value, folder):
+            if not self._current(channel.id, value, folder, default=True):
                 self._fetch(channel.id, value, folder)
             return
         if value is not None and not _is_local_path(value):
@@ -159,7 +159,37 @@ class Logos:
             try:
                 (folder / name).unlink(missing_ok=True)
             except OSError as error:
-                event(log, logging.WARNING, "logo_failed", channel=channel.id, error=str(error))
+                event(
+                    log,
+                    logging.WARNING,
+                    "logo_failed",
+                    channel=channel.id,
+                    kind="default",
+                    error=str(error),
+                )
+
+    def forget(self, channel_id: str) -> None:
+        """Removes everything downloaded for a channel that no longer exists:
+        the logo and its small copy, and the default image, each with its
+        recorded source. A missing file is fine."""
+        names = (*(f"{channel_id}.{ext}" for ext in EXTENSIONS), f"{channel_id}.url")
+        paths = [
+            *(self._dir / name for name in names),
+            self._dir / "small" / f"{channel_id}.png",
+            *(self._folder(False, default=True) / name for name in names),
+        ]
+        for path in paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as error:
+                event(
+                    log,
+                    logging.WARNING,
+                    "logo_failed",
+                    channel=channel_id,
+                    kind="forget",
+                    error=str(error),
+                )
 
     def _make_small(self, channel_id: str) -> None:
         """Keeps small/<id>.png in step with the logo: made when the logo is
@@ -201,12 +231,12 @@ class Logos:
             small_bytes=len(small),
         )
 
-    def _current(self, channel_id: str, url: str, folder: Path) -> bool:
+    def _current(self, channel_id: str, url: str, folder: Path, default: bool) -> bool:
         try:
             saved = (folder / f"{channel_id}.url").read_text(encoding="utf-8")
         except OSError:
             return False
-        return saved == url and self.path_for(channel_id, default=folder != self._dir) is not None
+        return saved == url and self.path_for(channel_id, default=default) is not None
 
     def _copy_blob(self, channel_id: str, ref: str) -> None:
         source = self._blobs.path(ref)

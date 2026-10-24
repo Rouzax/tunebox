@@ -39,10 +39,14 @@ class RecordingLogos(Logos):
         super().__init__(directory, FakeHttp(lambda _url: b""), Blobs(directory.parent / "blobs"))
         self.requested: list[str | None] = []
         self.requested_defaults: list[str | None] = []
+        self.forgotten: list[str] = []
 
     def request(self, channel: ChannelConfig) -> None:
         self.requested.append(channel.logo)
         self.requested_defaults.append(channel.default_image)
+
+    def forget(self, channel_id: str) -> None:
+        self.forgotten.append(channel_id)
 
 
 class Harness:
@@ -305,3 +309,13 @@ def test_apply_recovers_once_the_bad_source_is_fixed(harness: Harness) -> None:
     assert harness.runtime.apply() == 2
     assert set(harness.runtime.snapshot.channels) == {"owr", "bad"}
     assert harness.runtime.snapshot.version == 2
+
+
+def test_a_removed_channel_loses_its_downloaded_files(harness: Harness) -> None:
+    harness.commit(rows(doc("a"), doc("b")))
+    harness.runtime.apply()
+    harness.commit(rows(doc("a")))
+    harness.runtime.apply()
+    harness.commit(rows(doc("a")))
+    harness.runtime.apply()
+    assert harness.logos.forgotten == ["b"]
