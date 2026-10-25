@@ -840,3 +840,98 @@ def test_a_clear_cut_short_is_finished_at_start(path: Path, clock: Clock, free: 
         assert second.settings() == UsageSettings(365, False, True)
     assert addresses(path) == [None]
     assert meta(path, "store_addresses") == "0"
+
+
+def test_work_once_right_after_start_runs_on_the_writer(
+    path: Path,
+    clock: Clock,
+    free: Free,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, "tunebox.usage")
+    original = Usage.run_forever
+
+    def late_run_forever(self: Usage, stop: threading.Event) -> None:
+        time.sleep(0.05)  # start() has returned before the writer begins
+        original(self, stop)
+
+    monkeypatch.setattr(Usage, "run_forever", late_run_forever)
+    with started(make(path, clock, free)) as writer:
+        writer.visit(ID, AGENT, None)
+        writer.work_once()
+        writer.work_once()
+        assert writer.live()["saved"] is True
+        assert query(path, "SELECT device FROM visits") == [(ID,)]
+    assert events(caplog, "usage_store_unavailable") == []
+    assert events(caplog, "usage_failed") == []
+
+
+def test_a_command_running_at_the_deadline_is_waited_for(
+    usage: Usage, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage.visit(ID, AGENT, None)
+    usage.work_once()
+    real_rename = usagedb.rename_device
+
+    def slow_rename(db: sqlite3.Connection, device: str, name: str | None) -> bool:
+        time.sleep(0.3)
+        return real_rename(db, device, name)
+
+    monkeypatch.setattr(usagedb, "rename_device", slow_rename)
+    monkeypatch.setattr(usage_module, "COMMAND_WAIT_S", 0.05)
+    assert usage.rename(ID, "Car") is True
+    assert query(path, "SELECT name FROM devices") == [("Car",)]
+
+
+def test_a_command_not_started_at_the_deadline_is_cancelled(
+    usage: Usage, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage.visit(ID, AGENT, None)
+    usage.work_once()
+    entered, go = threading.Event(), threading.Event()
+
+    def slow_write(*args: object) -> usagedb.Written:
+        entered.set()
+        go.wait(5)
+        return REAL_WRITE(*args)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(usagedb, "write_batch", slow_write)
+    flusher = threading.Thread(target=usage.work_once)
+    flusher.start()
+    assert entered.wait(5)
+    monkeypatch.setattr(usage_module, "COMMAND_WAIT_S", 0.05)
+    with pytest.raises(UsageUnavailable):
+        usage.rename(ID, "Car")
+    monkeypatch.setattr(usage_module, "COMMAND_WAIT_S", COMMAND_WAIT_S)
+    go.set()
+    flusher.join(5)
+    usage.work_once()
+    assert query(path, "SELECT name FROM devices") == [(None,)]
+
+
+def test_a_batch_requeued_after_an_address_off_keeps_no_address(
+    usage: Usage, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage.set_addresses(True)
+    usage.visit(ID, AGENT, ADDRESS)
+    lives: list[Live] = []
+    original = Live.detach
+
+    def capturing_detach(
+        self: Live,
+    ) -> tuple[list[VisitRow], list[SessionRow], list[tuple[SessionRow, float]]]:
+        lives.append(self)
+        return original(self)
+
+    def off_then_crash(*_: object) -> usagedb.Written:
+        lives[-1].addresses = False  # the switch lands after the writer's check
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(Live, "detach", capturing_detach)
+    monkeypatch.setattr(usagedb, "write_batch", off_then_crash)
+    usage.work_once()
+    monkeypatch.setattr(usagedb, "write_batch", REAL_WRITE)
+    usage.set_addresses(True)
+    usage.work_once()
+    assert query(path, "SELECT address FROM visits") == [(None,)]

@@ -283,11 +283,9 @@ class Usage:
         except TimeoutError:
             if future.cancel():
                 raise UsageUnavailable from None
-        # Already running on the writer, so its outcome is the answer.
-        try:
-            return future.result(timeout=COMMAND_WAIT_S)
-        except TimeoutError:
-            raise UsageUnavailable from None
+        # Already running on the writer: waited for to the end, so that
+        # UsageUnavailable always means nothing changed.
+        return future.result()
 
     # Panel reads.
 
@@ -400,6 +398,9 @@ class Usage:
         self._thread = threading.Thread(
             target=self.run_forever, args=(stop,), name="usage", daemon=True
         )
+        # Before the thread runs, so a work_once right after start() is
+        # queued and never opens a connection on the caller's thread.
+        self._writer = self._thread
         self._thread.start()
 
     def stop_and_join(self, deadline: float) -> None:
@@ -409,8 +410,9 @@ class Usage:
             self._thread.join(max(0.0, deadline - time.monotonic()))
 
     def work_once(self) -> None:
-        """One round. While run_forever runs it is queued to the writer,
-        whose thread alone may use the connection."""
+        """One round. Once a writer has started it is queued to it, whose
+        thread alone may use the connection; after the writer has ended it
+        answers UsageUnavailable instead of opening one here."""
         writer = self._writer
         if writer is not None and writer is not threading.current_thread():
             self._call(None)
@@ -418,7 +420,8 @@ class Usage:
             self._round(self._never)
 
     def run_forever(self, stop: threading.Event) -> None:
-        self._writer = threading.current_thread()
+        if self._writer is None:
+            self._writer = threading.current_thread()
         try:
             self._round(stop)
             while not stop.is_set():
@@ -433,7 +436,7 @@ class Usage:
             self._live.close_all()
             self._round(stop, final=True)
         finally:
-            self._writer = None
+            # _writer stays set: a later work_once must not reopen here.
             self._fail_quietly()
             while True:
                 try:
@@ -500,19 +503,12 @@ class Usage:
             try:
                 if not has_room(self._free(), _ROOM):
                     raise _DiskLow
+                sessions = [*closed, *(s for s, _ in open_rows)]
                 # Addresses may have been switched off since detach: what is
                 # written after the switch carries none.
-                if not self._live.addresses:
-                    for visit in visits:
-                        visit.address = None
-                    for session in (*closed, *(s for s, _ in open_rows)):
-                        session.address = None
+                self._live.strip_if_off(visits, sessions)
                 written = usagedb.write_batch(
-                    db,
-                    visits,
-                    [*closed, *(s for s, _ in open_rows)],
-                    set(self._live.names),
-                    self._zone,
+                    db, visits, sessions, set(self._live.names), self._zone
                 )
             except BaseException:
                 self._live.requeue(visits, closed)

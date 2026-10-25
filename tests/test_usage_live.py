@@ -417,3 +417,29 @@ def test_an_older_close_does_not_replace_a_newer_last_ended() -> None:
     ended = live.last_ended()
     assert ended is not None
     assert ended["channel"] == "npo" and ended["label"] == f"Unidentified player · {AGENT}"
+
+
+def test_requeue_strips_addresses_while_they_are_off() -> None:
+    live, _ = make()
+    live.addresses = True
+    live.visit(ID, AGENT, "198.51.100.7")
+    live.heard(ID, "owr", "Default", AGENT, "198.51.100.7")
+    live.close_all()
+    visits, closed, _ = live.detach()
+    live.addresses = False
+    live.requeue(visits, closed)
+    visits, closed, _ = live.detach()
+    assert [v.address for v in visits] == [None]
+    assert [s.address for s in closed] == [None]
+
+
+def test_strip_if_off_leaves_rows_alone_while_addresses_are_on() -> None:
+    live, _ = make()
+    live.addresses = True
+    visit = VisitRow(1.0, ID, AGENT, "198.51.100.7")
+    session = SessionRow(None, ID, "owr", "Default", 1.0, 1.0, AGENT, "198.51.100.7")
+    live.strip_if_off([visit], [session])
+    assert visit.address == session.address == "198.51.100.7"
+    live.addresses = False
+    live.strip_if_off([visit], [session])
+    assert visit.address is None and session.address is None

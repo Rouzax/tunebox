@@ -185,9 +185,18 @@ class Live:
                 gone = {(kind, i) for _, kind, i in ages}
                 all_visits = [v for i, v in enumerate(all_visits) if (0, i) not in gone]
                 all_closed = [s for i, s in enumerate(all_closed) if (1, i) not in gone]
+            if not self._addresses:
+                self._strip(all_visits, all_closed)
             self._visits, self._closed = all_visits, all_closed
             self._dropped += max(excess, 0)
             return max(excess, 0)
+
+    def strip_if_off(self, visits: list[VisitRow], sessions: list[SessionRow]) -> None:
+        """For rows already detached: checked and stripped under the lock,
+        so an address-off cannot land between the two."""
+        with self._lock:
+            if not self._addresses:
+                self._strip(visits, sessions)
 
     def take_dropped(self) -> int:
         """Rows dropped past MAX_PENDING since the last call, for the
@@ -251,6 +260,13 @@ class Live:
                 "last_seen": session.last_seen,
                 "agent": session.agent,
             }
+
+    @staticmethod
+    def _strip(visits: list[VisitRow], sessions: list[SessionRow]) -> None:
+        for visit in visits:
+            visit.address = None
+        for session in sessions:
+            session.address = None
 
     def _trim(self) -> None:
         """Bounds memory between flushes and through an outage: past
