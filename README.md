@@ -568,6 +568,64 @@ A wrong code there counts towards the same limits as a wrong code at login
 (5 per address in 15 minutes), but it is logged as `admin_reauth_failed`,
 which the CrowdSec files do not ban on.
 
+### Usage statistics
+
+The **Usage** page shows who listens and how much. It exists only while
+the admin panel is on: with the panel off, tunebox records nothing, sets no
+cookie and creates no `usage.db`.
+
+What tunebox records:
+
+- **A visit** each time a browser loads the player page.
+- **Listening** while a player plays. The player asks tunebox every 10
+  seconds what is on air, and names the stream it plays only while audio
+  plays; those questions make up a listening session. A pause, a stop or a
+  gap of a minute or more ends the session, and another station or stream
+  starts a new one. The audio itself never passes through tunebox, so this
+  measures how long a player played, not data sent.
+- **A device** per browser, through a cookie named `tunebox_device`: a
+  random id that lasts a year (renewed on each visit), is sent only to
+  tunebox and grants nothing. The PIN and the admin login never read it.
+  A device that has not played shows only as a count ("Visitors that never
+  played"). A player page opened before this was installed, or a browser
+  that refuses cookies, shows as "Unidentified player".
+
+The page has three parts:
+
+- **Now**: who is listening, to which station and stream, and for how long,
+  refreshed every 10 seconds; when nobody is, the last session that ended.
+- **Over time**: listening hours and visits per day (7 or 30 days) or per
+  month (12 months, All), the top stations and streams, browsers and
+  systems, and the most listeners at once. Days are local days in the time
+  zone tunebox runs in (`TZ`, set in the compose file); set `TZ` before the
+  first start, because days already counted keep the zone they were counted
+  in.
+- **Devices**: each device that has played, with its browser and system,
+  first and last seen, and hours in the last 30 days. Open one to see its
+  sessions and top stations, to name it ("Car", "Phone") or to delete it
+  with its history. A deleted device that loads the player again comes
+  back as a new, unnamed device.
+
+On the Settings page, **Usage** has two settings:
+
+- **Keep details for** (30 to 3,650 days, 365 by default): visits and
+  sessions older than this are deleted once a day, after they have been
+  added to the daily totals, which are kept. Shortening it deletes the
+  older details at the next daily run. Unnamed devices that have not been
+  seen for that long are deleted too; named ones are kept.
+- **Store addresses** (off by default): also store the address each visit
+  and session came from. Switching it on asks for a code from your
+  authenticator app. Switching it off stops storing addresses at once and
+  clears the stored ones; if tunebox cannot write its usage data at that
+  moment, the page says the clear is still to come, and tunebox does it as
+  soon as it can.
+
+Usage data lives in `data/usage.db`, apart from the stations and the
+account, so a problem with it never affects saving stations or logging in.
+If a flood of made-up devices reaches the daily limits (10,000 new visits,
+devices and sessions a day), the rest is counted but not stored; sessions
+of devices you have named are always stored.
+
 ## Use it with PawTunes
 
 You only need this while you still use PawTunes. tunebox can supply the
@@ -742,7 +800,9 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   `tunebox.db-wal` along with it. `data/blobs/` holds the logos uploaded
   in the panel, the only copy of those images, so back it up with the
   database. `data/covers/` and `data/logos/` are caches that tunebox
-  fills again by itself; they need no backup.
+  fills again by itself; they need no backup. `data/usage.db` holds the
+  [usage statistics](#usage-statistics); back it up only if you want to
+  keep them (copy `usage.db-wal` with it, or stop tunebox first).
 - **Reset** the recent lists and covers: stop tunebox, delete
   `data/tunebox.db`, `data/tunebox.db-wal` and `data/tunebox.db-shm`, and
   start it again. History refills from the stations and covers are looked
@@ -752,6 +812,12 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   `python -m tunebox admin setup`) and the listening PIN are gone. To keep
   the stations, export them first and import the file after the reset (see
   [Export and import](#manage-the-stations)).
+- **Reset** the usage statistics: stop tunebox, delete `data/usage.db`,
+  `data/usage.db-wal` and `data/usage.db-shm`, and start it again. Deleting
+  them while tunebox runs resets nothing: tunebox keeps writing to the file
+  it has open. The two usage settings go back to their defaults (365 days,
+  addresses off); browsers keep their device cookie and come back as
+  new devices.
 - **Logos** are kept in `data/logos/`, as downloaded. A PNG logo larger than
   128 px also gets a small copy in `data/logos/small/`, made at start-up
   (`logo_shrunk` in the log), which the station list shows; the original is
@@ -792,6 +858,8 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | An upload says "Uploaded logos have reached their 100 MB limit" (`logo_store_full` in the log) | The uploads in `data/blobs/` add up to 100 MB. | Wait for a restart to remove uploads that no station and no History entry names once they are a day old; see [Logos](#logos). |
 | The edit form says "tunebox cannot store the image right now" after an upload (`logo_store_failed` in the log) | `data/blobs/` cannot be written: the disk is full or the folder is not owned by user id 1000. | Free disk space or fix the owner (`sudo chown -R 1000:1000 data`), then upload the image again. |
 | `logo_missing` or `logo_blob_missing` in the log; a station shows no logo | The station names an uploaded logo (`blob:...`) whose file is gone from `data/blobs/`, for example after that folder was deleted or the database was restored without it. | Edit the station, upload the logo again and save. Back up `data/blobs/` together with `tunebox.db`. |
+| The Usage page says "Usage data is not being saved" (`usage_store_unavailable` in the log) | `data/usage.db` cannot be written: the disk is nearly full (`reason` `disk_low`: less than 256 MB would stay free), the folder is not owned by user id 1000 (`open_failed` or `write_failed`), or the file comes from a newer tunebox (`schema_newer`). Live listeners still show; up to 10,000 waiting visits and sessions are kept in memory. | Free disk space or fix the owner (`sudo chown -R 1000:1000 data`); tunebox tries again every minute and logs `usage_store_recovered`. After going back to an older image, update the image again, or reset the usage statistics (see [Update, back up and reset](#update-back-up-and-reset)). |
+| The Usage page says "tunebox cannot read its usage data right now" | The same causes; reading the history needs the file too. | As above. |
 | Saving a title rule is refused | The pattern could stall tunebox (see [Manage the stations](#manage-the-stations)). | Simplify it as the message says: no repeat inside a repeated group, such as `(\w+\s?)*`, and no three repeats in a row that take the same characters, such as `.*-.*-.*` (use `[^-]*` for the parts between separators). |
 | The admin page says "No admin account yet" | No account was set up. | Run the setup command in [Set up the admin panel](#set-up-the-admin-panel). |
 | The log says `tunebox: cannot listen on 0.0.0.0:<port>` | `port` in `[server]` was changed to one that is not free inside the container. | Remove `port` from `[server]` (8080 is the default) and change the published port in `compose.yaml` instead. |
@@ -888,7 +956,7 @@ is reported at startup instead of being ignored.
 | `TUNEBOX_CONFIG` | `/data/tunebox.toml` | Path to the configuration file. |
 | `LOG_LEVEL` | `info` | Log detail: a level, optionally with per-part levels, such as `info,tunebox.covers=debug`. |
 | `TUNEBOX_WEB` | the built-in `web` folder | Folder with the files served at `/`. |
-| `TZ` | | Time zone, as in the compose file. Log times are always UTC. |
+| `TZ` | | Time zone, as in the compose file: the days the usage statistics count in (UTC when unset or unknown). Log times are always UTC. |
 
 ### HTTP API
 
