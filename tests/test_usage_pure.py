@@ -138,12 +138,27 @@ def test_aggregate_clips_to_the_day_and_sums_by_key() -> None:
 @pytest.mark.parametrize(
     ("intervals", "peak"),
     [
-        ([iv(0, 10), iv(5, 15)], 2),  # overlapping
-        ([iv(0, 10), iv(10, 20)], 1),  # touching: an end counts before a start
-        ([iv(0, 30), iv(10, 20)], 2),  # nested
-        ([iv(5, 15), iv(5, 15)], 2),  # two single polls at the same instant
+        ([iv(0, 10), iv(5, 15, device="e")], 2),  # overlapping
+        ([iv(0, 10), iv(10, 20, device="e")], 1),  # touching: an end counts before a start
+        ([iv(0, 30), iv(10, 20, device="e")], 2),  # nested
+        ([iv(5, 15), iv(5, 15, device="e")], 2),  # two single polls at the same instant
         ([], 0),
     ],
 )
 def test_aggregate_peak(intervals: list[Interval], peak: int) -> None:
     assert aggregate(intervals, [], 0, 100).peak == peak
+
+
+def test_aggregate_clips_a_device_s_widened_session_at_its_next_one() -> None:
+    # A single poll widened to POLL_S, then a station change 5 s later.
+    totals = aggregate([iv(0, POLL_S), iv(5, 60, "qmusic")], [], 0, 100)
+    assert totals.peak == 1
+    assert totals.seconds_channel == {"owr": 5.0, "qmusic": 55.0}
+    assert totals.seconds_device == {"d": 60.0}
+
+
+def test_aggregate_leaves_overlaps_of_different_or_unidentified_devices() -> None:
+    assert aggregate([iv(0, 10), iv(5, 60, device="e")], [], 0, 100).peak == 2
+    unidentified = aggregate([iv(0, 10, device=None), iv(5, 60, device=None)], [], 0, 100)
+    assert unidentified.peak == 2
+    assert unidentified.seconds_device == {"-": 65.0}

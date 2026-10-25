@@ -8,8 +8,9 @@ import re
 import secrets
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, tzinfo
+from itertools import pairwise
 
 from tunebox.pin import read_cookie
 
@@ -129,6 +130,27 @@ class DayTotals:
     peak: int = 0
 
 
+def _one_at_a_time(intervals: Iterable[Interval]) -> list[Interval]:
+    """Ends each interval of a known device at that device's next start. A
+    device plays one stream at a time, but interval_end can widen a short
+    session past the start of the next one, which would count the device
+    twice over the overlap. Unidentified intervals may be different players
+    and stay as they are."""
+    kept: list[Interval] = []
+    by_device: defaultdict[str, list[Interval]] = defaultdict(list)
+    for interval in intervals:
+        if interval.device is None:
+            kept.append(interval)
+        else:
+            by_device[interval.device].append(interval)
+    for own in by_device.values():
+        own.sort(key=lambda interval: interval.start)
+        for interval, following in pairwise(own):
+            kept.append(replace(interval, end=min(interval.end, following.start)))
+        kept.append(own[-1])
+    return kept
+
+
 def aggregate(
     intervals: Iterable[Interval], visits: Iterable[float], start: float, end: float
 ) -> DayTotals:
@@ -136,12 +158,13 @@ def aggregate(
     clipped to [start, end). The peak sweeps interval starts and ends; at
     one instant an end counts before a start, so touching sessions are one
     listener. Widths are taken as given: callers widen a single poll with
-    interval_end, or it would count nothing."""
+    interval_end, or it would count nothing. A known device counts as one
+    listener at a time (_one_at_a_time)."""
     sums: dict[str, defaultdict[str, float]] = {
         name: defaultdict(float) for name in ("channel", "stream", "device", "agent")
     }
     points: list[tuple[float, int]] = []
-    for interval in intervals:
+    for interval in _one_at_a_time(intervals):
         lo, hi = max(interval.start, start), min(interval.end, end)
         if hi <= lo:
             continue
