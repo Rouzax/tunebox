@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bars, duration, endedLine, stationName} from '../../web_admin/js/usage.js';
+import {DELETE_QUESTION, bars, duration, endedLine, stationName} from '../../web_admin/js/usage.js';
 
 test('a deleted station shows by its id', () => {
     const channels = [{id: 'owr', doc: {name: 'OWR'}}, {id: 'bare', doc: {}}];
@@ -38,4 +38,9 @@ test('the last ended session names the station and how long ago', () => {
     assert.equal(endedLine(last, channels, 1000 + 14 * 60), 'Car · Qmusic · ended 14 min ago');
     // A clock behind the server's never says "in the future".
     assert.equal(endedLine(last, channels, 990), 'Car · Qmusic · ended 0 s ago');
+});
+
+test('the delete question says today loses the device', () => {
+    assert.equal(DELETE_QUESTION,
+        "Delete this device and its listening history? Totals of finished days stay; today's figures lose this device.");
 });

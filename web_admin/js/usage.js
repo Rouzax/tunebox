@@ -7,6 +7,10 @@ import {tickets} from './state.js';
 const PAGE = 50;
 const LIVE_EVERY_MS = 10000;
 const RANGES = [['7d', '7 days'], ['30d', '30 days'], ['12m', '12 months'], ['all', 'All']];
+// Finished days keep their stored totals; today is counted from the rows,
+// which go with the device.
+export const DELETE_QUESTION =
+    "Delete this device and its listening history? Totals of finished days stay; today's figures lose this device.";
 
 // A station deleted since it was played shows by its id.
 export function stationName(channels, id) {
@@ -343,7 +347,7 @@ function devicesPart(ctx, changed) {
         const remove = button('delete', 'Delete this device', () => {
             const keep = button('close', 'Keep it', () => question.replaceChildren(), {class: 'quiet'});
             question.replaceChildren(
-                el('span', null, 'Delete this device and its listening history? The daily totals stay.'),
+                el('span', null, DELETE_QUESTION),
                 button('delete', 'Delete', () => erase().catch(unreachable(ctx)), {class: 'danger confirm-delete'}),
                 keep);
             keep.focus();
