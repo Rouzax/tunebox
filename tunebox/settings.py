@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import logging
 import sqlite3
 import threading
 import time
@@ -28,12 +27,9 @@ from tunebox.config import (
     keeps_a_channel,
     validate_state,
 )
-from tunebox.logs import event
+from tunebox.migrate import migrate
 
-log = logging.getLogger(__name__)
-
-# Each entry upgrades the schema by one version; never edit a released one.
-# Statements are separated by ";" and contain none themselves.
+# Applied by tunebox.migrate.migrate, which states the rules for entries.
 MIGRATIONS: tuple[str, ...] = (
     """
     CREATE TABLE config_version (version INTEGER NOT NULL);
@@ -204,7 +200,7 @@ class Settings:
             # The cover store writes to the same file from its own connection.
             db.execute("PRAGMA busy_timeout=5000")
             db.execute("PRAGMA foreign_keys=ON")
-            _migrate(db)
+            migrate(db, MIGRATIONS, "settings")
         except (OSError, sqlite3.Error) as error:
             if db is not None:
                 db.close()
@@ -414,27 +410,3 @@ class Settings:
             "INSERT INTO settings VALUES (?, ?)",
             [("defaults", _json(state.defaults)), ("player", _json(state.player))],
         )
-
-
-def _migrate(db: sqlite3.Connection) -> None:
-    db.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
-    row = db.execute("SELECT version FROM schema_version").fetchone()
-    current = 0 if row is None else cast(int, row[0])
-    if current > len(MIGRATIONS):
-        raise sqlite3.DatabaseError(
-            f"schema version {current} is newer than this tunebox knows ({len(MIGRATIONS)})"
-        )
-    for number in range(current, len(MIGRATIONS)):
-        db.execute("BEGIN IMMEDIATE")
-        try:
-            for statement in MIGRATIONS[number].split(";"):
-                if statement.strip():
-                    db.execute(statement)
-            db.execute("DELETE FROM schema_version")
-            db.execute("INSERT INTO schema_version VALUES (?)", (number + 1,))
-            db.execute("COMMIT")
-        except BaseException:
-            if db.in_transaction:
-                db.execute("ROLLBACK")
-            raise
-        event(log, logging.INFO, "migration_applied", version=number + 1)

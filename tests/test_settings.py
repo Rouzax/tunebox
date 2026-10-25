@@ -245,12 +245,10 @@ def test_an_unchanged_state_is_not_stored_again(settings: Settings) -> None:
 def test_each_migration_is_logged(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
     Settings(tmp_path / "new.db").close()
-    versions = [
-        r.__dict__["fields"]["version"]
-        for r in caplog.records
-        if r.getMessage() == "migration_applied"
+    fields = [r.__dict__["fields"] for r in caplog.records if r.getMessage() == "migration_applied"]
+    assert fields == [
+        {"database": "settings", "version": number} for number in range(1, len(MIGRATIONS) + 1)
     ]
-    assert versions == list(range(1, len(MIGRATIONS) + 1))
 
 
 def with_logo(base: ConfigState, ref: str) -> ConfigState:
