@@ -127,6 +127,9 @@ class SessionRow:
     address: str | None
     device: str | None = None
     resolved: bool = False
+    # Refused by the listens cap (Written.dropped): still live listening,
+    # never sent to write_batch again.
+    discarded: bool = False
 
 
 @dataclass(frozen=True)

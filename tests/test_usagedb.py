@@ -206,6 +206,8 @@ def test_a_dropped_session_is_not_written_and_touches_no_day(
     written = u.write_batch(db, [], [s], set(), UTC)
     assert written.rowids == {} and written.days == set()
     assert written.dropped == {id(s)}
+    # Marking it is the caller's job (Live.adopt); the row itself is untouched.
+    assert not s.discarded and s.rowid is None
     dropped = dict(db.execute("SELECT key, value FROM daily WHERE metric = 'dropped'").fetchall())
     assert dropped == {"listens": 1}
 
