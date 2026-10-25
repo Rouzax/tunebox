@@ -1029,10 +1029,12 @@ class Admin:
 
     def _usage_summary(self, request: Request, _session: Session, usage: Usage) -> Response:
         query = _query(request)
+        range_name = query.get("range", "") if query else ""
         try:
-            return _json(200, usage.summary(query["range"] if query else ""))
-        except ValueError, KeyError:
+            summary = usage.summary(range_name)
+        except ValueError:
             return _error(400, "bad_request")
+        return _json(200, summary)
 
     def _usage_devices(self, _request: Request, _session: Session, usage: Usage) -> Response:
         return _json(200, usage.devices())

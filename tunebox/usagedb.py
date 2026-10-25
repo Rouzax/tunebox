@@ -8,7 +8,7 @@ import contextlib
 import sqlite3
 import threading
 from collections.abc import Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta, tzinfo
 from pathlib import Path
 from typing import cast
@@ -48,6 +48,7 @@ MIGRATIONS: tuple[str, ...] = (
     "CREATE TABLE daily (day TEXT NOT NULL, metric TEXT NOT NULL, key TEXT NOT NULL,"
     " value REAL NOT NULL, PRIMARY KEY (day, metric, key));"
     "CREATE INDEX daily_metric ON daily (metric, day);"
+    "CREATE INDEX daily_key ON daily (metric, key);"
     "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 )
 
@@ -130,6 +131,9 @@ class SessionRow:
     # Refused by the listens cap (Written.dropped): still live listening,
     # never sent to write_batch again.
     discarded: bool = False
+    # The last_seen the stored row holds, set after the COMMIT: an update
+    # touches only the days from here to the new last_seen.
+    stored_last_seen: float | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +143,8 @@ class Written:
     days: set[str]
     # id() of each SessionRow the listens cap refused: never to be resent.
     dropped: set[int]
+    # Keyed like rowids: the last_seen each stored row now holds.
+    last_seen: dict[int, float] = field(default_factory=dict[int, float])
 
 
 class _Caps:
@@ -190,8 +196,12 @@ def write_batch(
 ) -> Written:
     """One flush in one transaction. Visits come first, so a session from a
     page loaded in the same flush finds its device row. A session the cap
-    refuses is in dropped, not in rowids, and touches no day."""
+    refuses is in dropped, not in rowids, and touches no day. An update
+    touches the days from the stored last_seen on, and none when it is
+    unchanged, so an open session does not re-roll its first day on every
+    flush."""
     rowids: dict[int, tuple[int, str | None]] = {}
+    stored: dict[int, float] = {}
     days: set[str] = set()
     dropped: set[int] = set()
     with _transaction(db):
@@ -214,12 +224,15 @@ def write_batch(
                 )
                 days.add(day)
         for row in sessions:
+            # Read once: a request thread may move it on meanwhile.
+            last_seen = row.last_seen
             if row.rowid is not None:
-                db.execute(
-                    "UPDATE listens SET last_seen = ? WHERE id = ?", (row.last_seen, row.rowid)
-                )
+                db.execute("UPDATE listens SET last_seen = ? WHERE id = ?", (last_seen, row.rowid))
                 rowids[id(row)] = (row.rowid, row.device)
-                days |= _days(row.started_at, row.last_seen, zone)
+                stored[id(row)] = last_seen
+                before = row.started_at if row.stored_last_seen is None else row.stored_last_seen
+                if last_seen != before:
+                    days |= _days(before, interval_end(row.started_at, last_seen), zone)
                 continue
             device = None
             if row.cookie is not None:
@@ -236,7 +249,7 @@ def write_batch(
                     row.channel,
                     row.stream,
                     row.started_at,
-                    row.last_seen,
+                    last_seen,
                     row.agent,
                     row.address,
                 ),
@@ -244,9 +257,10 @@ def write_batch(
             if device is not None:
                 db.execute("UPDATE devices SET played = 1 WHERE id = ?", (device,))
             rowids[id(row)] = (cast(int, cursor.lastrowid), device)
-            days |= _days(row.started_at, row.last_seen, zone)
+            stored[id(row)] = last_seen
+            days |= _days(row.started_at, interval_end(row.started_at, last_seen), zone)
         caps.save()
-    return Written(rowids, days, dropped)
+    return Written(rowids, days, dropped, stored)
 
 
 def _intervals(rows: list[tuple[object, ...]]) -> list[Interval]:
@@ -441,14 +455,16 @@ def daily_series(
 
 
 def daily_tops(
-    db: sqlite3.Connection, metric: str, first_day: str, last_day: str, limit: int
+    db: sqlite3.Connection, metric: str, first_day: str, last_day: str
 ) -> list[tuple[str, float]]:
+    """Every key's total, largest first: the caller merges them with the
+    open days' totals before cutting its top list."""
     return [
         (cast(str, r[0]), cast(float, r[1]))
         for r in db.execute(
             "SELECT key, sum(value) AS total FROM daily WHERE metric = ? AND day BETWEEN ? AND ?"
-            " GROUP BY key ORDER BY total DESC, key LIMIT ?",
-            (metric, first_day, last_day, limit),
+            " GROUP BY key ORDER BY total DESC, key",
+            (metric, first_day, last_day),
         )
     ]
 

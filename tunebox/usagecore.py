@@ -1,6 +1,6 @@
 """The pure parts of usage statistics: constants, the short user agent, the
-device cookie, local days and one day's totals. usage.py keeps the live
-state and the writer; usagedb.py holds the SQL."""
+device cookie, local days and one day's totals. usagelive.py keeps the
+live state, usage.py the writer and usagedb.py the SQL."""
 
 from __future__ import annotations
 
@@ -130,7 +130,8 @@ def aggregate(
     """One day's totals from listening intervals and visit times, each
     clipped to [start, end). The peak sweeps interval starts and ends; at
     one instant an end counts before a start, so touching sessions are one
-    listener and the minimum width keeps a single poll from vanishing."""
+    listener. Widths are taken as given: callers widen a single poll with
+    interval_end, or it would count nothing."""
     sums: dict[str, defaultdict[str, float]] = {
         name: defaultdict(float) for name in ("channel", "stream", "device", "agent")
     }

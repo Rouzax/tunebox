@@ -59,9 +59,6 @@ _WAIT_S = 0.5
 # Free space a flush asks for on top of disk.MIN_FREE.
 _ROOM = 1_000_000
 _TOP = 10
-# SQLite reads a negative LIMIT as none: finished days' tops are merged
-# with the open days' before the top ten are cut.
-_ALL = -1
 _DAY_S = 86_400
 _RANGES = ("7d", "30d", "12m", "all")
 
@@ -140,6 +137,7 @@ class Usage:
         self._retry_at = 0.0
         self._last_round = 0.0
         self._dropped = 0
+        self._roll_failing = False
         self._never = threading.Event()
 
     # Request threads.
@@ -353,7 +351,7 @@ class Usage:
             for day, value in usagedb.daily_series(db, "visits", *span).items():
                 visits[label(day)] += int(value)
             for name, sums in tops.items():
-                for key, value in usagedb.daily_tops(db, f"seconds_{name}", *span, _ALL):
+                for key, value in usagedb.daily_tops(db, f"seconds_{name}", *span):
                     sums[key] += value
             peak, peak_day = usagedb.daily_peak(db, *span)
         day = max(first, rolled + timedelta(days=1))
@@ -450,6 +448,18 @@ class Usage:
         command, future = item
         if not future.set_running_or_notify_cancel():
             return
+        try:
+            self._answer(command, future, stop)
+        except BaseException as exc:
+            # Escaping the writer ends it, but the caller is answered first:
+            # a running future is not drained by run_forever.
+            if not future.done():
+                future.set_exception(exc)
+            raise
+
+    def _answer(
+        self, command: _Command | None, future: Future[object], stop: threading.Event
+    ) -> None:
         if command is None:
             self._round(stop)
             future.set_result(None)
@@ -520,9 +530,11 @@ class Usage:
     def _roll(self, db: sqlite3.Connection, touched: set[str], stop: threading.Event) -> None:
         """Re-rolls finished days the flush touched, rolls each day after
         last_rollup_day up to yesterday, then runs retention once a day,
-        only when the roll-up has reached yesterday."""
+        only when the roll-up has reached yesterday. Logged at INFO for a
+        new day or deleted rows, at DEBUG for re-rolls alone; a failure at
+        WARNING once until a roll-up succeeds again."""
         began = self._monotonic()
-        days = sessions = visits = deleted = 0
+        days = new_days = sessions = visits = deleted = 0
         outcome = "error"
         try:
             now = self._clock()
@@ -541,6 +553,7 @@ class Usage:
                 if day > last:
                     usagedb.set_meta(db, "last_rollup_day", day)
                     last = day
+                    new_days += 1
             if (
                 last == yesterday
                 and not stop.is_set()
@@ -554,10 +567,17 @@ class Usage:
                     usagedb.set_meta(db, "last_retention_day", today.isoformat())
             outcome = "success"
         finally:
-            if days or deleted or outcome == "error":
+            failing, self._roll_failing = self._roll_failing, outcome == "error"
+            if outcome == "error":
+                level = logging.DEBUG if failing else logging.WARNING
+            elif new_days or deleted or failing:
+                level = logging.INFO
+            else:
+                level = logging.DEBUG
+            if days or deleted or outcome == "error" or failing:
                 event(
                     log,
-                    logging.INFO,
+                    level,
                     "usage_rolled_up",
                     days=days,
                     sessions=sessions,
@@ -594,7 +614,18 @@ class Usage:
             self._fail("open_failed")
 
     def _load(self, db: sqlite3.Connection) -> None:
-        if not usagedb.get_meta(db, "zone", ""):
+        # Finished days keep the labels of the zone they were rolled up in;
+        # a changed TZ is named once, and new days follow it.
+        stored_zone = usagedb.get_meta(db, "zone", "")
+        if stored_zone != self._zone_name:
+            if stored_zone:
+                event(
+                    log,
+                    logging.WARNING,
+                    "usage_zone_changed",
+                    stored=stored_zone,
+                    current=self._zone_name,
+                )
             usagedb.set_meta(db, "zone", self._zone_name)
         if not usagedb.get_meta(db, "last_rollup_day", ""):
             today = date.fromisoformat(day_of(self._clock(), self._zone))

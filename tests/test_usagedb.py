@@ -39,6 +39,13 @@ def test_the_writer_turns_on_secure_delete_and_wal(db: sqlite3.Connection) -> No
     assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
+def test_a_device_s_daily_rows_are_found_by_index(db: sqlite3.Connection) -> None:
+    plan = db.execute(
+        "EXPLAIN QUERY PLAN DELETE FROM daily WHERE metric = 'seconds_device' AND key = ?", (ID,)
+    ).fetchall()
+    assert any("daily_key" in cast(str, row[-1]) for row in plan)
+
+
 def test_a_newer_schema_is_refused(tmp_path: Path) -> None:
     conn = u.open_writer(tmp_path / "usage.db")
     conn.execute("UPDATE schema_version SET version = 99")
@@ -396,11 +403,11 @@ def test_daily_reads_over_two_rolled_up_days(db: sqlite3.Connection) -> None:
     assert u.daily_series(db, "seconds_channel", "2026-10-24", "2026-10-24") == {
         "2026-10-24": 200.0
     }
-    assert u.daily_tops(db, "seconds_channel", "2026-10-23", "2026-10-24", 5) == [
+    assert u.daily_tops(db, "seconds_channel", "2026-10-23", "2026-10-24") == [
         ("owr", 800.0),
         ("npo", 100.0),
     ]
-    assert u.daily_tops(db, "seconds_channel", "2026-10-23", "2026-10-24", 1) == [("owr", 800.0)]
+    assert u.daily_tops(db, "seconds_channel", "2026-10-24", "2026-10-24") == [("owr", 200.0)]
     assert u.daily_peak(db, "2026-10-23", "2026-10-24") == (2, "2026-10-23")
     assert u.daily_peak(db, "2026-10-25", "2026-10-26") == (0, None)
 

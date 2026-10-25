@@ -2357,13 +2357,27 @@ def test_summary_answers_each_range(usage_world: World, wanted: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "query", ["", "?range=1y", "?range=7d&range=30d", "?a=1&b=2&c=3&d=4&range=7d"]
+    "query", ["", "?other=7d", "?range=1y", "?range=7d&range=30d", "?a=1&b=2&c=3&d=4&range=7d"]
 )
 def test_summary_refuses_an_unknown_range(usage_world: World, query: str) -> None:
     usage_world.login()
     response = usage_world.call("GET", f"/admin/api/usage/summary{query}")
     assert response.status == 400
     assert json_of(response)["error"] == "bad_request"
+
+
+def test_a_key_error_inside_the_summary_is_no_bad_request(
+    usage_world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage_world.login()
+    usage = usage_world.usage
+    assert usage is not None
+
+    def broken(_range: str) -> dict[str, object]:
+        raise KeyError("seconds")
+
+    monkeypatch.setattr(usage, "summary", broken)
+    assert usage_world.call("GET", "/admin/api/usage/summary?range=7d").status == 500
 
 
 def test_device_routes_take_the_id_in_the_query_or_body_and_404_a_bad_one(

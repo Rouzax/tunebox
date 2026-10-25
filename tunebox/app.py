@@ -235,6 +235,7 @@ def open_usage(path: Path, free_space: Callable[[], int | None]) -> Usage:
     try:
         zone: tzinfo = ZoneInfo(zone_name)
     except ZoneInfoNotFoundError, ValueError:
+        event(log, logging.WARNING, "usage_zone_unknown", zone=zone_name)
         zone, zone_name = UTC, "UTC"
     try:
         # A knob for the admin browser check, which cannot wait a whole interval.

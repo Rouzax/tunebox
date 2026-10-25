@@ -169,6 +169,7 @@ class Live:
                 if found is not None:
                     session.rowid, session.device = found
                     session.resolved = True
+                    session.stored_last_seen = written.last_seen.get(id(session))
 
     def requeue(self, visits: list[VisitRow], closed: list[SessionRow]) -> int:
         """A failed batch goes back in front of the rows queued since. Past

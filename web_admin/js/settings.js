@@ -208,7 +208,11 @@ async function usageForm(ctx, page) {
         } else if (answer.status === 503) {
             // A combined change stores the retention before the addresses,
             // so it may be half saved: show what is stored.
-            ctx.fail(answer.data);
+            if (answer.data.error === 'usage_unavailable') {
+                ctx.message('tunebox cannot save its usage settings right now. The form shows what is stored.');
+            } else {
+                ctx.fail(answer.data);
+            }
             box.replaceWith(await usageForm(ctx, page));
         } else if (answer.status !== 401) {
             ctx.fail(answer.data);

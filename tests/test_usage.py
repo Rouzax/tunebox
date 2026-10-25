@@ -6,7 +6,8 @@ import time
 from collections.abc import Callable, Generator
 from datetime import UTC
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -459,6 +460,49 @@ def test_the_roll_up_is_logged_with_its_counts(
     }
 
 
+def rolled_up(caplog: pytest.LogCaptureFixture) -> list[tuple[int, object]]:
+    return [
+        (r.levelno, r.__dict__["fields"]["outcome"])
+        for r in caplog.records
+        if r.getMessage() == "usage_rolled_up"
+    ]
+
+
+def test_a_session_open_across_midnight_rolls_yesterday_up_at_most_twice(
+    path: Path,
+    clock: Clock,
+    free: Free,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, "tunebox.usage")
+    rolls: list[str] = []
+    real_roll_up = usagedb.roll_up
+
+    def counting(db: sqlite3.Connection, day: str, zone: object) -> tuple[int, int]:
+        rolls.append(day)
+        return real_roll_up(db, day, cast(Any, zone))
+
+    monkeypatch.setattr(usagedb, "roll_up", counting)
+    midnight = DAY0 + 86_400
+    clock.now = midnight - 120
+    with started(make(path, clock, free)) as usage:
+        # Polls every 10 s from 23:58:03, a round every minute on the minute.
+        for second in range(0, 7 * 60 + 1):
+            clock.now = midnight - 120 + second
+            if second % 10 == 3:
+                usage.heard(None, "owr", "Default", AGENT, None)
+            if second % 60 == 0:
+                usage.work_once()
+    # Rolled once as a new day, and once more for the poll that crossed
+    # midnight after that roll.
+    assert rolls.count("2026-10-24") <= 2
+    assert [level for level, _ in rolled_up(caplog) if level >= logging.INFO] == [logging.INFO]
+    assert query(
+        path, "SELECT value FROM daily WHERE day = '2026-10-24' AND metric = 'seconds_channel'"
+    ) == [(117.0,)]
+
+
 def test_reads_answer_unavailable_while_the_store_is_unavailable(
     usage: Usage, clock: Clock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -772,6 +816,36 @@ def test_the_last_ended_session_is_loaded_at_start(path: Path, clock: Clock, fre
         assert ended["channel"] == "owr"
 
 
+def test_a_changed_zone_is_logged_once_and_the_current_one_labels_days(
+    path: Path, clock: Clock, free: Free, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, "tunebox.usage")
+    with started(make(path, clock, free)) as first:
+        first.work_once()
+    assert events(caplog, "usage_zone_changed") == []
+
+    def amsterdam() -> Usage:
+        return Usage(
+            path,
+            zone=ZoneInfo("Europe/Amsterdam"),
+            zone_name="Europe/Amsterdam",
+            free=free,
+            clock=clock,
+            monotonic=clock,
+            flush_s=1e9,
+        )
+
+    with started(amsterdam()) as second:
+        second.work_once()
+        assert second.summary("7d")["zone"] == "Europe/Amsterdam"
+    with started(amsterdam()) as third:
+        third.work_once()
+    assert events(caplog, "usage_zone_changed") == [
+        {"stored": "UTC", "current": "Europe/Amsterdam"}
+    ]
+    assert meta(path, "zone") == "Europe/Amsterdam"
+
+
 def test_a_file_that_cannot_be_opened_is_retried(
     path: Path, clock: Clock, free: Free, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -821,12 +895,13 @@ def test_a_bug_in_a_round_is_logged_once_and_the_writer_goes_on(
     usage.work_once()
     usage.work_once()
     assert events(caplog, "usage_failed") == [{"kind": "RuntimeError"}]
-    assert [e["outcome"] for e in events(caplog, "usage_rolled_up")] == ["error", "error"]
+    assert rolled_up(caplog) == [(logging.WARNING, "error")]
     monkeypatch.setattr(usagedb, "roll_up", real_roll_up)
     usage.visit(ID, AGENT, None)
     usage.work_once()
     assert query(path, "SELECT count(*) FROM visits") == [(1,)]
     assert meta(path, "last_rollup_day") == "2026-10-24"
+    assert rolled_up(caplog) == [(logging.WARNING, "error"), (logging.INFO, "success")]
 
 
 def test_a_clear_cut_short_is_finished_at_start(path: Path, clock: Clock, free: Free) -> None:
@@ -865,6 +940,35 @@ def test_work_once_right_after_start_runs_on_the_writer(
         assert query(path, "SELECT device FROM visits") == [(ID,)]
     assert events(caplog, "usage_store_unavailable") == []
     assert events(caplog, "usage_failed") == []
+
+
+class Boom(BaseException):
+    pass
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_base_exception_in_a_command_reaches_the_caller(
+    usage: Usage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage.work_once()
+
+    def boom(*_: object) -> bool:
+        raise Boom
+
+    monkeypatch.setattr(usagedb, "rename_device", boom)
+    answers: list[BaseException] = []
+
+    def call() -> None:
+        try:
+            usage.rename(ID, "Car")
+        except BaseException as exc:  # noqa: BLE001 - the answer under test
+            answers.append(exc)
+
+    caller = threading.Thread(target=call, daemon=True)
+    caller.start()
+    caller.join(COMMAND_WAIT_S + 5)
+    assert not caller.is_alive()
+    assert [type(a) for a in answers] == [Boom]
 
 
 def test_a_command_running_at_the_deadline_is_waited_for(

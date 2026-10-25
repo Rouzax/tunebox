@@ -515,6 +515,30 @@ def test_usage_counts_days_in_tz_or_else_utc(
     assert [(m["zone"], m["zone_name"]) for m in made] == [(zone, name)]
 
 
+@pytest.mark.parametrize(
+    ("given", "warned"),
+    [("Europe/Amsterdam", []), (None, []), ("Nowhere/Atlantis", ["Nowhere/Atlantis"])],
+)
+def test_an_unknown_tz_is_logged_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    given: str | None,
+    warned: list[str],
+) -> None:
+    if given is None:
+        monkeypatch.delenv("TZ", raising=False)
+    else:
+        monkeypatch.setenv("TZ", given)
+    caplog.set_level(logging.WARNING, "tunebox")
+    app.open_usage(tmp_path / "usage.db", lambda: None)
+    assert [
+        r.__dict__["fields"]["zone"]
+        for r in caplog.records
+        if r.getMessage() == "usage_zone_unknown" and r.levelno == logging.WARNING
+    ] == warned
+
+
 @pytest.mark.parametrize(("given", "flush_s"), [("0.5", 0.5), ("soon", FLUSH_S), (None, FLUSH_S)])
 def test_the_flush_knob_is_passed_on_or_else_the_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, given: str | None, flush_s: float
