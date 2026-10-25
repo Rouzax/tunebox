@@ -143,6 +143,8 @@ class Usage:
         self._last_round = 0.0
         self._dropped = 0
         self._roll_failing = False
+        # Finished days a flush wrote to, kept until a roll-up of each returns.
+        self._touched: set[str] = set()
         self._never = threading.Event()
 
     # Request threads.
@@ -520,7 +522,11 @@ class Usage:
                 self._dropped = 0
             self._note_up()
             if not final:
-                self._roll(db, written.days, stop)
+                self._touched |= written.days
+                # The flush is stored: a failed roll-up is logged by _roll and
+                # retried next round, and leaves the store available.
+                with contextlib.suppress(sqlite3.Error, OSError):
+                    self._roll(db, self._touched, stop)
         except _DiskLow:
             self._fail("disk_low")
         except sqlite3.Error, OSError:
@@ -549,9 +555,10 @@ class Usage:
         return written
 
     def _roll(self, db: sqlite3.Connection, touched: set[str], stop: threading.Event) -> None:
-        """Re-rolls finished days the flush touched, rolls each day after
-        last_rollup_day up to yesterday, then runs retention once a day,
-        only when the roll-up has reached yesterday. Logged at INFO for a
+        """Re-rolls the finished days in touched, dropping each from it once
+        rolled, rolls each day after last_rollup_day up to yesterday, then
+        runs retention once a day, only when the roll-up has reached
+        yesterday. Logged at INFO for a
         new day or deleted rows, at DEBUG for re-rolls alone; a failure at
         WARNING once until a roll-up succeeds again."""
         began = self._monotonic()
@@ -570,6 +577,7 @@ class Usage:
                 if stop.is_set():
                     break
                 counted = usagedb.roll_up(db, day, self._zone)
+                touched.discard(day)
                 sessions, visits, days = sessions + counted[0], visits + counted[1], days + 1
                 if day > last:
                     usagedb.set_meta(db, "last_rollup_day", day)

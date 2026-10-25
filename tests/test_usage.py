@@ -1189,3 +1189,42 @@ def test_the_device_page_shows_no_address_once_addresses_are_off(
     assert page is not None
     rows = cast(list[dict[str, object]], page["sessions"])
     assert len(rows) == 1 and "address" not in rows[0]
+
+
+def test_a_failing_roll_up_leaves_the_store_available_and_is_retried(
+    usage: Usage,
+    clock: Clock,
+    path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, "tunebox.usage")
+    usage.visit(ID, AGENT, None)
+    usage.work_once()
+    clock.now = DAY0 + 86_400 + 100
+    usage.work_once()
+    visits = "SELECT value FROM daily WHERE day = '2026-10-24' AND metric = 'visits'"
+    assert query(path, visits) == [(1.0,)]
+    real_roll_up = usagedb.roll_up
+
+    def broken_roll_up(*_: object) -> tuple[int, int]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(usagedb, "roll_up", broken_roll_up)
+    caplog.clear()
+    clock.now = DAY0 + 50_000  # a late visit to the day already rolled up
+    usage.visit(ID, AGENT, None)
+    clock.now = DAY0 + 2 * 86_400 + 100
+    for _ in range(3):
+        usage.work_once()
+    assert usage.settings().saved is True
+    usage.summary("7d")
+    assert [r.levelno for r in caplog.records if r.getMessage() == "usage_rolled_up"].count(
+        logging.WARNING
+    ) == 1
+    assert events(caplog, "usage_store_unavailable") == []
+    assert meta(path, "last_rollup_day") == "2026-10-24"
+    monkeypatch.setattr(usagedb, "roll_up", real_roll_up)
+    usage.work_once()
+    assert meta(path, "last_rollup_day") == "2026-10-25"
+    assert query(path, visits) == [(2.0,)]
