@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import http.client
 import json
 import logging
@@ -12,14 +13,15 @@ import time
 import tomllib
 from datetime import UTC
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from tunebox import app
 from tunebox.accounts import Accounts
 from tunebox.app import WEB_ADMIN_DIR, StopSignal, main, open_settings, shut_down
-from tunebox.config import state_from_toml
+from tunebox.config import Config, state_from_toml
 from tunebox.pin import Pin
 from tunebox.runtime import EMPTY, Runtime
 from tunebox.server import TuneboxServer
@@ -407,16 +409,15 @@ def run_main(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, panel: bool
 ) -> tuple[int, dict[str, str]]:
     """Runs main to a clean stop: the wait for a signal loads the player page
-    once and returns. Gives main's exit code and that answer's headers."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
+    once and returns. Gives main's exit code and that answer's headers. The
+    server listens on port 0 (the file's port 1 only passes validation) and
+    the page is loaded on the port the "started" line names."""
     admin = (
         '[admin]\nenabled = true\npublic_origin = "https://example.invalid"\n\n' if panel else ""
     )
     config = tmp_path / "tunebox.toml"
     config.write_text(
-        f'[server]\nhost = "127.0.0.1"\nport = {port}\n\n{admin}{CHANNEL_TOML}',
+        f'[server]\nhost = "127.0.0.1"\nport = 1\n\n{admin}{CHANNEL_TOML}',
         encoding="utf-8",
     )
     monkeypatch.setenv("LOG_LEVEL", "info")
@@ -426,9 +427,26 @@ def run_main(
         """signal.signal works on the main thread only; nothing sends one here."""
 
     monkeypatch.setattr(app.signal, "signal", no_handler)
+    real_load = app.load
+
+    def any_port(path: Path) -> Config:
+        loaded = real_load(path)
+        return dataclasses.replace(loaded, server=dataclasses.replace(loaded.server, port=0))
+
+    monkeypatch.setattr(app, "load", any_port)
+    started: list[object] = []
+    real_event = app.event
+
+    def record(logger: logging.Logger, level: int, name: str, **fields: object) -> None:
+        if name == "started":
+            started.append(fields["port"])
+        real_event(logger, level, name, **fields)
+
+    monkeypatch.setattr(app, "event", record)
     seen: dict[str, str] = {}
 
     def load_the_page(_self: StopSignal, poll_s: float = 0.5) -> None:
+        port = cast(int, started[0])
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         connection.request("GET", "/")
         response = connection.getresponse()
@@ -463,46 +481,64 @@ def test_with_the_panel_on_usage_records_and_stops_cleanly(
         assert [row[0] for row in db.execute("SELECT device FROM visits")] == [device]
 
 
-@pytest.mark.parametrize("zone", ["Nowhere/Atlantis", "../etc"])
-def test_an_unknown_time_zone_falls_back_to_utc(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, zone: str
-) -> None:
-    monkeypatch.setenv("TZ", zone)
-    made: list[tuple[object, str]] = []
+def usages_made(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """The keyword arguments of every Usage main makes."""
+    made: list[dict[str, Any]] = []
     real = app.Usage
 
     def recording(path: Path, **kwargs: Any) -> Usage:
-        made.append((kwargs["zone"], kwargs["zone_name"]))
+        made.append(kwargs)
         return real(path, **kwargs)
 
     monkeypatch.setattr(app, "Usage", recording)
-    assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
-    assert made == [(UTC, "UTC")]
+    return made
 
 
-def test_a_bad_flush_knob_keeps_the_default(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("given", "zone", "name"),
+    [
+        ("Europe/Amsterdam", ZoneInfo("Europe/Amsterdam"), "Europe/Amsterdam"),
+        (None, ZoneInfo("UTC"), "UTC"),
+        ("Nowhere/Atlantis", UTC, "UTC"),
+        ("../etc", UTC, "UTC"),
+    ],
+)
+def test_usage_counts_days_in_tz_or_else_utc(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, given: str | None, zone: object, name: str
 ) -> None:
-    monkeypatch.setenv("TUNEBOX_USAGE_FLUSH_S", "soon")
-    made: list[float] = []
-    real = app.Usage
-
-    def recording(path: Path, **kwargs: Any) -> Usage:
-        made.append(kwargs["flush_s"])
-        return real(path, **kwargs)
-
-    monkeypatch.setattr(app, "Usage", recording)
+    if given is None:
+        monkeypatch.delenv("TZ", raising=False)
+    else:
+        monkeypatch.setenv("TZ", given)
+    made = usages_made(monkeypatch)
     assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
-    assert made == [FLUSH_S]
+    assert [(m["zone"], m["zone_name"]) for m in made] == [(zone, name)]
 
 
-def test_shutdown_joins_usage_before_the_pollers(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("given", "flush_s"), [("0.5", 0.5), ("soon", FLUSH_S), (None, FLUSH_S)])
+def test_the_flush_knob_is_passed_on_or_else_the_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, given: str | None, flush_s: float
+) -> None:
+    if given is None:
+        monkeypatch.delenv("TUNEBOX_USAGE_FLUSH_S", raising=False)
+    else:
+        monkeypatch.setenv("TUNEBOX_USAGE_FLUSH_S", given)
+    made = usages_made(monkeypatch)
+    assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
+    assert [m["flush_s"] for m in made] == [flush_s]
+
+
+@pytest.mark.parametrize(("timeout_s", "share_s"), [(0.5, 0.5), (8.0, 3.0)])
+def test_shutdown_joins_usage_first_within_its_share(
+    tmp_path: Path, timeout_s: float, share_s: float
+) -> None:
     calls: list[str] = []
+    slack: list[float] = []
 
     class SpyUsage(Usage):
         def stop_and_join(self, deadline: float) -> None:
             calls.append("usage")
-            assert deadline <= time.monotonic() + 3.0
+            slack.append(time.monotonic() + share_s - deadline)
 
     class SpyRuntime(Runtime):
         def stop_and_join(self, deadline: float) -> None:
@@ -517,5 +553,7 @@ def test_shutdown_joins_usage_before_the_pollers(tmp_path: Path) -> None:
     threading.Thread(
         target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
     ).start()
-    shut_down(server, [], Store(None), runtime, settings, usage=usage)
+    shut_down(server, [], Store(None), runtime, settings, usage=usage, timeout_s=timeout_s)
     assert calls == ["usage", "runtime"]
+    # At most the share from now, and not far under it either.
+    assert 0 <= slack[0] < 0.25
