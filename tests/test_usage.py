@@ -1228,3 +1228,66 @@ def test_a_failing_roll_up_leaves_the_store_available_and_is_retried(
     usage.work_once()
     assert meta(path, "last_rollup_day") == "2026-10-25"
     assert query(path, visits) == [(2.0,)]
+
+
+def listened_on_day0(usage: Usage, clock: Clock) -> None:
+    """A stored device and a session of it on DAY0 still in memory, with the
+    clock past the next midnight and no round since."""
+    usage.visit(ID, AGENT, None)
+    usage.work_once()
+    usage.heard(ID, "owr", "Default", AGENT, None)
+    clock.now += 30
+    usage.heard(ID, "owr", "Default", AGENT, None)
+    clock.now = DAY0 + 86_400 + 100
+
+
+DAY0_SECONDS = "SELECT value FROM daily WHERE day = '2026-10-24' AND metric = 'seconds_channel'"
+
+
+def test_a_delete_after_midnight_keeps_the_finished_day_s_totals(
+    usage: Usage, clock: Clock, path: Path
+) -> None:
+    listened_on_day0(usage, clock)
+    assert usage.delete(ID) is True
+    assert query(path, DAY0_SECONDS) == [(30.0,)]
+    assert meta(path, "last_rollup_day") == "2026-10-24"
+    assert query(path, "SELECT count(*) FROM listens") == [(0,)]
+    assert query(path, "SELECT count(*) FROM visits") == [(0,)]
+    assert query(path, "SELECT count(*) FROM devices") == [(0,)]
+
+
+def test_a_delete_whose_roll_up_fails_deletes_nothing(
+    usage: Usage, clock: Clock, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listened_on_day0(usage, clock)
+
+    def broken_roll_up(*_: object) -> tuple[int, int]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(usagedb, "roll_up", broken_roll_up)
+    with pytest.raises(UsageUnavailable):
+        usage.delete(ID)
+    assert query(path, "SELECT id FROM devices") == [(ID,)]
+    assert query(path, "SELECT device FROM listens") == [(ID,)]
+
+
+def test_a_delete_whose_flush_fails_deletes_nothing(
+    usage: Usage, clock: Clock, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listened_on_day0(usage, clock)
+    monkeypatch.setattr(usagedb, "write_batch", broken_write)
+    with pytest.raises(UsageUnavailable):
+        usage.delete(ID)
+    monkeypatch.setattr(usagedb, "write_batch", REAL_WRITE)
+    assert query(path, "SELECT id FROM devices") == [(ID,)]
+
+
+def test_a_delete_on_a_low_disk_deletes_nothing(
+    usage: Usage, clock: Clock, free: Free, path: Path
+) -> None:
+    listened_on_day0(usage, clock)
+    free.value = 0
+    with pytest.raises(UsageUnavailable):
+        usage.delete(ID)
+    free.value = None
+    assert query(path, "SELECT id FROM devices") == [(ID,)]

@@ -207,7 +207,22 @@ class Usage:
 
     def delete(self, device: str) -> bool:
         def run(db: sqlite3.Connection) -> bool:
-            # First, so no open or pending row of the device is written back.
+            # The device's rows of a finished day not rolled up yet, stored or
+            # still in memory, go into that day's totals before they go.
+            try:
+                self._flush_rows(db)
+            except _DiskLow:
+                self._fail("disk_low")
+                raise UsageUnavailable from None
+            try:
+                # Never cut short by a stop: a day left unrolled would lose
+                # the rows deleted below.
+                self._roll(db, self._touched, self._never)
+            except (sqlite3.Error, OSError) as exc:
+                # Logged by _roll; the flush is stored and the store stays up.
+                raise UsageUnavailable from exc
+            # Before the delete, so no open or pending row of the device is
+            # written back.
             self._live.forget(device)
             deleted = usagedb.delete_device(db, device)
             names = self._live.names
@@ -514,15 +529,8 @@ class Usage:
             db = self._db
             if db is None:
                 return
-            self._clear_if_pending(db)
-            written = self._write(db)
-            if self._dropped:
-                today = day_of(self._clock(), self._zone)
-                usagedb.add_dropped(db, today, "pending", self._dropped)
-                self._dropped = 0
-            self._note_up()
+            self._flush_rows(db)
             if not final:
-                self._touched |= written.days
                 # The flush is stored: a failed roll-up is logged by _roll and
                 # retried next round, and leaves the store available.
                 with contextlib.suppress(sqlite3.Error, OSError):
@@ -533,6 +541,19 @@ class Usage:
             self._fail("write_failed")
         except Exception as exc:  # noqa: BLE001 - a bug in one round must not stop the writer
             self._failed(exc)
+
+    def _flush_rows(self, db: sqlite3.Connection) -> None:
+        """A round's flush: a pending address clear, the rows held in
+        memory and the count of rows memory dropped. The finished days
+        written to are added to _touched for the next roll-up."""
+        self._clear_if_pending(db)
+        written = self._write(db)
+        if self._dropped:
+            today = day_of(self._clock(), self._zone)
+            usagedb.add_dropped(db, today, "pending", self._dropped)
+            self._dropped = 0
+        self._note_up()
+        self._touched |= written.days
 
     def _write(self, db: sqlite3.Connection) -> Written:
         with self._flush:
