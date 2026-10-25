@@ -82,14 +82,17 @@ def open_reader(path: Path) -> sqlite3.Connection:
 
 @contextlib.contextmanager
 def _transaction(db: sqlite3.Connection) -> Generator[None]:
+    """A COMMIT that fails (disk full, I/O error) can leave the transaction
+    open; it is rolled back too, or every later BEGIN on the writer's
+    long-lived connection would fail."""
     db.execute("BEGIN IMMEDIATE")
     try:
         yield
+        db.execute("COMMIT")
     except BaseException:
         if db.in_transaction:
             db.execute("ROLLBACK")
         raise
-    db.execute("COMMIT")
 
 
 def get_meta(db: sqlite3.Connection, key: str, default: str) -> str:
@@ -131,6 +134,8 @@ class Written:
     # Keyed by id() of each SessionRow stored: its rowid and resolved device.
     rowids: dict[int, tuple[int, str | None]]
     days: set[str]
+    # id() of each SessionRow the listens cap refused: never to be resent.
+    dropped: set[int]
 
 
 class _Caps:
@@ -179,13 +184,13 @@ def write_batch(
     sessions: list[SessionRow],
     named: set[str],
     zone: tzinfo,
-    now: float,  # noqa: V107 (part of the writer's call; the caps go by each event's own day)
 ) -> Written:
     """One flush in one transaction. Visits come first, so a session from a
-    page loaded in the same flush finds its device row. A dropped session
-    is absent from rowids and touches no day."""
+    page loaded in the same flush finds its device row. A session the cap
+    refuses is in dropped, not in rowids, and touches no day."""
     rowids: dict[int, tuple[int, str | None]] = {}
     days: set[str] = set()
+    dropped: set[int] = set()
     with _transaction(db):
         caps = _Caps(db)
         for visit in visits:
@@ -218,6 +223,7 @@ def write_batch(
                 found = db.execute("SELECT 1 FROM devices WHERE id = ?", (row.cookie,)).fetchone()
                 device = row.cookie if found is not None else None
             if device not in named and not caps.admit("listens", day_of(row.started_at, zone)):
+                dropped.add(id(row))
                 continue
             cursor = db.execute(
                 "INSERT INTO listens (device, channel, stream, started_at, last_seen, agent,"
@@ -237,7 +243,7 @@ def write_batch(
             rowids[id(row)] = (cast(int, cursor.lastrowid), device)
             days |= _days(row.started_at, row.last_seen, zone)
         caps.save()
-    return Written(rowids, days)
+    return Written(rowids, days, dropped)
 
 
 def _intervals(rows: list[tuple[object, ...]]) -> list[Interval]:
