@@ -46,6 +46,11 @@ def test_a_device_s_daily_rows_are_found_by_index(db: sqlite3.Connection) -> Non
     assert any("daily_key" in cast(str, row[-1]) for row in plan)
 
 
+def test_sessions_after_a_time_are_found_by_index(db: sqlite3.Connection) -> None:
+    plan = db.execute(f"EXPLAIN QUERY PLAN {u.LISTENS_AFTER}", (0.0,)).fetchall()
+    assert any("USING INDEX listens_last" in cast(str, row[-1]) for row in plan)
+
+
 def test_a_newer_schema_is_refused(tmp_path: Path) -> None:
     conn = u.open_writer(tmp_path / "usage.db")
     conn.execute("UPDATE schema_version SET version = 99")

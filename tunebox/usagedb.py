@@ -481,6 +481,15 @@ def daily_peak(db: sqlite3.Connection, first_day: str, last_day: str) -> tuple[i
     return int(cast(float, row[0])), cast(str, row[1])
 
 
+# Unordered: an ORDER BY makes SQLite scan the whole table by
+# listens_started instead of searching listens_last; aggregate sorts its own
+# points.
+LISTENS_AFTER = (
+    "SELECT id, started_at, last_seen, channel, stream, device, agent FROM listens"
+    " WHERE last_seen > ?"
+)
+
+
 def rows_after(
     db: sqlite3.Connection, since: float, exclude: set[int]
 ) -> tuple[list[Interval], list[float]]:
@@ -490,8 +499,7 @@ def rows_after(
     rows = [
         cast(tuple[object, ...], r[1:])
         for r in db.execute(
-            "SELECT id, started_at, last_seen, channel, stream, device, agent FROM listens"
-            " WHERE last_seen > ? ORDER BY started_at",
+            LISTENS_AFTER,
             (since - POLL_S,),
         )
         if cast(int, r[0]) not in exclude
