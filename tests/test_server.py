@@ -6,10 +6,12 @@ import ipaddress
 import json
 import logging
 import socket
+import sqlite3
 import struct
 import threading
 import time
 from collections.abc import Callable, Generator
+from datetime import UTC
 from pathlib import Path
 from typing import Any, cast
 
@@ -40,6 +42,7 @@ from tunebox.server import CSP, Handler, TuneboxServer, etag_matches
 from tunebox.settings import Settings, SettingsUnavailable
 from tunebox.store import Store
 from tunebox.tracks import RawEntry
+from tunebox.usage import Usage
 
 
 class FakeBursts(Bursts):
@@ -74,6 +77,7 @@ def make_server(
     pin: Pin | None = None,
     extra: tuple[ChannelConfig, ...] = (),
     clock: Callable[[], float] = time.monotonic,
+    usage: Usage | None = None,
 ) -> TuneboxServer:
     pin = pin or make_pin(tmp_path)
     web = tmp_path / "web"
@@ -124,6 +128,7 @@ def make_server(
         covers=files,
         bursts=FakeBursts(),
         clock=clock,
+        usage=usage,
     )
     serve(httpd)
     return httpd
@@ -1643,3 +1648,178 @@ def test_a_granted_device_gets_the_covers_privately(site: PinWorld) -> None:
     )
     assert headers["cache-control"].startswith("private, ")
     assert headers["vary"] == "Cookie"
+
+
+DEVICE = "0123456789abcdef0123456789abcdef"
+
+
+class UsageClock:
+    def __init__(self) -> None:
+        self.now = 1_792_843_200.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@contextlib.contextmanager
+def running_usage(tmp_path: Path, clock: UsageClock | None = None) -> Generator[Usage]:
+    """A started Usage whose rounds run only on work_once, on its own writer."""
+    usage = Usage(
+        tmp_path / "usage.db",
+        zone=UTC,
+        zone_name="UTC",
+        free=lambda: None,
+        clock=clock or time.time,
+        flush_s=1e9,
+    )
+    stop = threading.Event()
+    usage.start(stop)
+    try:
+        yield usage
+    finally:
+        stop.set()
+        usage.stop_and_join(time.monotonic() + 10)
+
+
+@contextlib.contextmanager
+def usage_server(tmp_path: Path, usage: Usage, pin: Pin | None = None) -> Generator[TuneboxServer]:
+    httpd = make_server(tmp_path, pin=pin, usage=usage)
+    try:
+        yield httpd
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def device_ids(usage: Usage, tmp_path: Path) -> list[object]:
+    """The device of every visit stored after one more round."""
+    usage.work_once()
+    with contextlib.closing(sqlite3.connect(tmp_path / "usage.db")) as db:
+        return [row[0] for row in db.execute("SELECT device FROM visits")]
+
+
+def live_sessions(usage: Usage) -> list[dict[str, object]]:
+    return cast(list[dict[str, object]], usage.live()["sessions"])
+
+
+def test_the_player_page_sets_the_device_cookie_and_is_private(tmp_path: Path) -> None:
+    with running_usage(tmp_path) as usage, usage_server(tmp_path, usage) as httpd:
+        given: list[str] = []
+        for path in ("/", "/index.html"):
+            status, headers, _ = request(httpd, path)
+            assert status == 200
+            assert headers["set-cookie"].startswith("tunebox_device=")
+            assert headers["cache-control"].startswith("private")
+            assert headers["vary"] == "Cookie"
+            given.append(headers["set-cookie"].split(";")[0].split("=")[1])
+        etag = request(httpd, "/")[1]["etag"]
+        cookie = {"Cookie": f"tunebox_device={DEVICE}"}
+        status, headers, _ = request(httpd, "/", headers={"If-None-Match": etag, **cookie})
+        assert status == 304
+        assert headers["set-cookie"].startswith(f"tunebox_device={DEVICE};")
+        assert headers["cache-control"] == "private, no-cache"
+        assert headers["vary"] == "Cookie"
+        # Three loads without a cookie make three devices; the 304 counts too.
+        ids = device_ids(usage, tmp_path)
+        assert len(ids) == 4
+        assert {*given, DEVICE} <= set(ids)
+
+
+def test_a_valid_device_cookie_is_given_back_and_a_bad_one_replaced(tmp_path: Path) -> None:
+    with running_usage(tmp_path) as usage, usage_server(tmp_path, usage) as httpd:
+        _, headers, _ = request(httpd, "/", headers={"Cookie": f"tunebox_device={DEVICE}"})
+        assert headers["set-cookie"].startswith(f"tunebox_device={DEVICE};")
+        bad = {"Cookie": f"tunebox_device={DEVICE.upper()}"}
+        _, headers, _ = request(httpd, "/", headers=bad)
+        assert not headers["set-cookie"].startswith(f"tunebox_device={DEVICE.upper()}")
+        assert "HttpOnly" in headers["set-cookie"]
+        assert "Secure" not in headers["set-cookie"]
+
+
+@pytest.mark.parametrize("path", ["/status.html", "/app.js", "/api/channels", "/api/player"])
+def test_no_other_answer_sets_the_device_cookie(tmp_path: Path, path: str) -> None:
+    with running_usage(tmp_path) as usage, usage_server(tmp_path, usage) as httpd:
+        status, headers, _ = request(httpd, path)
+        assert status == 200
+        assert "set-cookie" not in headers
+        assert device_ids(usage, tmp_path) == []
+
+
+def test_head_records_nothing_and_sets_no_cookie(tmp_path: Path) -> None:
+    with running_usage(tmp_path) as usage, usage_server(tmp_path, usage) as httpd:
+        status, headers, _ = request(httpd, "/", "HEAD")
+        assert status == 200
+        assert "set-cookie" not in headers
+        assert device_ids(usage, tmp_path) == []
+
+
+def test_a_pin_locked_page_records_nothing(tmp_path: Path) -> None:
+    settings = Settings(tmp_path / "pin.db")
+    pin = Pin(settings, lambda: b"k" * 32)
+    pin.change("site", "123456")
+    with running_usage(tmp_path) as usage, usage_server(tmp_path, usage, pin) as httpd:
+        status, headers, body = request(httpd, "/")
+        assert status == 200
+        assert b"<title>PIN</title>" in body
+        assert "set-cookie" not in headers
+        assert device_ids(usage, tmp_path) == []
+
+
+def test_a_granted_player_page_sets_only_the_device_cookie(tmp_path: Path) -> None:
+    settings = Settings(tmp_path / "pin.db")
+    pin = Pin(settings, lambda: b"k" * 32)
+    pin.change("site", "123456")
+    with running_usage(tmp_path) as usage, usage_server(tmp_path, usage, pin) as httpd:
+        grant = grant_of(httpd)
+        status, headers, body = request(httpd, "/", headers={"Cookie": grant})
+        assert status == 200
+        assert b"<title>t</title>" in body
+        assert headers["set-cookie"].startswith("tunebox_device=")
+        assert len(device_ids(usage, tmp_path)) == 1
+
+
+def test_now_with_a_stream_is_heard_and_a_304_counts(tmp_path: Path) -> None:
+    clock = UsageClock()
+    with running_usage(tmp_path, clock) as usage, usage_server(tmp_path, usage) as httpd:
+        path = "/api/channels/owr/now?buffer_s=0&stream=Default"
+        cookie = {"Cookie": f"tunebox_device={DEVICE}"}
+        status, headers, _ = request(httpd, path, headers=cookie)
+        assert status == 200
+        assert "set-cookie" not in headers
+        clock.now += 30
+        again = {**cookie, "If-None-Match": headers["etag"]}
+        status, headers, _ = request(httpd, path, headers=again)
+        assert status == 304
+        assert "set-cookie" not in headers
+        found = live_sessions(usage)
+        assert [(s["channel"], s["stream"]) for s in found] == [("owr", "Default")]
+        assert str(found[0]["label"]).startswith("Unnamed device · ")
+        assert found[0]["seconds"] == 30
+
+
+def test_now_without_a_valid_cookie_counts_as_unidentified(tmp_path: Path) -> None:
+    with running_usage(tmp_path) as usage, usage_server(tmp_path, usage) as httpd:
+        path = "/api/channels/owr/now?buffer_s=0&stream=Default"
+        request(httpd, path, headers={"Cookie": "tunebox_device=forged"})
+        found = live_sessions(usage)
+        assert [str(s["label"]).startswith("Unidentified player · ") for s in found] == [True]
+
+
+@pytest.mark.parametrize("query", ["buffer_s=0", "buffer_s=0&stream=nope"])
+def test_now_without_a_known_stream_records_nothing(tmp_path: Path, query: str) -> None:
+    with running_usage(tmp_path) as usage, usage_server(tmp_path, usage) as httpd:
+        cookie = {"Cookie": f"tunebox_device={DEVICE}"}
+        request(httpd, f"/api/channels/owr/now?{query}", headers=cookie)
+        assert live_sessions(usage) == []
+
+
+def test_a_head_of_now_is_not_heard(tmp_path: Path) -> None:
+    with running_usage(tmp_path) as usage, usage_server(tmp_path, usage) as httpd:
+        status, _, _ = request(httpd, "/api/channels/owr/now?buffer_s=0&stream=Default", "HEAD")
+        assert status == 200
+        assert live_sessions(usage) == []
+
+
+def test_without_usage_nothing_is_set(server: TuneboxServer) -> None:
+    status, headers, _ = request(server, "/")
+    assert status == 200 and "set-cookie" not in headers

@@ -62,6 +62,7 @@ from tunebox.settings import (
     state_to_json,
 )
 from tunebox.tomlout import dumps
+from tunebox.usage import Usage
 
 log = logging.getLogger(__name__)
 
@@ -241,6 +242,7 @@ class Admin:
         *,
         blobs: Blobs,
         free_space: Callable[[], int | None],
+        usage: Usage | None = None,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -255,6 +257,7 @@ class Admin:
         self._samples = samples
         self._blobs = blobs
         self._free = free_space
+        self._usage = usage
         self._origin = config.public_origin
         # Over plain http a browser drops Secure cookies and refuses the
         # __Secure- prefix; the server then serves the panel only to the

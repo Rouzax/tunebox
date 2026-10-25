@@ -9,8 +9,11 @@ import signal
 import sys
 import threading
 import time
+from collections.abc import Callable
+from datetime import UTC, tzinfo
 from pathlib import Path
 from types import FrameType
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from tunebox import http
 from tunebox.accounts import Accounts
@@ -33,6 +36,8 @@ from tunebox.server import TuneboxServer
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError, StaleVersion
 from tunebox.sources import build_source
 from tunebox.store import Store
+from tunebox.usage import Usage
+from tunebox.usagecore import FLUSH_S
 
 log = logging.getLogger("tunebox")
 
@@ -130,7 +135,9 @@ def main() -> int:
         return 2
     pin = Pin(settings, accounts.server_key)
     admin = None
+    usage = None
     if config.admin.enabled:
+        usage = open_usage(config.server.data_dir / "usage.db", free_space)
         admin_dir = Path(os.environ.get("TUNEBOX_WEB_ADMIN", str(WEB_ADMIN_DIR)))
         admin = Admin(
             accounts,
@@ -140,6 +147,7 @@ def main() -> int:
             pin=pin,
             blobs=blobs,
             free_space=free_space,
+            usage=usage,
             apply=runtime.apply,
             samples=lambda: [
                 title
@@ -160,6 +168,7 @@ def main() -> int:
             bursts=bursts,
             admin=admin,
             trusted=config.server.trusted_proxies,
+            usage=usage,
         )
     except OSError as error:
         print(f"tunebox: cannot listen on {address[0]}:{address[1]}: {error}", file=sys.stderr)
@@ -181,6 +190,10 @@ def main() -> int:
     http_thread = threading.Thread(target=server.serve_forever, name="http", daemon=True)
     for thread in [*workers, http_thread]:
         thread.start()
+    if usage is not None:
+        # Not among the workers: shut_down joins it first, with its own share
+        # of the deadline.
+        usage.start(stop)
     event(
         log,
         logging.INFO,
@@ -193,7 +206,7 @@ def main() -> int:
     # from another one; the main thread only waits for a signal.
     received.wait()
     stop.set()
-    shut_down(server, workers, store, runtime, settings)
+    shut_down(server, workers, store, runtime, settings, usage=usage)
     event(log, logging.INFO, "stopped")
     return 0
 
@@ -213,6 +226,22 @@ class StopSignal:
     def wait(self, poll_s: float = 0.5) -> None:
         while not self.received:
             time.sleep(poll_s)
+
+
+def open_usage(path: Path, free_space: Callable[[], int | None]) -> Usage:
+    """Usage statistics count local days in the container's TZ; an unset or
+    unknown zone counts in UTC."""
+    zone_name = os.environ.get("TZ") or "UTC"
+    try:
+        zone: tzinfo = ZoneInfo(zone_name)
+    except ZoneInfoNotFoundError, ValueError:
+        zone, zone_name = UTC, "UTC"
+    try:
+        # A knob for the admin browser check, which cannot wait a whole interval.
+        flush_s = float(os.environ.get("TUNEBOX_USAGE_FLUSH_S", FLUSH_S))
+    except ValueError:
+        flush_s = FLUSH_S
+    return Usage(path, zone=zone, zone_name=zone_name, free=free_space, flush_s=flush_s)
 
 
 def open_settings(path: Path, state: ConfigState, panel: bool) -> Settings:
@@ -256,6 +285,7 @@ def shut_down(
     store: Store,
     runtime: Runtime,
     settings: Settings,
+    usage: Usage | None = None,
     timeout_s: float = 8.0,
 ) -> None:
     """Stops serving, lets the pollers and workers finish what they are
@@ -266,6 +296,10 @@ def shut_down(
     # One shared deadline, inside Docker's default 10 s stop grace. A thread
     # stuck in a slow fetch past it is a daemon thread and ends with the process.
     deadline = time.monotonic() + timeout_s
+    if usage is not None:
+        # Its final flush ends the open listening sessions; capped so a slow
+        # disk still leaves the pollers their time.
+        usage.stop_and_join(min(deadline, time.monotonic() + 3.0))
     runtime.stop_and_join(deadline)
     for worker in workers:
         worker.join(max(0.0, deadline - time.monotonic()))

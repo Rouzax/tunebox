@@ -1,13 +1,18 @@
+import contextlib
+import http.client
 import json
 import logging
 import os
 import shutil
 import signal
 import socket
+import sqlite3
 import threading
 import time
 import tomllib
+from datetime import UTC
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -20,6 +25,8 @@ from tunebox.runtime import EMPTY, Runtime
 from tunebox.server import TuneboxServer
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
 from tunebox.store import CoverDecision, Store
+from tunebox.usage import Usage
+from tunebox.usagecore import FLUSH_S
 
 
 def test_bad_log_level_exits_2(
@@ -394,3 +401,121 @@ def test_a_log_file_that_cannot_be_made_does_not_stop_tunebox(
     assert "log_file_unavailable" in seen
     # It went on to the listen step, past the log file.
     assert "cannot listen" in capsys.readouterr().err
+
+
+def run_main(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, panel: bool
+) -> tuple[int, dict[str, str]]:
+    """Runs main to a clean stop: the wait for a signal loads the player page
+    once and returns. Gives main's exit code and that answer's headers."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    admin = (
+        '[admin]\nenabled = true\npublic_origin = "https://example.invalid"\n\n' if panel else ""
+    )
+    config = tmp_path / "tunebox.toml"
+    config.write_text(
+        f'[server]\nhost = "127.0.0.1"\nport = {port}\n\n{admin}{CHANNEL_TOML}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOG_LEVEL", "info")
+    monkeypatch.setenv("TUNEBOX_CONFIG", str(config))
+
+    def no_handler(*_: object) -> None:
+        """signal.signal works on the main thread only; nothing sends one here."""
+
+    monkeypatch.setattr(app.signal, "signal", no_handler)
+    seen: dict[str, str] = {}
+
+    def load_the_page(_self: StopSignal, poll_s: float = 0.5) -> None:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        connection.request("GET", "/")
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+        seen.update({k.lower(): v for k, v in response.getheaders()})
+        seen["status"] = str(response.status)
+
+    monkeypatch.setattr(StopSignal, "wait", load_the_page)
+    return main(), seen
+
+
+def test_with_the_panel_off_usage_is_never_opened(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    code, seen = run_main(monkeypatch, tmp_path, panel=False)
+    assert code == 0
+    assert seen["status"] == "200"
+    assert "set-cookie" not in seen
+    assert not (tmp_path / "usage.db").exists()
+
+
+def test_with_the_panel_on_usage_records_and_stops_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    code, seen = run_main(monkeypatch, tmp_path, panel=True)
+    assert code == 0
+    assert seen["set-cookie"].startswith("tunebox_device=")
+    device = seen["set-cookie"].split(";")[0].split("=")[1]
+    # The final round at stop wrote the visit before the file was let go.
+    with contextlib.closing(sqlite3.connect(tmp_path / "usage.db")) as db:
+        assert [row[0] for row in db.execute("SELECT device FROM visits")] == [device]
+
+
+@pytest.mark.parametrize("zone", ["Nowhere/Atlantis", "../etc"])
+def test_an_unknown_time_zone_falls_back_to_utc(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, zone: str
+) -> None:
+    monkeypatch.setenv("TZ", zone)
+    made: list[tuple[object, str]] = []
+    real = app.Usage
+
+    def recording(path: Path, **kwargs: Any) -> Usage:
+        made.append((kwargs["zone"], kwargs["zone_name"]))
+        return real(path, **kwargs)
+
+    monkeypatch.setattr(app, "Usage", recording)
+    assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
+    assert made == [(UTC, "UTC")]
+
+
+def test_a_bad_flush_knob_keeps_the_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TUNEBOX_USAGE_FLUSH_S", "soon")
+    made: list[float] = []
+    real = app.Usage
+
+    def recording(path: Path, **kwargs: Any) -> Usage:
+        made.append(kwargs["flush_s"])
+        return real(path, **kwargs)
+
+    monkeypatch.setattr(app, "Usage", recording)
+    assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
+    assert made == [FLUSH_S]
+
+
+def test_shutdown_joins_usage_before_the_pollers(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class SpyUsage(Usage):
+        def stop_and_join(self, deadline: float) -> None:
+            calls.append("usage")
+            assert deadline <= time.monotonic() + 3.0
+
+    class SpyRuntime(Runtime):
+        def stop_and_join(self, deadline: float) -> None:
+            calls.append("runtime")
+            super().stop_and_join(deadline)
+
+    settings = Settings(tmp_path / "t.db")
+    runtime = SpyRuntime(settings, lambda _config, _carry: pytest.fail("no channels expected"))
+    usage = SpyUsage(tmp_path / "usage.db", zone=UTC, zone_name="UTC", free=lambda: None)
+    pin = Pin(settings, lambda: b"k" * 32)
+    server = TuneboxServer(("127.0.0.1", 0), lambda: EMPTY, tmp_path, pin)
+    threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    ).start()
+    shut_down(server, [], Store(None), runtime, settings, usage=usage)
+    assert calls == ["usage", "runtime"]

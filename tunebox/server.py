@@ -26,8 +26,10 @@ from tunebox.logos import Logos, default_image_address
 from tunebox.logs import bound, event
 from tunebox.netguard import OTHER_FORWARDING, client_address, nearby, trusted_peer
 from tunebox.paths import inside
-from tunebox.pin import Access, Pin
+from tunebox.pin import Access, Pin, read_cookie
 from tunebox.runtime import Snapshot
+from tunebox.usage import Usage
+from tunebox.usagecore import DEVICE_COOKIE, device_cookie, short_agent, valid_device
 
 log = logging.getLogger(__name__)
 
@@ -167,9 +169,11 @@ class TuneboxServer(ThreadingHTTPServer):
         admin: Admin | None = None,
         trusted: tuple[Network, ...] = (),
         clock: Callable[[], float] = time.monotonic,
+        usage: Usage | None = None,
     ) -> None:
         self.current = snapshot
         self.admin = admin
+        self.usage = usage
         self.pin = pin
         self.trusted = trusted
         self.forwarding = Once(3600)
@@ -559,6 +563,17 @@ class Handler(BaseHTTPRequestHandler):
                 stream = _stream(self.path, channel)
             except ValueError:
                 return self._send_json(400, {"error": "bad_stream"}, head)
+            usage = self.app.usage
+            if usage is not None and self.command == "GET" and stream is not None:
+                # Before the ETag comparison: a 304 is listening too.
+                found = read_cookie(self._header("Cookie"), DEVICE_COOKIE)
+                usage.heard(
+                    found if valid_device(found) else None,
+                    channel.config.id,
+                    stream.name,
+                    short_agent(self._header("User-Agent")),
+                    self._client(),
+                )
             bursts = self.app.bursts
             if stream and bursts is not None:
                 # The player cannot see the audio its stream sent on connect.
@@ -649,22 +664,35 @@ class Handler(BaseHTTPRequestHandler):
             if access.locked:
                 return self._static(PIN_PAGE, head, access, locked=True)
             self._private = True
-        headers: dict[str, str] = dict(NO_STORE)
+        extra: list[tuple[str, str]] = []
+        usage = self.app.usage
+        if (
+            usage is not None
+            and self.command == "GET"
+            and not locked
+            and target == web_dir / "index.html"
+        ):
+            # The answer names one device, so no shared cache may keep it.
+            self._private = True
+            device, cookie = device_cookie(self._header("Cookie"), self._https())
+            extra.append(("Set-Cookie", cookie))
+            usage.visit(device, short_agent(self._header("User-Agent")), self._client())
+        headers: list[tuple[str, str]] = list(NO_STORE.items())
         if not locked:
             stat = target.stat()
             etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
             if etag_matches(self.headers.get("If-None-Match"), etag):
-                return self._not_modified(etag)
+                return self._not_modified(etag, extra)
             # Judged on the resolved path: /vendor/../app.js is not a vendor file.
             immutable = target.relative_to(web_dir).as_posix().startswith(IMMUTABLE_DIRS)
-            headers = {
-                "ETag": etag,
-                "Cache-Control": "max-age=31536000, immutable" if immutable else "no-cache",
-            }
+            headers = [
+                ("ETag", etag),
+                ("Cache-Control", "max-age=31536000, immutable" if immutable else "no-cache"),
+            ]
         if target.suffix == ".html":
-            headers["Content-Security-Policy"] = CSP
-            headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        self._send(200, target.read_bytes(), content_type, head, headers)
+            headers.append(("Content-Security-Policy", CSP))
+            headers.append(("Referrer-Policy", "strict-origin-when-cross-origin"))
+        self._send(200, target.read_bytes(), content_type, head, [*headers, *extra])
 
     def _send_json(
         self, status: int, payload: object, head: bool, headers: Mapping[str, str] | None = None
@@ -701,7 +729,7 @@ class Handler(BaseHTTPRequestHandler):
         if not head:
             self.wfile.write(body)
 
-    def _not_modified(self, etag: str) -> None:
+    def _not_modified(self, etag: str, headers: Iterable[tuple[str, str]] = ()) -> None:
         self._status = 304
         self.send_response(304)
         self.send_header("ETag", etag)
@@ -710,6 +738,8 @@ class Handler(BaseHTTPRequestHandler):
             # that stores or revalidates the answer keeps it per device.
             self.send_header("Cache-Control", "private, no-cache")
             self.send_header("Vary", "Cookie")
+        for name, value in headers:
+            self.send_header(name, value)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", "0")
         self.end_headers()
