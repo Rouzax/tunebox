@@ -520,3 +520,21 @@ def test_oldest_day_is_the_first_rolled_up_day(db: sqlite3.Connection) -> None:
     u.roll_up(db, "2026-10-24", UTC)
     u.roll_up(db, "2026-10-22", UTC)
     assert u.oldest_day(db) == "2026-10-22"
+
+
+def test_a_session_running_into_the_month_counts_its_part_inside(db: sqlite3.Connection) -> None:
+    cutoff = DAY0
+    u.write_batch(db, [VisitRow(cutoff - 2000, ID, AGENT, None)], [], set(), UTC)
+    ended = SessionRow(None, ID, "npo", "Low", cutoff - 100, cutoff - 5, AGENT, None)
+    u.write_batch(db, [], [session(start=cutoff - 1800, last=cutoff + 1800), ended], set(), UTC)
+    devices, _ = u.devices_page(db, cutoff)
+    assert [d["seconds_30d"] for d in devices] == [1800.0]
+    page = u.device_page(db, ID, None, cutoff)
+    assert page is not None and page["top"] == [["owr", 1800.0]]
+
+
+def test_a_device_s_month_is_found_by_index(db: sqlite3.Connection) -> None:
+    args = {"since": 0.0, "device": ID, "top": 5}
+    for sql in (u.DEVICES, u.DEVICE_TOP):
+        plan = db.execute(f"EXPLAIN QUERY PLAN {sql}", args).fetchall()
+        assert any("USING INDEX listens_device" in cast(str, row[-1]) for row in plan)

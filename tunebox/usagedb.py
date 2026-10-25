@@ -511,19 +511,30 @@ def rows_after(
     return _intervals(rows), visits
 
 
+# A session's listened seconds from :since on. It overlaps :since when its
+# widened end (interval_end) is past it, so last_seen > :since - POLL_S
+# finds every such session; one that started earlier counts its part after.
+_SINCE = f"max(0.0, max(last_seen, started_at + {POLL_S}) - max(started_at, :since))"
+_OVERLAPS = f"last_seen > :since - {POLL_S}"
+DEVICES = (
+    "SELECT d.id, d.name, d.agent, d.first_seen, d.last_seen,"
+    f" (SELECT coalesce(sum({_SINCE}), 0.0) FROM listens"
+    f"  WHERE listens.device = d.id AND {_OVERLAPS})"
+    " FROM devices AS d WHERE d.played = 1 ORDER BY d.last_seen DESC, d.id"
+)
+DEVICE_TOP = (
+    f"SELECT channel, sum({_SINCE}) AS total FROM listens"
+    f" WHERE device = :device AND {_OVERLAPS} GROUP BY channel HAVING total > 0"
+    " ORDER BY total DESC, channel LIMIT :top"
+)
+
+
 def devices_page(db: sqlite3.Connection, since_30d: float) -> tuple[list[dict[str, object]], int]:
     """Devices that played, newest first, with their listening since
     since_30d; and the count of devices that never played."""
     keys: tuple[str, ...] = ("id", "name", "agent", "first_seen", "last_seen", "seconds_30d")
     devices: list[dict[str, object]] = [
-        dict(zip(keys, row, strict=True))
-        for row in db.execute(
-            "SELECT d.id, d.name, d.agent, d.first_seen, d.last_seen,"
-            f" (SELECT coalesce(sum({_SECONDS}), 0.0) FROM listens"
-            "  WHERE listens.device = d.id AND started_at >= ?)"
-            " FROM devices AS d WHERE d.played = 1 ORDER BY d.last_seen DESC, d.id",
-            (since_30d,),
-        )
+        dict(zip(keys, row, strict=True)) for row in db.execute(DEVICES, {"since": since_30d})
     ]
     never = cast(int, db.execute("SELECT count(*) FROM devices WHERE played = 0").fetchone()[0])
     return devices, never
@@ -561,11 +572,6 @@ def device_page(
     ]
     page["top"] = [
         [cast(str, r[0]), cast(float, r[1])]
-        for r in db.execute(
-            f"SELECT channel, sum({_SECONDS}) AS total FROM listens"
-            " WHERE device = ? AND started_at >= ? GROUP BY channel"
-            " ORDER BY total DESC, channel LIMIT ?",
-            (device, since_30d, TOP_STATIONS),
-        )
+        for r in db.execute(DEVICE_TOP, {"device": device, "since": since_30d, "top": TOP_STATIONS})
     ]
     return page
