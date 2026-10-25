@@ -99,8 +99,8 @@ def test_named_devices_are_exempt_from_the_listens_cap(
 def test_roll_up_replaces_the_day_and_keeps_dropped(db: sqlite3.Connection) -> None:
     u.write_batch(db, [VisitRow(DAY0 + 50, ID, AGENT, None)], [session()], set(), UTC)
     db.execute("INSERT INTO daily VALUES ('2026-10-24', 'dropped', 'visits', 3)")
-    assert u.roll_up(db, "2026-10-24", UTC) == 1
-    assert u.roll_up(db, "2026-10-24", UTC) == 1
+    assert u.roll_up(db, "2026-10-24", UTC) == (1, 1)
+    assert u.roll_up(db, "2026-10-24", UTC) == (1, 1)
     rows = dict(
         ((m, k), v)
         for m, k, v in db.execute("SELECT metric, key, value FROM daily WHERE day = '2026-10-24'")
@@ -490,3 +490,21 @@ def test_a_failed_commit_is_rolled_back_and_the_next_batch_succeeds(db: sqlite3.
     assert db.execute("SELECT count(*) FROM devices").fetchone()[0] == 0
     u.write_batch(db, [VisitRow(DAY0, ID, AGENT, None)], [], set(), UTC)
     assert db.execute("SELECT count(*) FROM devices").fetchone()[0] == 1
+
+
+def test_add_dropped_adds_to_the_day_s_count_and_survives_a_roll_up(db: sqlite3.Connection) -> None:
+    u.add_dropped(db, "2026-10-24", "pending", 3)
+    u.add_dropped(db, "2026-10-24", "pending", 2)
+    u.roll_up(db, "2026-10-24", UTC)
+    row = db.execute(
+        "SELECT value FROM daily WHERE day = '2026-10-24' AND metric = 'dropped'"
+        " AND key = 'pending'"
+    ).fetchone()
+    assert row[0] == 5
+
+
+def test_oldest_day_is_the_first_rolled_up_day(db: sqlite3.Connection) -> None:
+    assert u.oldest_day(db) is None
+    u.roll_up(db, "2026-10-24", UTC)
+    u.roll_up(db, "2026-10-22", UTC)
+    assert u.oldest_day(db) == "2026-10-22"

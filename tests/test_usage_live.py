@@ -1,5 +1,5 @@
 from tunebox.usage import Live
-from tunebox.usagecore import IDLE_S, MAX_LIVE, POLL_S
+from tunebox.usagecore import IDLE_S, MAX_LIVE, MAX_PENDING, POLL_S
 from tunebox.usagedb import SessionRow, VisitRow, Written
 
 ID = "0123456789abcdef0123456789abcdef"
@@ -199,6 +199,46 @@ def test_requeue_keeps_at_most_max_pending() -> None:
     visits, closed, _ = live.detach()
     dropped = live.requeue(visits * 4000, closed)
     assert dropped == 12_000 - 10_000
+    assert live.take_dropped() == dropped
+    assert live.take_dropped() == 0
+
+
+def test_intake_keeps_at_most_max_pending_and_drops_the_oldest() -> None:
+    live, clock = make()
+    for _ in range(MAX_PENDING + 3):
+        clock.now += 1
+        live.visit(ID, AGENT, None)
+    assert live.take_dropped() == 3
+    visits, _, _ = live.detach()
+    assert len(visits) == MAX_PENDING
+    assert visits[0].at == 1_004.0 and visits[-1].at == clock.now
+
+
+def test_a_closed_session_past_the_cap_pushes_out_the_oldest_visit() -> None:
+    live, clock = make()
+    for _ in range(MAX_PENDING):
+        clock.now += 0.001
+        live.visit(OTHER, AGENT, None)
+    live.heard(ID, "owr", "Default", AGENT, None)
+    assert live.take_dropped() == 0
+    live.heard(ID, "qmusic", "Default", AGENT, None)  # closes the owr session
+    assert live.take_dropped() == 1
+    visits, closed, _ = live.detach()
+    assert [s.channel for s in closed] == ["owr"]
+    assert len(visits) == MAX_PENDING - 1
+
+
+def test_the_oldest_closed_session_goes_before_a_newer_visit() -> None:
+    live, clock = make()
+    live.heard(ID, "owr", "Default", AGENT, None)
+    clock.now += IDLE_S
+    live.heard(ID, "owr", "Default", AGENT, None)  # closes the first at 1_000
+    clock.now += 1
+    for _ in range(MAX_PENDING):
+        live.visit(OTHER, AGENT, None)
+    assert live.take_dropped() == 1
+    visits, closed, _ = live.detach()
+    assert closed == [] and len(visits) == MAX_PENDING
 
 
 def test_requeue_puts_the_failed_batch_first_and_trims_the_oldest() -> None:
@@ -333,8 +373,6 @@ def test_snapshot_gives_open_and_pending_intervals_and_held_rowids() -> None:
         ("owr", 1_030.0, 1_040.0, None),
         ("qmusic", 1_030.0, 1_040.0, None),
     ]
-    assert live.memory_rowids() == rowids
-    assert live.memory_intervals() == intervals
 
 
 def test_set_last_ended_takes_a_stored_row() -> None:

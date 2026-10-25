@@ -267,10 +267,10 @@ def _intervals(rows: list[tuple[object, ...]]) -> list[Interval]:
     return intervals
 
 
-def roll_up(db: sqlite3.Connection, day: str, zone: tzinfo) -> int:
+def roll_up(db: sqlite3.Connection, day: str, zone: tzinfo) -> tuple[int, int]:
     """Replaces the day's computed totals whole, so a crash mid-way is
     redone on the next run; dropped counts are written by write_batch and
-    kept. Returns the number of sessions counted."""
+    add_dropped and kept. Returns the sessions and visits counted."""
     start, end = day_bounds(day, zone)
     with _transaction(db):
         intervals = _intervals(
@@ -301,7 +301,20 @@ def roll_up(db: sqlite3.Connection, day: str, zone: tzinfo) -> int:
         ]
         rows += [(day, "visits", "-", totals.visits), (day, "peak", "-", totals.peak)]
         db.executemany("INSERT INTO daily VALUES (?, ?, ?, ?)", rows)
-    return len(intervals)
+    return len(intervals), totals.visits
+
+
+def add_dropped(db: sqlite3.Connection, day: str, kind: str, count: int) -> None:
+    with _transaction(db):
+        db.execute(
+            "INSERT INTO daily VALUES (?, 'dropped', ?, ?)"
+            " ON CONFLICT (day, metric, key) DO UPDATE SET value = value + excluded.value",
+            (day, kind, count),
+        )
+
+
+def oldest_day(db: sqlite3.Connection) -> str | None:
+    return cast(str | None, db.execute("SELECT min(day) FROM daily").fetchone()[0])
 
 
 def _one_batch(
