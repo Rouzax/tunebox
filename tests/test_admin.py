@@ -2,17 +2,19 @@ import base64
 import dataclasses
 import json
 import logging
+import sqlite3
 import threading
 import time
 import tomllib
 from collections.abc import Generator
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tunebox import blobs as blobs_module
-from tunebox import crypto
+from tunebox import crypto, usagedb
 from tunebox.accounts import REAUTH_S, AccountError, Accounts, Session, SessionEnded
 from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Request, Response, Route
 from tunebox.blobs import MAX_BLOB, Blobs
@@ -21,6 +23,8 @@ from tunebox.disk import MIN_FREE
 from tunebox.pin import Pin
 from tunebox.rulecheck import MAX_NEW_PATTERNS
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
+from tunebox.usage import Usage
+from tunebox.usagecore import NAME_MAX, RETENTION_MAX, RETENTION_MIN
 
 ORIGIN = "https://radio.example"
 PASSWORD = "a long enough password"
@@ -42,9 +46,26 @@ class World:
         setup_page: bool = False,
         account: bool = True,
         origin: str = ORIGIN,
+        usage: bool = False,
     ) -> None:
         self.origin = origin
         self.clock = Clock()
+        self.usage: Usage | None = None
+        self.stop = threading.Event()
+        if usage:
+            self.usage = Usage(
+                tmp_path / "usage.db",
+                zone=UTC,
+                zone_name="UTC",
+                free=lambda: None,
+                clock=self.clock,
+                monotonic=self.clock,
+                flush_s=3600,
+            )
+            self.usage.start(self.stop)
+            # The writer's first round opens usage.db; until then every
+            # read answers 503.
+            self.usage.work_once()
         self.tmp = tmp_path
         self.free: int | None = None
         self.blobs = Blobs(tmp_path / "blobs", free_space=lambda: self.free)
@@ -70,11 +91,18 @@ class World:
             free_space=lambda: self.free,
             apply=self.apply,
             samples=self.samples,
+            usage=self.usage,
             clock=self.clock,
             monotonic=self.clock,
             sleep=lambda _s: None,
         )
         self.cookies: dict[str, str] = {}
+
+    def close(self) -> None:
+        if self.usage is not None:
+            self.stop.set()
+            self.usage.stop_and_join(time.monotonic() + 5)
+        self.settings.close()
 
     def call(
         self,
@@ -142,7 +170,14 @@ def setup_token(records: list[logging.LogRecord]) -> str:
 def world(tmp_path: Path) -> Generator[World]:
     made = World(tmp_path)
     yield made
-    made.settings.close()
+    made.close()
+
+
+@pytest.fixture
+def usage_world(tmp_path: Path) -> Generator[World]:
+    made = World(tmp_path, usage=True)
+    yield made
+    made.close()
 
 
 PLAIN = "http://tunebox.home.arpa:8083"
@@ -2253,3 +2288,326 @@ def test_an_apply_that_crashes_answers_stored_not_live(
     answer = save(world, csrf, 0, state_of(station("a")))
     assert json_of(answer) == {"version": 1, "changed": True, "applied": False}
     assert any(r.getMessage() == "apply_failed" for r in caplog.records)
+
+
+DEVICE = "0123456789abcdef0123456789abcdef"
+AGENT = "Chrome 120, Linux"
+
+
+def played(world: World) -> Usage:
+    """A device that has visited and listened, stored by the writer."""
+    usage = world.usage
+    assert usage is not None
+    usage.visit(DEVICE, AGENT, None)
+    usage.work_once()
+    usage.heard(DEVICE, "owr", "Default", AGENT, None)
+    world.clock.now += 5
+    usage.work_once()
+    return usage
+
+
+def change_usage(world: World, csrf: str, body: object) -> Response:
+    return world.call("POST", "/admin/api/usage/settings", body, csrf=csrf)
+
+
+@pytest.mark.parametrize(
+    "path", ["usage/live", "usage/summary?range=7d", "usage/devices", "usage/settings"]
+)
+def test_usage_routes_need_a_session(usage_world: World, path: str) -> None:
+    assert usage_world.call("GET", f"/admin/api/{path}").status == 401
+
+
+@pytest.mark.parametrize("path", ["usage/device/name", "usage/device/delete", "usage/settings"])
+def test_usage_posts_need_the_csrf_token(usage_world: World, path: str) -> None:
+    assert usage_world.call("POST", f"/admin/api/{path}", {"id": DEVICE}).status == 401
+    usage_world.login()
+    response = usage_world.call("POST", f"/admin/api/{path}", {"id": DEVICE})
+    assert response.status == 403
+    assert json_of(response)["error"] == "bad_csrf"
+
+
+def test_live_and_settings_answer(usage_world: World) -> None:
+    usage_world.login()
+    played(usage_world)
+    live = usage_world.call("GET", "/admin/api/usage/live")
+    assert live.status == 200
+    assert ("Cache-Control", "no-store") in live.headers
+    answer = json_of(live)
+    assert answer["saved"] is True
+    assert [s["channel"] for s in answer["sessions"]] == ["owr"]
+    settings = json_of(usage_world.call("GET", "/admin/api/usage/settings"))
+    assert settings == {
+        "retention_days": 365,
+        "store_addresses": False,
+        "saved": True,
+        "retention_min": RETENTION_MIN,
+        "retention_max": RETENTION_MAX,
+    }
+
+
+@pytest.mark.parametrize("wanted", ["7d", "30d", "12m", "all"])
+def test_summary_answers_each_range(usage_world: World, wanted: str) -> None:
+    usage_world.login()
+    played(usage_world)
+    response = usage_world.call("GET", f"/admin/api/usage/summary?range={wanted}")
+    assert response.status == 200
+    summary = json_of(response)
+    assert summary["zone"] == "UTC"
+    assert summary["channels"][0][0] == "owr"
+
+
+@pytest.mark.parametrize(
+    "query", ["", "?range=1y", "?range=7d&range=30d", "?a=1&b=2&c=3&d=4&range=7d"]
+)
+def test_summary_refuses_an_unknown_range(usage_world: World, query: str) -> None:
+    usage_world.login()
+    response = usage_world.call("GET", f"/admin/api/usage/summary{query}")
+    assert response.status == 400
+    assert json_of(response)["error"] == "bad_request"
+
+
+def test_device_routes_take_the_id_in_the_query_or_body_and_404_a_bad_one(
+    usage_world: World,
+) -> None:
+    csrf = usage_world.login()
+    for wanted in ("nothex", DEVICE.upper(), DEVICE):
+        assert usage_world.call("GET", f"/admin/api/usage/device?id={wanted}").status == 404
+        for path, body in (
+            ("usage/device/name", {"id": wanted, "name": "Car"}),
+            ("usage/device/delete", {"id": wanted}),
+        ):
+            assert usage_world.call("POST", f"/admin/api/{path}", body, csrf=csrf).status == 404
+    assert usage_world.call("GET", "/admin/api/usage/device").status == 404
+    for body in ({}, {"id": 7}, {"id": DEVICE, "name": 7}, [DEVICE]):
+        refused = usage_world.call("POST", "/admin/api/usage/device/name", body, csrf=csrf)
+        assert refused.status == 400
+    refused = usage_world.call("POST", "/admin/api/usage/device/delete", {"id": None}, csrf=csrf)
+    assert refused.status == 400
+
+
+def test_device_pages_by_a_finite_before(usage_world: World) -> None:
+    usage_world.login()
+    played(usage_world)
+    base = f"/admin/api/usage/device?id={DEVICE}"
+    page = json_of(usage_world.call("GET", base))
+    assert page["id"] == DEVICE
+    started = page["sessions"][0]["started_at"]
+    assert json_of(usage_world.call("GET", f"{base}&before={started}"))["sessions"] == []
+    later = json_of(usage_world.call("GET", f"{base}&before={started + 1}"))
+    assert len(later["sessions"]) == 1
+    for before in ("soon", "nan", "inf", "-inf"):
+        refused = usage_world.call("GET", f"{base}&before={before}")
+        assert refused.status == 400, before
+    assert usage_world.call("GET", f"{base}&id={DEVICE}").status == 400
+
+
+def test_a_device_that_never_played_is_answered(usage_world: World) -> None:
+    usage_world.login()
+    usage = usage_world.usage
+    assert usage is not None
+    usage.visit(DEVICE, AGENT, None)
+    usage.work_once()
+    page = usage_world.call("GET", f"/admin/api/usage/device?id={DEVICE}")
+    assert page.status == 200
+    assert json_of(page)["sessions"] == []
+
+
+def test_rename_and_delete(usage_world: World) -> None:
+    csrf = usage_world.login()
+    played(usage_world)
+    name = "/admin/api/usage/device/name"
+    assert usage_world.call("POST", name, {"id": DEVICE, "name": "  Car "}, csrf=csrf).status == 204
+    devices = json_of(usage_world.call("GET", "/admin/api/usage/devices"))
+    assert [(d["id"], d["name"]) for d in devices["devices"]] == [(DEVICE, "Car")]
+    assert devices["never_played"] == 0
+    assert usage_world.call("POST", name, {"id": DEVICE, "name": " "}, csrf=csrf).status == 204
+    devices = json_of(usage_world.call("GET", "/admin/api/usage/devices"))
+    assert devices["devices"][0]["name"] is None
+    deleted = usage_world.call("POST", "/admin/api/usage/device/delete", {"id": DEVICE}, csrf=csrf)
+    assert deleted.status == 204
+    assert json_of(usage_world.call("GET", "/admin/api/usage/devices"))["devices"] == []
+
+
+@pytest.mark.parametrize("name", ["x" * (NAME_MAX + 1), "bad \ud800"])
+def test_a_name_too_long_or_unstorable_is_refused(usage_world: World, name: str) -> None:
+    csrf = usage_world.login()
+    played(usage_world)
+    response = usage_world.call(
+        "POST", "/admin/api/usage/device/name", {"id": DEVICE, "name": name}, csrf=csrf
+    )
+    assert response.status == 400
+    assert json_of(response)["error"] == "bad_request"
+    longest = {"id": DEVICE, "name": "x" * NAME_MAX}
+    kept = usage_world.call("POST", "/admin/api/usage/device/name", longest, csrf=csrf)
+    assert kept.status == 204
+
+
+def test_turning_addresses_on_needs_a_fresh_code_and_off_does_not(
+    usage_world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    csrf = usage_world.login()
+    usage_world.clock.now += REAUTH_S + 1
+    on = change_usage(usage_world, csrf, {"store_addresses": True})
+    assert on.status == 403 and json_of(on)["error"] == "reauth_required"
+    # Refused whole: the retention in the same request is not applied.
+    both = change_usage(usage_world, csrf, {"retention_days": 90, "store_addresses": True})
+    assert both.status == 403
+    assert json_of(usage_world.call("GET", "/admin/api/usage/settings"))["retention_days"] == 365
+    fresh(usage_world, csrf)
+    with caplog.at_level(logging.INFO):
+        on = change_usage(usage_world, csrf, {"store_addresses": True})
+    assert on.status == 200
+    assert json_of(on)["store_addresses"] is True
+    changes = [r.__dict__["fields"] for r in caplog.records if r.getMessage() == "admin_change"]
+    assert changes == [
+        {
+            "kind": "usage_settings",
+            "retention_days": 365,
+            "store_addresses": True,
+            "client": "198.51.100.7",
+        }
+    ]
+    usage_world.clock.now += REAUTH_S + 1
+    # Already on: asking for on again changes nothing and needs no code.
+    assert change_usage(usage_world, csrf, {"store_addresses": True}).status == 200
+    off = change_usage(usage_world, csrf, {"store_addresses": False})
+    assert off.status == 200
+    assert json_of(off)["store_addresses"] is False
+
+
+def test_retention_and_addresses_in_one_request(usage_world: World) -> None:
+    csrf = usage_world.login()
+    fresh(usage_world, csrf)
+    answer = change_usage(usage_world, csrf, {"retention_days": 90, "store_addresses": True})
+    assert answer.status == 200
+    assert json_of(answer) == {
+        "retention_days": 90,
+        "store_addresses": True,
+        "saved": True,
+        "retention_min": RETENTION_MIN,
+        "retention_max": RETENTION_MAX,
+    }
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"retention_days": RETENTION_MIN - 1},
+        {"retention_days": RETENTION_MAX + 1},
+        {"retention_days": "90"},
+        {"retention_days": 90.0},
+        {"retention_days": True},
+        {"store_addresses": 1},
+        {"store_addresses": False, "retention_days": 0},
+        {},
+        {"other": 1},
+        [90],
+    ],
+)
+def test_retention_outside_its_range_is_refused(usage_world: World, body: object) -> None:
+    csrf = usage_world.login()
+    response = change_usage(usage_world, csrf, body)
+    assert response.status == 400
+    assert json_of(response)["error"] == "bad_request"
+    assert json_of(usage_world.call("GET", "/admin/api/usage/settings"))["retention_days"] == 365
+
+
+def test_retention_at_its_limits_is_kept(usage_world: World) -> None:
+    csrf = usage_world.login()
+    for days in (RETENTION_MIN, RETENTION_MAX):
+        answer = change_usage(usage_world, csrf, {"retention_days": days})
+        assert answer.status == 200
+        assert json_of(answer)["retention_days"] == days
+
+
+def test_reads_answer_503_while_the_store_is_unavailable(
+    usage_world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage_world.login()
+    played(usage_world)
+
+    def broken(_path: Path) -> sqlite3.Connection:
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(usagedb, "open_reader", broken)
+    for path in ("usage/summary?range=7d", "usage/devices", f"usage/device?id={DEVICE}"):
+        response = usage_world.call("GET", f"/admin/api/{path}")
+        assert response.status == 503
+        assert json_of(response)["error"] == "usage_unavailable"
+        assert ("Cache-Control", "no-store") in response.headers
+    live = usage_world.call("GET", "/admin/api/usage/live")
+    assert live.status == 200
+    assert json_of(live)["saved"] is True
+
+
+def test_live_answers_from_memory_while_the_store_is_unavailable(
+    usage_world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csrf = usage_world.login()
+    usage = usage_world.usage
+    assert usage is not None
+
+    def broken(*_: object) -> usagedb.Written:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(usagedb, "write_batch", broken)
+    usage.heard(DEVICE, "owr", "Default", AGENT, None)
+    usage.work_once()
+    live = usage_world.call("GET", "/admin/api/usage/live")
+    assert live.status == 200
+    assert json_of(live)["saved"] is False
+    assert [s["channel"] for s in json_of(live)["sessions"]] == ["owr"]
+    assert json_of(usage_world.call("GET", "/admin/api/usage/settings"))["saved"] is False
+    assert usage_world.call("GET", "/admin/api/usage/summary?range=7d").status == 503
+    for path, body in (
+        ("usage/settings", {"retention_days": 90}),
+        ("usage/device/name", {"id": DEVICE, "name": "Car"}),
+        ("usage/device/delete", {"id": DEVICE}),
+    ):
+        response = usage_world.call("POST", f"/admin/api/{path}", body, csrf=csrf)
+        assert response.status == 503, path
+        assert json_of(response)["error"] == "usage_unavailable"
+    # Off never waits for the store: memory is off at once, saved says not yet.
+    off = change_usage(usage_world, csrf, {"store_addresses": False})
+    assert off.status == 200
+    assert json_of(off)["saved"] is False
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "usage/live"),
+        ("GET", "usage/summary?range=7d"),
+        ("GET", "usage/devices"),
+        ("GET", f"usage/device?id={DEVICE}"),
+        ("POST", "usage/device/name"),
+        ("POST", "usage/device/delete"),
+        ("GET", "usage/settings"),
+        ("POST", "usage/settings"),
+    ],
+)
+def test_without_usage_the_routes_are_not_found(world: World, method: str, path: str) -> None:
+    csrf = world.login()
+    response = world.call(method, f"/admin/api/{path}", {"id": DEVICE}, csrf=csrf)
+    assert response.status == 404
+    assert json_of(response)["error"] == "not_found"
+
+
+def test_no_device_id_reaches_the_log(usage_world: World, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.DEBUG):
+        csrf = usage_world.login()
+        played(usage_world)
+        usage_world.call("GET", f"/admin/api/usage/device?id={DEVICE}")
+        usage_world.call("GET", f"/admin/api/usage/device?id={DEVICE}&before=nope")
+        usage_world.call("GET", "/admin/api/usage/devices")
+        usage_world.call("GET", "/admin/api/usage/live")
+        for name in ("Car", "x" * (NAME_MAX + 1)):
+            usage_world.call(
+                "POST", "/admin/api/usage/device/name", {"id": DEVICE, "name": name}, csrf=csrf
+            )
+        usage_world.call("POST", "/admin/api/usage/device/delete", {"id": DEVICE}, csrf=csrf)
+        usage_world.call("POST", "/admin/api/usage/device/delete", {"id": DEVICE}, csrf=csrf)
+    assert caplog.records
+    for record in caplog.records:
+        assert DEVICE not in record.getMessage()
+        assert DEVICE not in repr(record.__dict__.get("fields"))

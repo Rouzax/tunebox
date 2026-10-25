@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import re
 import time
 import urllib.parse
@@ -62,7 +63,8 @@ from tunebox.settings import (
     state_to_json,
 )
 from tunebox.tomlout import dumps
-from tunebox.usage import Usage
+from tunebox.usage import Usage, UsageSettings, UsageUnavailable
+from tunebox.usagecore import NAME_MAX, RETENTION_MAX, RETENTION_MIN, valid_device
 
 log = logging.getLogger(__name__)
 
@@ -301,6 +303,16 @@ class Admin:
             ("POST", "account/sessions/{part}/end"): Route(self._end_session),
             ("GET", "pin"): Route(self._pin_status),
             ("POST", "pin"): Route(self._pin_change, code=True),
+            ("GET", "usage/live"): Route(self._using(self._usage_live)),
+            ("GET", "usage/summary"): Route(self._using(self._usage_summary)),
+            ("GET", "usage/devices"): Route(self._using(self._usage_devices)),
+            ("GET", "usage/device"): Route(self._using(self._usage_device)),
+            ("POST", "usage/device/name"): Route(self._using(self._usage_rename)),
+            ("POST", "usage/device/delete"): Route(self._using(self._usage_delete)),
+            ("GET", "usage/settings"): Route(self._using(self._usage_settings)),
+            # A fresh code only when the change turns addresses on, so the
+            # check is in the handler, not code=True.
+            ("POST", "usage/settings"): Route(self._using(self._usage_change)),
         }
         if config.setup_page and not accounts.exists():
             self._setup_token = crypto.new_token()
@@ -334,6 +346,8 @@ class Admin:
                 return self._api(request)
             except SettingsWriteError, SettingsUnavailable:
                 return _error(503, "read_only")
+            except UsageUnavailable:
+                return _error(503, "usage_unavailable")
         if request.method not in ("GET", "HEAD"):
             return _error(405, "method_not_allowed")
         return self._static(request.path.removeprefix("/admin/"))
@@ -997,6 +1011,109 @@ class Admin:
         )
         return _json(200, dataclasses.asdict(status))
 
+    def _using(
+        self, handler: Callable[[Request, Session, Usage], Response]
+    ) -> Callable[[Request, Session], Response]:
+        """A usage handler as a route's run, answering not found when this
+        Admin was built without usage."""
+
+        def run(request: Request, session: Session) -> Response:
+            if self._usage is None:
+                return _error(404, "not_found")
+            return handler(request, session, self._usage)
+
+        return run
+
+    def _usage_live(self, _request: Request, _session: Session, usage: Usage) -> Response:
+        return _json(200, usage.live())
+
+    def _usage_summary(self, request: Request, _session: Session, usage: Usage) -> Response:
+        query = _query(request)
+        try:
+            return _json(200, usage.summary(query["range"] if query else ""))
+        except ValueError, KeyError:
+            return _error(400, "bad_request")
+
+    def _usage_devices(self, _request: Request, _session: Session, usage: Usage) -> Response:
+        return _json(200, usage.devices())
+
+    def _usage_device(self, request: Request, _session: Session, usage: Usage) -> Response:
+        query = _query(request)
+        if query is None:
+            return _error(400, "bad_request")
+        device = query.get("id")
+        if device is None or not valid_device(device):
+            return _error(404, "not_found")
+        before: float | None = None
+        if "before" in query:
+            try:
+                before = float(query["before"])
+            except ValueError:
+                return _error(400, "bad_request")
+            if not math.isfinite(before):
+                return _error(400, "bad_request")
+        page = usage.device(device, before)
+        return _error(404, "not_found") if page is None else _json(200, page)
+
+    def _usage_rename(self, request: Request, _session: Session, usage: Usage) -> Response:
+        body = _body(request, ("id", "name"))
+        if body is None:
+            return _error(400, "bad_request")
+        name = body["name"].strip()
+        if len(name) > NAME_MAX or not encodable(name):
+            return _error(400, "bad_request")
+        if not valid_device(body["id"]) or not usage.rename(body["id"], name or None):
+            return _error(404, "not_found")
+        return Response(204)
+
+    def _usage_delete(self, request: Request, _session: Session, usage: Usage) -> Response:
+        body = _body(request, ("id",))
+        if body is None:
+            return _error(400, "bad_request")
+        if not valid_device(body["id"]) or not usage.delete(body["id"]):
+            return _error(404, "not_found")
+        return Response(204)
+
+    def _usage_settings(self, _request: Request, _session: Session, usage: Usage) -> Response:
+        return _json(200, _usage_answer(usage.settings()))
+
+    def _usage_change(self, request: Request, session: Session, usage: Usage) -> Response:
+        """Every field is checked, and the fresh code too, before anything
+        is applied; then retention first, addresses second."""
+        payload = _object(request) or {}
+        days = payload.get("retention_days")
+        addresses = payload.get("store_addresses")
+        if (days is None and addresses is None) or (
+            days is not None
+            and (
+                not isinstance(days, int)
+                or isinstance(days, bool)
+                or not RETENTION_MIN <= days <= RETENTION_MAX
+            )
+        ):
+            return _error(400, "bad_request")
+        if addresses is not None and not isinstance(addresses, bool):
+            return _error(400, "bad_request")
+        if addresses and not usage.settings().store_addresses and not self._accounts.fresh(session):
+            return _error(403, "reauth_required")
+        current = usage.settings()
+        if days is not None:
+            current = usage.set_retention(days)
+        if addresses is not None:
+            current = usage.set_addresses(addresses)
+        # Usage logs usage_settings_changed once a change is stored; this
+        # line says who asked.
+        event(
+            log,
+            logging.INFO,
+            "admin_change",
+            kind="usage_settings",
+            retention_days=current.retention_days,
+            store_addresses=current.store_addresses,
+            client=request.client,
+        )
+        return _json(200, _usage_answer(current))
+
     def _static(self, relative: str) -> Response:
         target = inside(self._web, urllib.parse.unquote(relative) or "index.html")
         content_type = _TYPES.get(target.suffix) if target else None
@@ -1039,6 +1156,25 @@ def _object(request: Request) -> dict[str, object] | None:
     except ValueError, RecursionError:
         return None
     return cast("dict[str, object]", payload) if isinstance(payload, dict) else None
+
+
+def _query(request: Request) -> dict[str, str] | None:
+    """The query's fields, or None when it has too many or names one twice."""
+    try:
+        fields = urllib.parse.parse_qs(request.query, max_num_fields=4)
+    except ValueError:
+        return None
+    if any(len(values) != 1 for values in fields.values()):
+        return None
+    return {key: values[0] for key, values in fields.items()}
+
+
+def _usage_answer(current: UsageSettings) -> dict[str, object]:
+    return {
+        **dataclasses.asdict(current),
+        "retention_min": RETENTION_MIN,
+        "retention_max": RETENTION_MAX,
+    }
 
 
 def _version(payload: dict[str, object] | None) -> int | None:
