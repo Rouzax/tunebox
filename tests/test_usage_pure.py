@@ -1,3 +1,4 @@
+import time
 from datetime import UTC
 from zoneinfo import ZoneInfo
 
@@ -60,6 +61,17 @@ ID = "0123456789abcdef0123456789abcdef"
 )
 def test_short_agent(header: str | None, expected: str) -> None:
     assert short_agent(header) == expected
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["Version/" + "1" * 600, "Version/" + "1" * 300 + "." * 300],
+    ids=["digits", "digits-then-dots"],
+)
+def test_short_agent_does_not_backtrack_on_a_hostile_header(header: str) -> None:
+    began = time.perf_counter()
+    assert short_agent(header) == "Browser, Other"
+    assert time.perf_counter() - began < 0.01
 
 
 @pytest.mark.parametrize(

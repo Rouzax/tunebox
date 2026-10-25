@@ -33,13 +33,16 @@ PAGE = 50
 AGENT_READ = 512
 
 _DEVICE = re.compile(r"[0-9a-f]{32}")
-# Order matters: Edge and Samsung Internet also say Chrome, Chrome also says Safari.
+# Order matters: Edge and Samsung Internet also say Chrome, Chrome also says
+# Safari. Safari's entry counts only with "Safari/" in the header; one
+# pattern spanning Version/ to Safari/ backtracks cubically on a long run of
+# digits.
 _BROWSERS = (
     ("Edge", re.compile(r"\bEdg(?:e|A|iOS)?/(\d+)")),
     ("Samsung Internet", re.compile(r"\bSamsungBrowser/(\d+)")),
     ("Firefox", re.compile(r"\b(?:Firefox|FxiOS)/(\d+)")),
     ("Chrome", re.compile(r"\b(?:Chrome|CriOS)/(\d+)")),
-    ("Safari", re.compile(r"\bVersion/(\d+)[.\d]*.*\bSafari/")),
+    ("Safari", re.compile(r"\bVersion/(\d+)")),
 )
 _SYSTEMS = (
     ("Android", re.compile(r"\bAndroid\b")),
@@ -57,6 +60,8 @@ def short_agent(header: str | None) -> str:
     text = (header or "")[:AGENT_READ]
     browser = "Browser"
     for name, pattern in _BROWSERS:
+        if name == "Safari" and "Safari/" not in text:
+            continue
         found = pattern.search(text)
         if found:
             version = int(found.group(1)[:4])
