@@ -114,6 +114,9 @@ class Usage:
         flush_s: float = FLUSH_S,
     ) -> None:
         self._path = path
+        # An address-off the store could not take yet, kept across a
+        # restart. A plain file, so a request thread can leave it.
+        self._marker = path.with_name(path.name + "-addresses-off")
         self._zone = zone
         self._zone_name = zone_name
         self._free = free
@@ -127,6 +130,8 @@ class Usage:
         self._available = False
         self._logged_down = False
         self._clear_pending = False
+        # Address-offs so far: an on queued before an off must not win.
+        self._offs = 0
         self._retention = RETENTION_DEFAULT
         self._seen: set[str] = set()
         self._thread: threading.Thread | None = None
@@ -228,24 +233,32 @@ class Usage:
         while the store cannot be written the answer says saved False and
         the writer stores it and clears addresses first on recovery."""
         if on:
-            self._call(self._addresses_on)
+            with self._state:
+                offs = self._offs
+            self._call(lambda db: self._addresses_on(db, offs))
             return self.settings()
+        with contextlib.suppress(OSError):
+            self._marker.touch()
         with self._state:
             self._live.addresses = False
             self._clear_pending = True
+            self._offs += 1
             available = self._available
         if available:
             with contextlib.suppress(UsageUnavailable):
                 self._call(self._clear_if_pending)
         return self.settings()
 
-    def _addresses_on(self, db: sqlite3.Connection) -> None:
+    def _addresses_on(self, db: sqlite3.Connection, offs: int) -> None:
+        """One statement after the clear, so a failure leaves addresses off.
+        An off made since the on was asked for wins."""
         self._clear_if_pending(db)
-        usagedb.set_meta(db, "store_addresses", "1")
-        usagedb.set_meta(db, "addresses_cleared", "1")
         with self._state:
-            # An off that arrived meanwhile wins.
-            if not self._clear_pending:
+            if self._offs != offs:
+                return
+        usagedb.set_meta(db, "store_addresses", "1")
+        with self._state:
+            if self._offs == offs and not self._clear_pending:
                 self._live.addresses = True
         self._log_settings()
 
@@ -259,6 +272,9 @@ class Usage:
         usagedb.set_meta(db, "store_addresses", "0")
         usagedb.clear_addresses(db)
         usagedb.set_meta(db, "addresses_cleared", "1")
+        # A marker left behind only repeats the clear at the next start.
+        with contextlib.suppress(OSError):
+            self._marker.unlink(missing_ok=True)
         with self._state:
             self._clear_pending = False
         self._log_settings()
@@ -299,7 +315,12 @@ class Usage:
 
     def device(self, device: str, before: float | None) -> dict[str, object] | None:
         since = self._clock() - 30 * _DAY_S
-        return self._read(lambda db: usagedb.device_page(db, device, before, since))
+        page = self._read(lambda db: usagedb.device_page(db, device, before, since))
+        # Rows the clear has not reached yet still hold addresses.
+        if page is not None and not self.settings().store_addresses:
+            for row in cast(list[dict[str, object]], page["sessions"]):
+                row.pop("address", None)
+        return page
 
     def _read[T](self, read: Callable[[sqlite3.Connection], T]) -> T:
         with self._state:
@@ -633,13 +654,14 @@ class Usage:
         retention = _retention_of(usagedb.get_meta(db, "retention_days", ""))
         stored = usagedb.get_meta(db, "store_addresses", "0") == "1"
         unfinished = usagedb.get_meta(db, "addresses_cleared", "1") == "0"
+        marked = self._marker.exists()
         self._live.names = usagedb.named_devices(db)
         # Memory is newer once a session has ended since start-up.
         if self._live.last_ended() is None:
             self._live.set_last_ended(usagedb.last_ended(db))
         with self._state:
             self._retention = retention
-            self._clear_pending = self._clear_pending or unfinished
+            self._clear_pending = self._clear_pending or unfinished or marked
             self._live.addresses = stored and not self._clear_pending
             self._available = True
 

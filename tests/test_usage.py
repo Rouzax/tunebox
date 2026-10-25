@@ -909,7 +909,7 @@ def test_a_clear_cut_short_is_finished_at_start(path: Path, clock: Clock, free: 
         first.set_addresses(True)
         first.visit(ID, AGENT, ADDRESS)
         first.work_once()
-    execute(path, "UPDATE meta SET value = '0' WHERE key = 'addresses_cleared'")
+    execute(path, "INSERT OR REPLACE INTO meta VALUES ('addresses_cleared', '0')")
     with started(make(path, clock, free)) as second:
         second.work_once()
         assert second.settings() == UsageSettings(365, False, True)
@@ -1039,3 +1039,153 @@ def test_a_batch_requeued_after_an_address_off_keeps_no_address(
     usage.set_addresses(True)
     usage.work_once()
     assert query(path, "SELECT address FROM visits") == [(None,)]
+
+
+def marker(path: Path) -> Path:
+    return path.with_name(path.name + "-addresses-off")
+
+
+def test_an_address_off_during_an_outage_survives_a_restart(
+    path: Path, clock: Clock, free: Free
+) -> None:
+    with started(make(path, clock, free)) as first:
+        first.set_addresses(True)
+        first.visit(ID, AGENT, ADDRESS)
+        first.heard(ID, "owr", "Default", AGENT, ADDRESS)
+        first.work_once()
+        assert set(addresses(path)) == {ADDRESS}
+        free.value = 0
+        first.visit(ID, AGENT, ADDRESS)
+        first.work_once()
+        assert first.settings().saved is False
+        assert first.set_addresses(False) == UsageSettings(365, False, False)
+        assert marker(path).exists()
+    assert meta(path, "store_addresses") == "1"  # the outage kept it from the file
+    free.value = None
+    with started(make(path, clock, free)) as second:
+        second.work_once()
+        assert second.settings() == UsageSettings(365, False, True)
+    assert meta(path, "store_addresses") == "0"
+    assert set(addresses(path)) == {None}
+    assert not marker(path).exists()
+
+
+def test_an_address_off_marker_keeps_addresses_off_while_the_disk_is_low(
+    path: Path, clock: Clock, free: Free
+) -> None:
+    with started(make(path, clock, free)) as first:
+        first.set_addresses(True)
+        first.visit(ID, AGENT, ADDRESS)
+        first.work_once()
+    marker(path).touch()
+    free.value = 0
+    with started(make(path, clock, free)) as second:
+        second.work_once()
+        assert second.settings() == UsageSettings(365, False, False)
+    assert marker(path).exists()
+    free.value = None
+    with started(make(path, clock, free)) as third:
+        third.work_once()
+        assert third.settings() == UsageSettings(365, False, True)
+    assert meta(path, "store_addresses") == "0"
+    assert addresses(path) == [None]
+    assert not marker(path).exists()
+
+
+def blocked_rename(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[threading.Event, threading.Event]:
+    """Holds the writer inside a rename until go is set."""
+    entered, go = threading.Event(), threading.Event()
+    real_rename = usagedb.rename_device
+
+    def slow_rename(db: sqlite3.Connection, device: str, name: str | None) -> bool:
+        entered.set()
+        go.wait(5)
+        return real_rename(db, device, name)
+
+    monkeypatch.setattr(usagedb, "rename_device", slow_rename)
+    return entered, go
+
+
+def test_an_off_after_a_queued_on_wins(
+    usage: Usage, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage.set_addresses(True)
+    usage.visit(ID, AGENT, ADDRESS)
+    usage.work_once()
+    usage.set_addresses(False)
+    entered, go = blocked_rename(monkeypatch)
+    renamer = threading.Thread(target=lambda: usage.rename(ID, "Car"))
+    renamer.start()
+    assert entered.wait(5)
+    queued = usage._commands  # pyright: ignore[reportPrivateUsage]
+    switch_on = threading.Thread(target=lambda: usage.set_addresses(True))
+    switch_on.start()
+    wait_for(lambda: queued.qsize() == 1)
+    switch_off = threading.Thread(target=lambda: usage.set_addresses(False))
+    switch_off.start()
+    wait_for(lambda: queued.qsize() == 2)
+    go.set()
+    for thread in (renamer, switch_on, switch_off):
+        thread.join(5)
+    assert usage.settings() == UsageSettings(365, False, True)
+    assert meta(path, "store_addresses") == "0"
+
+
+def test_switching_addresses_on_is_one_statement(
+    usage: Usage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage.work_once()
+    written: list[tuple[str, str]] = []
+    real_set_meta = usagedb.set_meta
+
+    def spy(db: sqlite3.Connection, key: str, value: str) -> None:
+        written.append((key, value))
+        real_set_meta(db, key, value)
+
+    monkeypatch.setattr(usagedb, "set_meta", spy)
+    usage.set_addresses(True)
+    assert written == [("store_addresses", "1")]
+
+
+def test_an_on_that_fails_in_sqlite_changes_nothing(
+    usage: Usage, clock: Clock, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage.set_addresses(False)
+    real_set_meta = usagedb.set_meta
+
+    def failing(db: sqlite3.Connection, key: str, value: str) -> None:
+        if (key, value) == ("store_addresses", "1"):
+            raise sqlite3.OperationalError("disk I/O error")
+        real_set_meta(db, key, value)
+
+    monkeypatch.setattr(usagedb, "set_meta", failing)
+    with pytest.raises(UsageUnavailable):
+        usage.set_addresses(True)
+    monkeypatch.setattr(usagedb, "set_meta", real_set_meta)
+    clock.now += RETRY_S
+    usage.work_once()
+    assert usage.settings() == UsageSettings(365, False, True)
+    assert meta(path, "store_addresses") == "0"
+
+
+def test_the_device_page_shows_no_address_once_addresses_are_off(
+    usage: Usage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage.set_addresses(True)
+    usage.visit(ID, AGENT, ADDRESS)
+    usage.heard(ID, "owr", "Default", AGENT, ADDRESS)
+    usage.work_once()
+    entered, go = blocked_rename(monkeypatch)
+    renamer = threading.Thread(target=lambda: usage.rename(ID, "Car"))
+    renamer.start()
+    assert entered.wait(5)
+    monkeypatch.setattr(usage_module, "COMMAND_WAIT_S", 0.05)
+    usage.set_addresses(False)  # the writer is busy: the clear waits
+    page = usage.device(ID, None)
+    go.set()
+    renamer.join(5)
+    assert page is not None
+    rows = cast(list[dict[str, object]], page["sessions"])
+    assert len(rows) == 1 and "address" not in rows[0]
