@@ -603,8 +603,9 @@ The page has three parts:
 - **Devices**: each device that has played, with its browser and system,
   first and last seen, and hours in the last 30 days. Open one to see its
   sessions and top stations, to name it ("Car", "Phone") or to delete it
-  with its history. A deleted device that loads the player again comes
-  back as a new, unnamed device.
+  with its history. Totals of finished days keep its listening; today's
+  figures lose it. A deleted device that loads the player again comes back
+  as a new, unnamed device.
 
 On the Settings page, **Usage** has two settings:
 
@@ -618,7 +619,8 @@ On the Settings page, **Usage** has two settings:
   authenticator app. Switching it off stops storing addresses at once and
   clears the stored ones; if tunebox cannot write its usage data at that
   moment, the page says the clear is still to come, and tunebox does it as
-  soon as it can.
+  soon as it can, also after a restart (it keeps a small file,
+  `data/usage.db-addresses-off`, until the clear is done).
 
 Usage data lives in `data/usage.db`, apart from the stations and the
 account, so a problem with it never affects saving stations or logging in.
@@ -813,7 +815,8 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   the stations, export them first and import the file after the reset (see
   [Export and import](#manage-the-stations)).
 - **Reset** the usage statistics: stop tunebox, delete `data/usage.db`,
-  `data/usage.db-wal` and `data/usage.db-shm`, and start it again. Deleting
+  `data/usage.db-wal`, `data/usage.db-shm` and, if present,
+  `data/usage.db-addresses-off`, and start it again. Deleting
   them while tunebox runs resets nothing: tunebox keeps writing to the file
   it has open. The two usage settings go back to their defaults (365 days,
   addresses off); browsers keep their device cookie and come back as
