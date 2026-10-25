@@ -9,6 +9,7 @@ import {render as renderHistory} from './history.js';
 import {qrMatrix, qrSvg} from './qr.js';
 import {render as renderSettings} from './settings.js';
 import {render as renderStations} from './stations.js';
+import {render as renderUsage} from './usage.js';
 import {decodeHashPart, saveMessage, tickets} from './state.js';
 
 const ERRORS = {
@@ -31,6 +32,7 @@ const ERRORS = {
     logo_store_full: 'Uploaded logos have reached their 100 MB limit. A logo that no station and no history entry uses is removed at a restart once it is a day old.',
     disk_low: 'The disk tunebox keeps its data on is almost full, so nothing was saved. Free some space and try again.',
     logo_store_failed: 'tunebox cannot store the image right now. Check the free disk space.',
+    usage_unavailable: 'tunebox cannot read its usage data right now.',
 };
 
 function show(id) {
@@ -365,6 +367,8 @@ function route() {
         renderEdit(view, ctx, name === 'edit' ? (id === null ? arg : id) : null);
     } else if (name === 'settings') {
         renderSettings(view, ctx);
+    } else if (name === 'usage') {
+        renderUsage(view, ctx);
     } else if (name === 'account') {
         renderAccount(view, ctx);
     } else if (name === 'history') {

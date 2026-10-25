@@ -3,8 +3,9 @@
 // refused, restore from the history, change the settings, lock the player
 // with a PIN and pass it, hide a chosen station behind it, ask for a code
 // before a PIN change or before showing that station again, confirm account
-// changes with a code, export and import the stations, upload a logo,
-// change the password, log out and log in with it,
+// changes with a code, see a listener on the Usage page, rename and delete
+// its device, change the usage settings, export and import the stations,
+// upload a logo, change the password, log out and log in with it,
 // checking after each step
 // that the player's /api/channels follows. Also checks that the pages have no
 // sideways scroll at phone and laptop sizes, and no page or CSP errors.
@@ -217,7 +218,13 @@ async function startTunebox(folder, port, streamUrl, setup = false) {
     // checks it runs in child processes.
     const child = spawn(PYTHON, ['-m', 'tunebox'], {
         cwd: ROOT,
-        env: Object.assign({}, process.env, {TUNEBOX_CONFIG: join(folder, 'tunebox.toml'), LOG_LEVEL: process.env.DEBUG_TUNEBOX_LOG ? 'debug' : 'info'}),
+        // Usage is written every second, so the Usage page's devices show
+        // within the check's waits.
+        env: Object.assign({}, process.env, {
+            TUNEBOX_CONFIG: join(folder, 'tunebox.toml'),
+            LOG_LEVEL: process.env.DEBUG_TUNEBOX_LOG ? 'debug' : 'info',
+            TUNEBOX_USAGE_FLUSH_S: '1',
+        }),
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
     });
@@ -910,6 +917,116 @@ async function run() {
             await evaluate(`document.querySelector('form.settings').latitude.value = ''`);
             return shown ? null : 'no error for a latitude without a longitude';
         });
+
+        // The page itself plays the part of a player: loading / sets the
+        // device cookie, and a poll with a stream is a listening session.
+        const listen = () => evaluate(`fetch('/', {credentials: 'same-origin'}).then(() =>
+            fetch('/api/channels/first/now?buffer_s=0&stream=Default', {credentials: 'same-origin'})).then((r) => r.status)`);
+        const deviceRow = `document.querySelector('.usage-table.devices .open-device')`;
+
+        await step('a listener shows on the Usage page', async () => {
+            const status = await listen();
+            if (status !== 200) {
+                return `the poll answered ${status}`;
+            }
+            await evaluate(`window.location.hash = '#usage'`);
+            return (await until(`[...document.querySelectorAll('.usage-now li')].some((n) => n.textContent.includes('First Station'))`, 8000))
+                ? null : 'no live listener shown';
+        });
+        await until(`document.querySelector('.usage-summary .bars')`);
+        await noSideways('usage');
+
+        await step('rename the device that played', async () => {
+            // A second poll keeps the session live, whatever the waits took.
+            await listen();
+            // The device is listed once the writer has stored its session;
+            // the list loads with the page, so the page is drawn again (a
+            // navigation to the same hash would not reload it).
+            let listed = false;
+            for (let i = 0; i < 6 && !listed; i++) {
+                await sleep(1500);
+                await evaluate(`window.location.hash = '#stations'`);
+                await until(`document.querySelector('.station')`);
+                await evaluate(`window.location.hash = '#usage'`);
+                listed = await until(deviceRow, 3000);
+            }
+            if (!listed) {
+                return 'the device that played is not listed';
+            }
+            await click('.usage-table.devices .open-device');
+            if (!(await until(`document.querySelector('form.rename-device [name=name]')`))) {
+                return 'the device did not open';
+            }
+            await evaluate(`document.querySelector('form.rename-device').elements.name.value = 'Car'`);
+            const said = await saveBy('form.rename-device button[type=submit]');
+            if (said !== 'Name saved.') {
+                return said;
+            }
+            if (!(await until(`${deviceRow} && ${deviceRow}.textContent === 'Car'`))) {
+                return 'the list does not show the new name';
+            }
+            return (await until(`[...document.querySelectorAll('.usage-now li')].some((n) => n.textContent.startsWith('Car') && n.textContent.includes('First Station'))`))
+                ? null : `the live row says ${await evaluate(`document.querySelector('.usage-now').textContent`)}`;
+        });
+        // The device's sessions are on screen too.
+        await until(`document.querySelector('.device .usage-table')`);
+        await noSideways('usage device');
+
+        await step('delete the device', async () => {
+            await buttonNamed('Delete this device');
+            if (!(await until(`document.querySelector('.confirm-delete')`))) {
+                return 'no question before deleting';
+            }
+            const said = await saveBy('.confirm-delete');
+            if (said !== 'Device deleted.') {
+                return said;
+            }
+            return (await until(`!${deviceRow} && !document.querySelector('form.rename-device')`))
+                ? null : 'the device is still listed';
+        });
+
+        const usageSettings = () => evaluate(`fetch('/admin/api/usage/settings').then((r) => r.json())`);
+        const usageForm = `document.querySelector('form.usage [name=retention_days]')`;
+        await step('usage settings save, and storing addresses asks for a code', async () => {
+            await evaluate(`window.location.hash = '#settings'`);
+            if (!(await until(usageForm))) {
+                return 'no usage settings';
+            }
+            await evaluate(`document.querySelector('form.usage').retention_days.value = '400'`);
+            let said = await saveBy('form.usage button[type=submit]');
+            if (said !== 'Usage settings saved.' || (await usageSettings()).retention_days !== 400) {
+                return `retention: ${said}`;
+            }
+            // The form is drawn again from what is stored.
+            if (!(await until(`${usageForm} && ${usageForm}.value === '400'`))) {
+                return 'the form does not show the stored retention';
+            }
+            await evaluate(`document.querySelector('form.usage').store_addresses.checked = true`);
+            await evaluate(`document.querySelector('.message').textContent = ''`);
+            await click('form.usage button[type=submit]');
+            if (!(await until(`document.querySelector('form.usage form.confirm-code')`))) {
+                return `no code asked (message: ${await message()})`;
+            }
+            await typeCode();
+            if (!(await until(`document.querySelector('.message').textContent !== ''`))) {
+                return 'no answer after the code';
+            }
+            said = await message();
+            if (said !== 'Usage settings saved.' || !(await usageSettings()).store_addresses) {
+                return `addresses on: ${said}`;
+            }
+            if (!(await until(`${usageForm} && document.querySelector('form.usage').store_addresses.checked`))) {
+                return 'the form does not show addresses on';
+            }
+            await evaluate(`document.querySelector('form.usage').store_addresses.checked = false`);
+            said = await saveBy('form.usage button[type=submit]');
+            const stored = await usageSettings();
+            if (await evaluate(`Boolean(document.querySelector('form.confirm-code'))`)) {
+                return 'switching addresses off asked for a code';
+            }
+            return said === 'Usage settings saved.' && stored.store_addresses === false ? null : `addresses off: ${said}`;
+        });
+        await noSideways('settings with usage');
 
         const savePin = async (mode, digits) => {
             await send('Page.navigate', {url: `${base}/admin/#settings`});

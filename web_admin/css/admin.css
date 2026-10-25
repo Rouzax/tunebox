@@ -158,7 +158,8 @@ code {
 
 nav {
     display: flex;
-    gap: 1rem;
+    flex-wrap: wrap;
+    gap: 0 1rem;
     flex: 1;
 }
 
@@ -449,7 +450,8 @@ legend {
     font-weight: 500;
 }
 
-.settings.pin {
+.settings.pin,
+.settings.usage {
     margin-top:  2rem;
     padding-top: 1rem;
     border-top:  1px solid var(--line);
@@ -492,4 +494,119 @@ legend {
 .logo-small {
     max-width: 40px;
     max-height: 40px;
+}
+
+/* The Usage page. */
+
+.usage-part {
+    gap: 0.75rem;
+}
+
+.usage-part h2 {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.usage-now,
+.usage-top {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.4rem;
+}
+
+.usage-now li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--field);
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+    overflow-wrap: anywhere;
+}
+
+.usage-top li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    overflow-wrap: anywhere;
+}
+
+.ranges button[aria-pressed="true"] {
+    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.usage-summary,
+.device {
+    display: grid;
+    /* As for form: a wide table scrolls in its own box instead of
+       widening the column. */
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+/* Bars grow from the bottom; each one's height is its share, set from
+   script. */
+.bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 8rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.bar {
+    flex: 1 1 0;
+    min-width: 0;
+    background: var(--accent);
+    border-radius: 2px 2px 0 0;
+}
+
+.axis {
+    display: flex;
+    justify-content: space-between;
+    color: var(--muted);
+    font-size: 0.8rem;
+}
+
+.tops {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: 1rem;
+}
+
+.usage-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.9rem;
+}
+
+.usage-table th,
+.usage-table td {
+    text-align: left;
+    vertical-align: top;
+    padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+}
+
+button.link {
+    color: var(--accent);
+    background: transparent;
+    padding: 0;
+    text-decoration: underline;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.device {
+    padding-top: 0.5rem;
 }
