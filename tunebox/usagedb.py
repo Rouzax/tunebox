@@ -45,6 +45,7 @@ MIGRATIONS: tuple[str, ...] = (
     "CREATE INDEX listens_started ON listens (started_at);"
     "CREATE INDEX listens_last ON listens (last_seen);"
     "CREATE INDEX listens_device ON listens (device, started_at);"
+    "CREATE INDEX listens_device_last ON listens (device, last_seen);"
     "CREATE TABLE daily (day TEXT NOT NULL, metric TEXT NOT NULL, key TEXT NOT NULL,"
     " value REAL NOT NULL, PRIMARY KEY (day, metric, key));"
     "CREATE INDEX daily_metric ON daily (metric, day);"

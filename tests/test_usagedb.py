@@ -537,7 +537,10 @@ def test_a_device_s_month_is_found_by_index(db: sqlite3.Connection) -> None:
     args = {"since": 0.0, "device": ID, "top": 5}
     for sql in (u.DEVICES, u.DEVICE_TOP):
         plan = db.execute(f"EXPLAIN QUERY PLAN {sql}", args).fetchall()
-        assert any("USING INDEX listens_device" in cast(str, row[-1]) for row in plan)
+        details = [cast(str, row[-1]) for row in plan]
+        assert any(
+            "USING INDEX listens_device_last (device=? AND last_seen>?)" in d for d in details
+        ), details
 
 
 def test_listening_moves_the_device_s_last_seen(db: sqlite3.Connection) -> None:
