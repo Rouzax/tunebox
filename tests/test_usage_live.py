@@ -1,6 +1,6 @@
-from tunebox.usage import Live
 from tunebox.usagecore import IDLE_S, MAX_LIVE, MAX_PENDING, POLL_S
 from tunebox.usagedb import SessionRow, VisitRow, Written
+from tunebox.usagelive import Live
 
 ID = "0123456789abcdef0123456789abcdef"
 OTHER = "fedcba9876543210fedcba9876543210"

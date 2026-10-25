@@ -11,10 +11,11 @@ from typing import cast
 import pytest
 
 from tunebox import usage as usage_module
-from tunebox import usagedb
-from tunebox.usage import Live, Usage, UsageSettings, UsageUnavailable
+from tunebox import usagedb, usagelive
+from tunebox.usage import Usage, UsageSettings, UsageUnavailable
 from tunebox.usagecore import COMMAND_WAIT_S, RETRY_S
 from tunebox.usagedb import SessionRow, VisitRow
+from tunebox.usagelive import Live
 
 ID = "0123456789abcdef0123456789abcdef"
 OTHER = "fedcba9876543210fedcba9876543210"
@@ -560,7 +561,7 @@ def test_rows_dropped_from_memory_are_counted_for_today(
     usage: Usage, path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     usage.work_once()
-    monkeypatch.setattr(usage_module, "MAX_PENDING", 2)
+    monkeypatch.setattr(usagelive, "MAX_PENDING", 2)
     for _ in range(5):
         usage.visit(ID, AGENT, None)
     usage.work_once()
@@ -574,7 +575,7 @@ def test_a_failed_flush_counts_what_requeue_drops(
     usage: Usage, clock: Clock, path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     usage.work_once()
-    monkeypatch.setattr(usage_module, "MAX_PENDING", 3)
+    monkeypatch.setattr(usagelive, "MAX_PENDING", 3)
     for _ in range(3):
         usage.visit(ID, AGENT, None)
     entered, go = threading.Event(), threading.Event()
