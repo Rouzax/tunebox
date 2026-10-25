@@ -187,6 +187,11 @@ def _days(first: float, last: float, zone: tzinfo) -> set[str]:
     return days
 
 
+# Listening counts as seen: a player left open makes no new visit, and
+# retention keeps a device as long as it is seen.
+_HEARD = "UPDATE devices SET last_seen = max(last_seen, ?) WHERE id = ?"
+
+
 def write_batch(
     db: sqlite3.Connection,
     visits: list[VisitRow],
@@ -228,6 +233,8 @@ def write_batch(
             last_seen = row.last_seen
             if row.rowid is not None:
                 db.execute("UPDATE listens SET last_seen = ? WHERE id = ?", (last_seen, row.rowid))
+                if row.device is not None:
+                    db.execute(_HEARD, (last_seen, row.device))
                 rowids[id(row)] = (row.rowid, row.device)
                 stored[id(row)] = last_seen
                 before = row.started_at if row.stored_last_seen is None else row.stored_last_seen
@@ -256,6 +263,7 @@ def write_batch(
             )
             if device is not None:
                 db.execute("UPDATE devices SET played = 1 WHERE id = ?", (device,))
+                db.execute(_HEARD, (last_seen, device))
             rowids[id(row)] = (cast(int, cursor.lastrowid), device)
             stored[id(row)] = last_seen
             days |= _days(row.started_at, interval_end(row.started_at, last_seen), zone)

@@ -288,7 +288,7 @@ def test_delete_device_leaves_other_devices_alone(
 ) -> None:
     monkeypatch.setattr(u, "BATCH", 2)
     visits = [VisitRow(DAY0 + i, d, AGENT, None) for i in range(5) for d in (ID, OTHER)]
-    u.write_batch(db, visits, [session(ID), session(OTHER)], set(), UTC)
+    u.write_batch(db, visits, [session(ID), session(OTHER, last=DAY0 + 800)], set(), UTC)
     assert u.delete_device(db, ID) is True
     assert db.execute("SELECT count(*) FROM visits WHERE device = ?", (ID,)).fetchone()[0] == 0
     assert db.execute("SELECT count(*) FROM visits WHERE device = ?", (OTHER,)).fetchone()[0] == 5
@@ -331,7 +331,7 @@ def test_devices_page_lists_played_devices_with_their_month(db: sqlite3.Connecti
             "name": "Car",
             "agent": AGENT,
             "first_seen": DAY0,
-            "last_seen": DAY0,
+            "last_seen": DAY0 + 400,
             "seconds_30d": 300.0,
         }
     ]
@@ -341,7 +341,7 @@ def test_devices_page_orders_by_last_seen_and_counts_a_silent_device_as_zero(
     db: sqlite3.Connection,
 ) -> None:
     visits = [VisitRow(DAY0, ID, AGENT, None), VisitRow(DAY0 + 5, OTHER, AGENT, None)]
-    u.write_batch(db, visits, [session(ID), session(OTHER)], set(), UTC)
+    u.write_batch(db, visits, [session(ID), session(OTHER, last=DAY0 + 800)], set(), UTC)
     devices, never_played = u.devices_page(db, DAY0 + 10_000)
     assert never_played == 0
     assert [(d["id"], d["seconds_30d"]) for d in devices] == [(OTHER, 0.0), (ID, 0.0)]
@@ -357,7 +357,7 @@ def test_device_page_shows_sessions_and_top_stations(db: sqlite3.Connection) -> 
     page = u.device_page(db, ID, None, DAY0)
     assert page is not None
     assert (page["id"], page["name"], page["agent"]) == (ID, None, AGENT)
-    assert page["first_seen"] == DAY0 and page["last_seen"] == DAY0
+    assert page["first_seen"] == DAY0 and page["last_seen"] == DAY0 + 600
     assert page["sessions"] == [
         {
             "id": written.rowids[id(b)][0],
@@ -538,3 +538,18 @@ def test_a_device_s_month_is_found_by_index(db: sqlite3.Connection) -> None:
     for sql in (u.DEVICES, u.DEVICE_TOP):
         plan = db.execute(f"EXPLAIN QUERY PLAN {sql}", args).fetchall()
         assert any("USING INDEX listens_device" in cast(str, row[-1]) for row in plan)
+
+
+def test_listening_moves_the_device_s_last_seen(db: sqlite3.Connection) -> None:
+    visits = [VisitRow(DAY0, ID, AGENT, None), VisitRow(DAY0 + 100, OTHER, AGENT, None)]
+    u.write_batch(db, visits, [session(OTHER, DAY0 + 100, DAY0 + 200)], set(), UTC)
+    s = session(ID, DAY0 + 10, DAY0 + 1800)
+    written = u.write_batch(db, [], [s], set(), UTC)
+    last_seen = "SELECT last_seen FROM devices WHERE id = ?"
+    assert db.execute(last_seen, (ID,)).fetchone()[0] == DAY0 + 1800
+    s.rowid, s.device = written.rowids[id(s)]
+    s.resolved, s.last_seen = True, DAY0 + 3600
+    u.write_batch(db, [], [s], set(), UTC)
+    assert db.execute(last_seen, (ID,)).fetchone()[0] == DAY0 + 3600
+    devices, _ = u.devices_page(db, DAY0)
+    assert [d["id"] for d in devices] == [ID, OTHER]
