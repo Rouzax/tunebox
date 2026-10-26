@@ -961,12 +961,18 @@ def test_the_admin_gets_the_path_and_the_query_apart(tmp_path: Path) -> None:
 
 
 SECRET_STATION = dataclasses.replace(channel_config(), id="secret", name="Secret", needs_pin=True)
+LOCKED_GROUP_KEY = "g0123456789abcdef"
+LOCKED_GROUP_STATION = dataclasses.replace(
+    channel_config(), id="grouped", name="Grouped", group="Locked group"
+)
 LOCKED = [
     "/api/channels",
     "/api/player",
     "/api/channels/owr/now",
     "/logos/owr.png",
     "/logos/small/owr.png",
+    f"/logos/groups/{LOCKED_GROUP_KEY}.png",
+    f"/logos/groups/small/{LOCKED_GROUP_KEY}.png",
     f"/covers/{name_for(COVER_LINK)}.jpg",
 ]
 
@@ -978,7 +984,14 @@ class PinWorld:
         self.settings = Settings(tmp_path / "pin.db")
         self.pin = Pin(self.settings, lambda: b"k" * 32)
         self.pin.change(mode, "123456")
-        self.httpd = make_server(tmp_path, pin=self.pin, extra=(SECRET_STATION,), clock=clock)
+        self.httpd = make_server(
+            tmp_path,
+            pin=self.pin,
+            extra=(SECRET_STATION, LOCKED_GROUP_STATION),
+            clock=clock,
+            group_keys={"Locked group": LOCKED_GROUP_KEY},
+            group_files=(LOCKED_GROUP_KEY,),
+        )
 
     def close(self) -> None:
         self.httpd.shutdown()
@@ -1124,7 +1137,7 @@ def test_pin_requests_that_are_not_a_pin(
 def test_hidden_stations_are_left_out_until_the_pin(stations: PinWorld) -> None:
     status, headers, body = request(stations.httpd, "/api/channels")
     assert status == 200
-    assert [c["id"] for c in json.loads(body)] == ["owr"]
+    assert [c["id"] for c in json.loads(body)] == ["owr", "grouped"]
     assert headers["x-tunebox-pin"] == "more"
     assert headers["cache-control"].startswith("private")
     for path in ["/api/channels/secret/now", "/logos/secret.png", "/logos/default/secret.jpg"]:
@@ -1133,7 +1146,7 @@ def test_hidden_stations_are_left_out_until_the_pin(stations: PinWorld) -> None:
     assert request(stations.httpd, "/")[0] == 200
     cookie = grant_of(stations.httpd)
     status, headers, body = request(stations.httpd, "/api/channels", headers={"Cookie": cookie})
-    assert [c["id"] for c in json.loads(body)] == ["owr", "secret"]
+    assert [c["id"] for c in json.loads(body)] == ["owr", "secret", "grouped"]
     assert "x-tunebox-pin" not in headers
     for path in ["/api/channels/secret/now", "/logos/secret.png", "/logos/default/secret.jpg"]:
         assert request(stations.httpd, path, headers={"Cookie": cookie})[0] == 200, path
@@ -1144,7 +1157,7 @@ def test_hidden_stations_are_left_out_until_the_pin(stations: PinWorld) -> None:
 def test_with_the_pin_off_nothing_is_hidden_or_private(stations: PinWorld) -> None:
     stations.pin.change("off", None)
     status, headers, body = request(stations.httpd, "/api/channels")
-    assert [c["id"] for c in json.loads(body)] == ["owr", "secret"]
+    assert [c["id"] for c in json.loads(body)] == ["owr", "secret", "grouped"]
     assert headers["cache-control"] == "no-cache"
     assert "vary" not in headers and "x-tunebox-pin" not in headers
     status, headers, _ = give_pin(stations.httpd)
