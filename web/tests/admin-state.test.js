@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
     addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, exportName, historyLabel, historyTarget, importSummary, logoPreview, moveGroup,
-    moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setSettings, stationsByGroup, tickets, validId,
+    matchesStation, groupSummary, moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setSettings, stationsByGroup, tickets, validId,
 } from '../../web_admin/js/state.js';
 
 function base() {
@@ -216,4 +216,20 @@ test('diffStates keys each state once', () => {
 test('a new station leaves codec and kbps for the stream check to fill', () => {
     const stream = newStation('a', 'A', null).doc.streams[0];
     assert.deepEqual(stream, {name: 'Default', url: 'https://'});
+});
+
+test('the find box matches a name or an id, in any case', () => {
+    const row = newStation('radio-538', 'Radio 538', null);
+    assert.ok(matchesStation(row, '538'));
+    assert.ok(matchesStation(row, 'RADIO'));
+    assert.ok(matchesStation(row, 'radio-5'));
+    assert.ok(matchesStation(row, '  '));
+    assert.ok(!matchesStation(row, 'qmusic'));
+});
+
+test('a folded group counts its stations and those that are off', () => {
+    const on = newStation('a', 'A', 'G');
+    const off = {...newStation('b', 'B', 'G'), enabled: false};
+    assert.equal(groupSummary([on]), '1 station');
+    assert.equal(groupSummary([on, off, off]), '3 stations · 2 off');
 });

@@ -32,6 +32,27 @@ export function stationsByGroup(state) {
         .filter((group) => group.name !== null || group.rows.length);
 }
 
+// A long station list folds by group; up to this many stations it all
+// stays open, as a short list reads best whole.
+export const FOLD_FROM = 16;
+
+// Whether a station answers the find box: its name or its id holds the
+// typed text, in any case.
+export function matchesStation(row, query) {
+    const wanted = query.trim().toLowerCase();
+    if (!wanted) {
+        return true;
+    }
+    return (row.doc.name || '').toLowerCase().indexOf(wanted) >= 0 || row.id.toLowerCase().indexOf(wanted) >= 0;
+}
+
+// What a folded group shows of itself: "10 stations · 2 off".
+export function groupSummary(rows) {
+    const off = rows.filter((row) => !row.enabled).length;
+    const count = rows.length === 1 ? '1 station' : `${rows.length} stations`;
+    return off ? `${count} · ${off} off` : count;
+}
+
 // Rows are kept in listing order, so the stored positions match the page.
 function ordered(state) {
     const channels = state.channels

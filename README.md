@@ -363,6 +363,11 @@ seconds), without a restart.
   (`default_channel`) clears that setting; the player then starts on the
   first station, and the message says so.
 - A group can be deleted once it has no stations.
+- From 16 stations on, the list folds by group: tap a group's name to open
+  or fold it (a folded group shows how many stations it has and how many
+  are off), or use **Open all** and **Fold all**. The browser remembers
+  which groups you left open. **Find a station** shows only the stations
+  whose name or id holds what you type, with their groups open.
 
 The edit form has the same settings as a `[[channels]]` block (see
 [Change the stations](#change-the-stations)), in sections. Station and

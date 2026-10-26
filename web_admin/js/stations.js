@@ -1,9 +1,38 @@
-// The station list: one section per group, every change saved at once.
+// The station list: one section per group, every change saved at once. A
+// long list folds by group, and the find box narrows it to the stations
+// whose name or id holds the text typed.
 import {button, el} from './dom.js';
 import {
-    addGroup, deleteGroup, deleteStation, duplicateStation, moveGroup, moveStation, renameGroup,
-    setEnabled, stationsByGroup,
+    FOLD_FROM, addGroup, deleteGroup, deleteStation, duplicateStation, groupSummary, matchesStation,
+    moveGroup, moveStation, renameGroup, setEnabled, stationsByGroup,
 } from './state.js';
+
+// Which groups are open stays with the browser (per viewer, nothing the
+// server needs); storage that is missing or refused just starts folded.
+const OPEN_KEY = 'tunebox.admin.open-groups';
+let query = '';
+
+function loadOpen() {
+    try {
+        const stored = JSON.parse(window.localStorage.getItem(OPEN_KEY) || '[]');
+        return new Set(Array.isArray(stored) ? stored.filter((name) => typeof name === 'string') : []);
+    } catch (error) {
+        return new Set();
+    }
+}
+
+function storeOpen(open) {
+    try {
+        window.localStorage.setItem(OPEN_KEY, JSON.stringify([...open]));
+    } catch (error) {
+        // Kept for this page only.
+    }
+}
+
+// The stations without a group are a group of their own here.
+function groupKey(group) {
+    return group.name === null ? '' : group.name;
+}
 
 function clearedText(id) {
     return `Saved. The default station was ${id}; the player now starts on the first station.`;
@@ -60,10 +89,10 @@ function stationRow(ctx, row, peers, index, redraw) {
     return item;
 }
 
-function groupHeader(ctx, group, position, count, redraw) {
+function groupHeader(ctx, group, position, count, redraw, fold) {
     const state = ctx.config.state;
     if (group.name === null) {
-        return el('h2', null, 'Not in a group');
+        return el('div', {class: 'group-head'}, fold.toggle('Not in a group'));
     }
     if (redraw.state.rename === group.name) {
         const input = el('input', {value: group.name, 'aria-label': 'Group name', required: true});
@@ -80,7 +109,7 @@ function groupHeader(ctx, group, position, count, redraw) {
         button('close', 'Cancel', () => redraw({}), {class: 'quiet'}));
     }
     return el('div', {class: 'group-head'},
-        el('h2', null, group.name),
+        fold.toggle(group.name),
         el('div', {class: 'actions'},
             button('arrow_upward', null, () => ctx.save(moveGroup(state, group.name, -1), group.name),
                 {title: `Move group ${group.name} up`, disabled: position === 0}),
@@ -114,20 +143,90 @@ export function render(root, ctx) {
         draw();
     };
     redraw.state = {};
+    const open = loadOpen();
     function draw() {
-        const groups = stationsByGroup(ctx.config.state);
+        const state = ctx.config.state;
+        const folding = state.channels.length >= FOLD_FROM;
+        const groups = stationsByGroup(state);
         const named = groups.filter((group) => group.name !== null);
-        const sections = groups.map((group) => el('section', {class: 'group'},
-            groupHeader(ctx, group, named.indexOf(group), named.length, redraw),
-            group.rows.length
-                ? el('ul', {class: 'stations'},
-                    group.rows.map((row, index) => stationRow(ctx, row, group.rows, index, redraw)))
-                : el('p', {class: 'hint'}, 'No stations in this group.')));
-        root.replaceChildren(
+        const shown = groups.map((group) => {
+            const key = groupKey(group);
+            const id = `group-${groups.indexOf(group)}`;
+            const summary = el('span', {class: 'hint group-summary'}, groupSummary(group.rows));
+            const toggleButton = el('button', {type: 'button', class: 'fold', 'aria-controls': id});
+            // The heading holds the button that folds the group, the
+            // accessible way round (a heading inside a button is invalid).
+            const fold = {
+                toggle: (title) => {
+                    if (!folding) {
+                        return el('h2', null, title);
+                    }
+                    toggleButton.replaceChildren(el('span', {class: 'fold-mark', 'aria-hidden': 'true'}), title, summary);
+                    toggleButton.addEventListener('click', () => {
+                        if (open.has(key)) {
+                            open.delete(key);
+                        } else {
+                            open.add(key);
+                        }
+                        storeOpen(open);
+                        apply();
+                    });
+                    return el('h2', null, toggleButton);
+                },
+            };
+            const rows = group.rows.map((row, index) => ({row, item: stationRow(ctx, row, group.rows, index, redraw)}));
+            const body = group.rows.length
+                ? el('ul', {class: 'stations', id}, rows.map((entry) => entry.item))
+                : el('p', {class: 'hint', id}, 'No stations in this group.');
+            const node = el('section', {class: 'group'},
+                groupHeader(ctx, group, named.indexOf(group), named.length, redraw, fold), body);
+            return {group, key, rows, body, node, summary, toggleButton};
+        });
+        // Folding and finding only show and hide what is drawn, so the find
+        // box keeps its focus while typing.
+        function apply() {
+            const finding = query.trim() !== '';
+            shown.forEach((entry) => {
+                const matches = entry.rows.filter((r) => matchesStation(r.row, query));
+                entry.rows.forEach((r) => { r.item.hidden = finding && matches.indexOf(r) < 0; });
+                // A station being renamed, deleted or confirmed keeps its group open.
+                const busy = entry.rows.some((r) => r.row.id === redraw.state.confirm) || redraw.state.rename === entry.group.name;
+                const isOpen = !folding || busy || (finding ? matches.length > 0 : open.has(entry.key));
+                entry.node.hidden = finding && matches.length === 0;
+                entry.body.hidden = !isOpen;
+                entry.summary.hidden = isOpen;
+                entry.toggleButton.setAttribute('aria-expanded', String(isOpen));
+                entry.node.classList.toggle('folded', !isOpen);
+            });
+            nothing.hidden = !finding || shown.some((entry) => !entry.node.hidden);
+        }
+        const nothing = el('p', {class: 'hint'}, 'No station name or id holds that text.');
+        const find = el('input', {type: 'search', class: 'find', placeholder: 'Find a station', 'aria-label': 'Find a station',
+            value: query, oninput: (event) => { query = event.target.value; apply(); }});
+        const all = (opening) => () => {
+            shown.forEach((entry) => {
+                if (opening) {
+                    open.add(entry.key);
+                } else {
+                    open.delete(entry.key);
+                }
+            });
+            storeOpen(open);
+            apply();
+        };
+        root.replaceChildren(...[
             el('div', {class: 'toolbar'},
                 button('add', 'Add station', () => ctx.go('#new')),
                 addGroupForm(ctx)),
-            ...sections);
+            folding
+                ? el('div', {class: 'toolbar'}, find,
+                    el('button', {type: 'button', class: 'quiet', onclick: all(true)}, 'Open all'),
+                    el('button', {type: 'button', class: 'quiet', onclick: all(false)}, 'Fold all'))
+                : null,
+            nothing,
+            ...shown.map((entry) => entry.node),
+        ].filter(Boolean));
+        apply();
     }
     draw();
 }
