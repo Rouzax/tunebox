@@ -18,8 +18,9 @@ to use it.
 
 For listeners:
 
-- **A player for every screen.** Stations in groups with their logos, a
-  quality choice per station (for example a lower bitrate on 4G), recently
+- **A player for every screen.** Stations in groups with their logos (with
+  several groups the station page opens on a tile per group, with its own
+  image or a mosaic of its stations' logos), a quality choice per station (for example a lower bitrate on 4G), recently
   played songs with covers, and a layout that puts the cover above the
   title in a narrow window and beside it in a wide one. The station's name
   sits at the top. The title, artists and Played-by credit sit on a card,
@@ -756,7 +757,11 @@ badge = '^(#\d+)\s+|\s*\[((?:Top 30|Last Week)[^\]]*)\]\s*$'
   [Fine-tune when titles change](#fine-tune-when-titles-change)).
   A single `stream_url = "..."` still works and becomes one stream named
   "Default".
-- **`group`** puts stations under a heading on the channel page.
+- **`group`** puts stations under a heading on the channel page. With two
+  or more groups the channel page opens on tiles, one per group (its image,
+  set in `[[groups]]` or the admin panel, or else a mosaic of its first
+  four station logos) and one per station without a group; tapping a group
+  shows its stations.
 - **`always = true`** keeps tunebox checking the station while nobody
   listens. Without it, a station is only checked while someone has listened
   to it in the last ten minutes; its history then has gaps.
@@ -832,8 +837,10 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   and the recent lists. Copy it while tunebox is stopped, or copy
   `tunebox.db-wal` along with it. `data/blobs/` holds the logos uploaded
   in the panel, the only copy of those images, so back it up with the
-  database. `data/covers/` and `data/logos/` are caches that tunebox
-  fills again by itself; they need no backup. `data/usage.db` holds the
+  database. `data/covers/` and `data/logos/` (group images included, in
+  `data/logos/groups/`) are caches that tunebox fills again by itself;
+  they need no backup. An uploaded group image, like an uploaded logo,
+  lives in `data/blobs/`. `data/usage.db` holds the
   [usage statistics](#usage-statistics); back it up only if you want to
   keep them (copy `usage.db-wal` with it, or stop tunebox first).
 - **Reset** the recent lists and covers: stop tunebox, delete
@@ -891,6 +898,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | Saving, importing, restoring or uploading says "The disk tunebox keeps its data on is almost full" (`admin_disk_low` in the log) | Less than 256 MB would stay free on the disk that holds `data/`. Nothing was saved. | Free disk space and try again. |
 | An upload says "Uploaded logos have reached their 100 MB limit" (`logo_store_full` in the log) | The uploads in `data/blobs/` add up to 100 MB. | Wait for a restart to remove uploads that no station and no History entry names once they are a day old; see [Logos](#logos). |
 | The edit form says "tunebox cannot store the image right now" after an upload (`logo_store_failed` in the log) | `data/blobs/` cannot be written: the disk is full or the folder is not owned by user id 1000. | Free disk space or fix the owner (`sudo chown -R 1000:1000 data`), then upload the image again. |
+| A group tile shows a mosaic of logos instead of the group's image | The image is still downloading, its address did not give a PNG, JPEG, WebP or SVG (`logo_failed` or `logo_rejected` with `group=` in the log), or its upload is gone (`logo_blob_missing` with `kind` `group`). A group whose stations are all switched off has no image either. | Wait a moment and reload the player; otherwise open the group's pencil in the admin panel and set the image again. |
 | `logo_missing` or `logo_blob_missing` in the log; a station shows no logo | The station names an uploaded logo (`blob:...`) whose file is gone from `data/blobs/`, for example after that folder was deleted or the database was restored without it. | Edit the station, upload the logo again and save. Back up `data/blobs/` together with `tunebox.db`. |
 | The Usage page says "Usage data is not being saved" (`usage_store_unavailable` in the log) | `data/usage.db` cannot be written: the disk is nearly full (`reason` `disk_low`: less than 256 MB would stay free), the folder is not owned by user id 1000 (`open_failed` or `write_failed`), or the file comes from a newer tunebox (`schema_newer`). Live listeners still show; up to 10,000 waiting visits and sessions are kept in memory. | Free disk space or fix the owner (`sudo chown -R 1000:1000 data`); tunebox tries again every minute and logs `usage_store_recovered`. After going back to an older image, update the image again, or reset the usage statistics (see [Update, back up and reset](#update-back-up-and-reset)). |
 | The Usage page says "tunebox cannot read its usage data right now" (`usage_store_unavailable` with `reason` `read_failed`) | The page could not read `data/usage.db`: the same causes as above, since reading the history needs the file too. | As above. |
