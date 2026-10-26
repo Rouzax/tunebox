@@ -286,9 +286,11 @@ class Channel:
             stale = self._stale_since
         return build(recent, self._clock(), delay_s), stale
 
-    def _track_json(self, track: Track) -> dict[str, Any]:
+    def _track_json(self, track: Track, photo: bool = False) -> dict[str, Any]:
+        """photo adds the artists' photo, the other side of the cover the
+        player shows; history has no such side."""
         cover = self._covers.lookup(track)
-        return {
+        entry: dict[str, Any] = {
             "artist": track.artist,
             "artists": list(track.artists),
             "title": track.title,
@@ -298,6 +300,10 @@ class Channel:
             "cover": cover.url if cover else None,
             "cover_kind": cover.kind if cover else None,
         }
+        if photo:
+            own = cover is not None and cover.kind == "album"
+            entry["artist_photo"] = self._covers.photo(track) if own else None
+        return entry
 
     def now_view(
         self,
@@ -327,11 +333,11 @@ class Channel:
             track = timeline.upcoming
             upcoming = {
                 # A station ID is coming: the player switches to the channel name.
-                "track": self._track_json(track) if track.kind == "track" else None,
+                "track": self._track_json(track, photo=True) if track.kind == "track" else None,
                 "in_s": timeline.upcoming_in_s,
             }
         body: dict[str, Any] = {
-            "current": self._track_json(current) if current else None,
+            "current": self._track_json(current, photo=True) if current else None,
             "upcoming": upcoming,
             "history": [self._track_json(t) for t in history],
             "stale_since": stale,

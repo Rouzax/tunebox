@@ -108,11 +108,13 @@ def main() -> int:
     store = Store(config.server.data_dir / "tunebox.db")
     guard = Guard()
     cover_files = CoverFiles(config.server.data_dir / "covers", free=free_space)
+    catalogs = Catalogs(http.get)
     covers = CoverService(
         store,
-        Catalogs(http.get).find,
+        catalogs.find,
         cover_files,
         lambda url: guard.get(url, max_bytes=MAX_COVER),
+        find_photo=catalogs.artist_photo,
     )
     logos = Logos(config.server.data_dir / "logos", guard.get, blobs)
     bursts = Bursts(guard.stream)

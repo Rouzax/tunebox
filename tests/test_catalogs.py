@@ -236,3 +236,36 @@ def test_itunes_falls_back_to_the_full_name_of_a_band_with_an_ampersand() -> Non
     catalogs(http).find(make_track("YEARS & YEARS", "King"))
     terms = [query(url)["term"] for url in http.urls if "itunes.apple.com" in url]
     assert terms == ["YEARS King", "YEARS & YEARS King"]
+
+
+def test_artist_photo_alone_asks_only_for_the_artist() -> None:
+    http = FakeHttp(lambda _url: body({"data": [{"name": "Jef Nice", "picture_xl": ARTIST_PHOTO}]}))
+    found = catalogs(http).artist_photo(make_track("JEF NICE", "When Le Soleil Takes Over"))
+    assert found == Found(ARTIST_PHOTO, "artist", "deezer artist: Jef Nice")
+    assert all("/search/artist" in url for url in http.urls)
+
+
+def test_artist_photo_alone_tells_a_failure_from_a_miss() -> None:
+    def refused(_url: str) -> bytes:
+        raise HttpError("connection refused")
+
+    with pytest.raises(SearchError, match="connection refused"):
+        catalogs(FakeHttp(refused)).artist_photo(make_track())
+    assert catalogs(FakeHttp(lambda _url: body({"data": []}))).artist_photo(make_track()) is None
+
+
+def test_artist_photo_from_the_profile_with_the_most_fans() -> None:
+    duplicate = "https://example.invalid/images/artist/dup/1000x1000-000000-80-0-0.jpg"
+
+    def respond(url: str) -> bytes:
+        if "/search/artist" in url:
+            profiles = [
+                {"name": "Route 94", "nb_fan": 1690, "picture_xl": duplicate},
+                {"name": "Route 94", "nb_fan": 335901, "picture_xl": ARTIST_PHOTO},
+                {"name": "Route 8", "nb_fan": 999999, "picture_xl": duplicate},
+            ]
+            return body({"data": profiles})
+        return body({"data": [], "results": []})
+
+    found = catalogs(FakeHttp(respond)).artist_photo(make_track("ROUTE 94", "4Get The Girl"))
+    assert found == Found(ARTIST_PHOTO, "artist", "deezer artist: Route 94")

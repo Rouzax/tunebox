@@ -486,6 +486,25 @@ async function checkFocusRing(send, evaluate) {
     return problems;
 }
 
+// The pages fill the space between the station header and the control bar
+// whatever --car-vh says: the car's browser can leave that measurement
+// behind after a resize such as entering fullscreen, and a page sized from
+// it opened a gap above the control bar.
+async function checkStaleHeight(send, evaluate) {
+    await send('Emulation.setDeviceMetricsOverride', {width: 489, height: 518, deviceScaleFactor: 1, mobile: false});
+    await send('Page.navigate', {url: `${BASE}/`});
+    await sleep(2500);
+    await send('Emulation.setDeviceMetricsOverride', {width: 489, height: 600, deviceScaleFactor: 1, mobile: false});
+    await sleep(300);
+    await evaluate(`document.querySelector('.tunebox').style.setProperty('--car-vh', '518px')`);
+    await sleep(100);
+    const gap = await evaluate(`(() => {
+        const page = document.querySelector('.page.main').getBoundingClientRect();
+        return Math.round(document.querySelector('.player').getBoundingClientRect().top - page.bottom);
+    })()`);
+    return gap === 0 ? [] : [`a page sized from a stale --car-vh leaves a ${gap} px gap above the control bar`];
+}
+
 async function run() {
     const {send, errors, close, evaluate} = await connect({port: PORT});
     const failures = [];
@@ -495,6 +514,7 @@ async function run() {
     }
     try {
         failures.push(...await checkFocusRing(send, evaluate));
+        failures.push(...await checkStaleHeight(send, evaluate));
         for (const size of SIZES) {
             await send('Emulation.setDeviceMetricsOverride', {
                 width: size.width, height: size.height, deviceScaleFactor: 1, mobile: Boolean(size.mobile),

@@ -51,9 +51,12 @@ Behind the player:
   Among the matches it prefers the song's own release over a DJ mix,
   compilation or radio show, whose cover shows that rather than the song.
   When no song cover exists it shows a photo of the artist instead, and when
-  there is neither, no picture rather than the wrong one. tunebox
-  downloads each cover once and serves it itself, so listeners' browsers
-  never contact Deezer or iTunes.
+  there is neither, no picture rather than the wrong one. A song that has
+  its own cover also gets the artist's photo: tap the cover and it turns
+  like a card to show the photo, tap again to turn it back. A new song
+  starts on its cover, and a cover with no photo behind it does not turn.
+  tunebox downloads each cover and photo once and serves it itself, so
+  listeners' browsers never contact Deezer or iTunes.
 - **Tidy titles.** Station jingles and voice-overs are recognised and not
   shown as songs. Credits such as "(Played by ... at Tomorrowland)" are
   split off the title so a player can show them on their own line.
@@ -996,7 +999,8 @@ policy that keeps them from running script.
              "started_at": 1792217024107,
              "badge": null,
              "cover": "/covers/0f3a9c41d2e87b5a6c1d0e9f8a7b6c5d.jpg?v=18df62ef34e6b8a7",
-             "cover_kind": "album"},
+             "cover_kind": "album",
+             "artist_photo": "/covers/7c2e18a0b4f95d36e1a8c0d2b9f4e6a1.jpg?v=18df62f0a1c3e9b2"},
  "upcoming": {"track": {"...": "..."}, "in_s": 14},
  "history": [{"...": "..."}],
  "stale_since": null,
@@ -1031,8 +1035,13 @@ policy that keeps them from running script.
 - `cover` is a path on tunebox (`/covers/<name>.jpg?v=...`), or `null`
   while the cover is looked up or downloaded, or when nothing matched; show
   the station's image then. `cover_kind` is `album`, `artist` (an artist
-  photo) or `null`. **`GET /covers/<file>`** serves the image; browsers may
-  keep it for a year, since a changed cover gets a new path. Covers come
+  photo) or `null`. `artist_photo`, in `current` and `upcoming.track` only,
+  is a path to the artist's photo when `cover_kind` is `album`: the other
+  side of the cover. It is `null` while the photo is looked up or
+  downloaded (it can arrive a poll after the song), when Deezer has none,
+  and whenever the cover itself is the artist photo.
+  **`GET /covers/<file>`** serves the image; browsers may keep it for a
+  year, since a changed cover gets a new path. Covers come
   from tunebox itself, so a page can read their pixels (for colour
   extraction).
 - `stale_since` is when the station's feed stopped answering, in

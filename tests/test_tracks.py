@@ -71,6 +71,13 @@ def test_key_and_ident() -> None:
     assert track.ident == (7, "solomun|somebodys story")
 
 
+def test_an_artists_songs_share_one_photo_key() -> None:
+    stay = make_track("FISHER", "Stay")
+    assert stay.photo_key == make_track("FISHER", "Losing It").photo_key == "photo:fisher"
+    assert stay.photo_key != make_track("FISHER & CHRIS LAKE", "Stay").photo_key
+    assert stay.photo_key != stay.key
+
+
 def test_non_latin_names_keep_distinct_keys() -> None:
     first = make_track("ЛСП", "Монетка")
     second = make_track("ЛЕНИНГРАД", "Лабутены")

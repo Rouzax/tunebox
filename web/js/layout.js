@@ -1,8 +1,8 @@
 // Real height. Car and mobile browsers can report 100vh as the screen
-// height without their address bar, so pages sized in vh run taller than
-// the window and centre the title under the control bar while the bar is
-// shown. car.css sizes the pages and the cover from --car-vh, the measured
-// height of the player box, which follows the real window.
+// height without their address bar, so sizes in vh run taller than the
+// window. car.css sizes the wide layout's cover from --car-vh, the measured
+// height of the player box, which follows the real window; the pages take
+// their height from the layout, which needs no measurement.
 export function bindLayout(app) {
     const {root, toast} = app;
     const box = root.querySelector('.main-container');

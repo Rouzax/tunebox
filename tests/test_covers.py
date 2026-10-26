@@ -67,9 +67,17 @@ def service(
     store: Store | None = None,
     fetch: Fetch | None = None,
     folder: Path | None = None,
+    photos: Finder | None = None,
 ) -> CoverService:
     files = CoverFiles(folder or fresh_folder(), free=lambda: None, clock=lambda: now[0])
-    return CoverService(store or Store(None), finder, files, fetch or Fetch(), clock=lambda: now[0])
+    return CoverService(
+        store or Store(None),
+        finder,
+        files,
+        fetch or Fetch(),
+        clock=lambda: now[0],
+        find_photo=photos,
+    )
 
 
 def drain(covers: CoverService) -> None:
@@ -757,3 +765,95 @@ def test_the_cleaning_after_a_download_names_its_trigger_and_no_links(
     assert len(cleaned) == 1
     fields = getattr(cleaned[0], "fields", {})
     assert fields["trigger"] == "cap" and fields["links_known"] is None
+
+
+PHOTO_URL = "https://example.invalid/images/artist/def/1000x1000-000000-80-0-0.jpg"
+ALBUM = Found(URL, "album", "deezer: Fisher - Stay")
+PHOTO = Found(PHOTO_URL, "artist", "deezer artist: Fisher")
+
+
+def test_a_song_with_its_own_cover_gets_its_artists_photo() -> None:
+    photos = Finder(PHOTO)
+    covers = service(Finder(ALBUM), [0.0], photos=photos)
+    track = make_track()
+    covers.request(track, NOW)
+    drain(covers)
+    assert covers.photo(track) is None
+    # The next request, as the channel makes on every poll, queues the photo.
+    covers.request(track, NOW)
+    drain(covers)
+    photo = covers.photo(track)
+    assert photo is not None and photo.startswith(f"/covers/{name_for(PHOTO_URL)}.jpg?v=")
+    assert photos.calls == ["Stay"]
+    cover = covers.lookup(track)
+    assert cover is not None and cover.kind == "album" and cover.url != photo
+
+
+def test_songs_by_the_same_artists_share_one_photo() -> None:
+    photos = Finder(PHOTO)
+    covers = service(Finder(ALBUM), [0.0], photos=photos)
+    for title in ("Stay", "Losing It", "Stay"):
+        track = make_track("FISHER", title)
+        covers.request(track, NOW)
+        drain(covers)
+        covers.request(track, NOW)
+        drain(covers)
+    assert photos.calls == ["Stay"]
+    assert covers.photo(make_track("FISHER", "Losing It")) == covers.photo(make_track())
+
+
+def test_a_photo_waits_for_every_song() -> None:
+    finder = Finder(ALBUM)
+    photos = Finder(PHOTO)
+    covers = service(finder, [0.0], photos=photos)
+    covers.request(make_track("FISHER", "Stay"), NOW)
+    drain(covers)
+    covers.request(make_track("FISHER", "Stay"), NOW)
+    covers.request(make_track("CHRIS LAKE", "Turn Off The Lights"), HISTORY)
+    covers.run_once()
+    assert finder.calls == ["Stay", "Turn Off The Lights"]
+    assert photos.calls == []
+    covers.run_once()
+    assert photos.calls == ["Stay"]
+
+
+def test_no_photo_beside_a_photo_or_for_history() -> None:
+    photos = Finder(PHOTO)
+    covers = service(Finder(PHOTO), [0.0], photos=photos)
+    track = make_track()
+    for _ in range(2):
+        covers.request(track, NOW)
+        drain(covers)
+    assert photos.calls == []
+    covers = service(Finder(ALBUM), [0.0], photos=photos)
+    for _ in range(2):
+        covers.request(track, HISTORY)
+        drain(covers)
+    assert photos.calls == []
+
+
+def test_without_a_photo_source_nothing_is_queued() -> None:
+    finder = Finder(ALBUM)
+    covers = service(finder, [0.0])
+    covers.request(make_track(), NOW)
+    drain(covers)
+    covers.request(make_track(), NOW)
+    assert not covers.run_once()
+    assert covers.photo(make_track()) is None
+
+
+def test_a_photo_search_that_fails_is_tried_again_later() -> None:
+    now = [0.0]
+    photos = Finder(SearchError("timed out"))
+    covers = service(Finder(ALBUM), now, photos=photos)
+    for _ in range(2):
+        covers.request(make_track(), NOW)
+        drain(covers)
+    assert photos.calls == ["Stay"]
+    covers.request(make_track(), NOW)
+    assert not covers.run_once()
+    photos.result = PHOTO
+    now[0] += covers_module.TTL["error"]
+    covers.request(make_track(), NOW)
+    drain(covers)
+    assert covers.photo(make_track()) is not None
