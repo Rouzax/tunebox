@@ -445,11 +445,20 @@
     opacity:        0;
 }
 
-/* base.css sizes the pages from 100vh; see the real-height note in layout.js.
-   The station header and the control bar take their share first. */
-.tunebox .container,
+/* base.css sizes the pages from 100vh, which car and mobile browsers can
+   report taller than the window (see layout.js). The pages take the height
+   the station header and the control bar leave, from the flex layout
+   itself: a height computed from --car-vh follows a resize only once it is
+   measured again, and the gap it leaves above the control bar stayed open
+   in the car after entering fullscreen. */
+.tunebox .container {
+    flex:       1 1 0;
+    min-height: 0;
+    height:     auto;
+}
+
 .tunebox .container .page {
-    height: calc(var(--car-vh, 100vh) - var(--bar-h) - var(--car-station-h));
+    height: 100%;
 }
 
 /* Stacked (the car's third, phones): the cover takes the height the card
