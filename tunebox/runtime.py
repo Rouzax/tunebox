@@ -14,7 +14,7 @@ from types import MappingProxyType
 
 from tunebox.channel import Channel
 from tunebox.config import ChannelConfig, ConfigError, PlayerConfig, validate_state
-from tunebox.logos import Logos
+from tunebox.logos import Logos, group_key
 from tunebox.logs import event
 from tunebox.settings import Settings, SettingsUnavailable
 
@@ -51,6 +51,8 @@ class Snapshot:
     # Enabled channels in listing order.
     channels: Mapping[str, Channel]
     player: PlayerConfig
+    # Live group name to the key its image files use.
+    group_keys: Mapping[str, str] = MappingProxyType({})
 
 
 EMPTY = Snapshot(0, MappingProxyType({}), PlayerConfig())
@@ -81,6 +83,8 @@ class Runtime:
         self._live: dict[str, _Live] = {}
         self._retired: list[threading.Thread] = []
         self._logos_swept = False
+        # The live group images of the last successful apply, by group name.
+        self._group_images: dict[str, str] = {}
         self.snapshot = EMPTY
 
     def apply(self) -> int:
@@ -152,16 +156,38 @@ class Runtime:
                     if self._logos is not None:
                         self._logos.forget(channel_id)
             self._live = live
-            if self._logos is not None and not self._logos_swept:
-                # Files of a station removed while tunebox was stopped; later
-                # removals are forgotten above as they happen.
-                self._logos_swept = True
-                self._logos.forget_all_except(live)
+            images = resolved.group_images
+            if self._logos is not None:
+                if not self._logos_swept:
+                    # Files of a station or group removed while tunebox was
+                    # stopped; later removals are forgotten as they happen.
+                    self._logos.forget_all_except(live)
+                    self._logos.forget_groups_except({group_key(name) for name in images})
+                    self._logos_swept = True
+                self._sync_groups(self._logos, images)
+            self._group_images = dict(images)
             self._retired = [thread for thread in self._retired if thread.is_alive()]
             channels = MappingProxyType({cid: entry.channel for cid, entry in live.items()})
-            self.snapshot = Snapshot(version, channels, resolved.player)
+            keys = MappingProxyType({name: group_key(name) for name in images})
+            self.snapshot = Snapshot(version, channels, resolved.player, keys)
         event(log, logging.INFO, "config_applied", version=version, channels=len(live))
         return version
+
+    def _sync_groups(self, logos: Logos, images: Mapping[str, str]) -> None:
+        """Requests each live group whose image is new to it and forgets the
+        groups that left. A group that left with the same image as a new one
+        was renamed: the new key copies its files, queued before they are
+        forgotten."""
+        left = {name: value for name, value in self._group_images.items() if name not in images}
+        for name, value in images.items():
+            if self._group_images.get(name) == value:
+                continue
+            renamed = next((old for old, image in left.items() if image == value), None)
+            logos.request_group(
+                group_key(name), value, None if renamed is None else group_key(renamed)
+            )
+        for name in left:
+            logos.forget_group(group_key(name))
 
     def stop_and_join(self, deadline: float) -> None:
         """Stops every poller and waits for them until the monotonic

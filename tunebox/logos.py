@@ -3,12 +3,14 @@ changes, then served by tunebox, so listeners' browsers never contact the
 logo host. A large PNG also gets a small copy in small/, for the station
 list: logo hosts often offer 512 px for an icon shown at about 40, and on
 mobile data the list would cost megabytes. The original stays for the cover.
-A channel's default_image is downloaded the same way into default/. Each
-image is one target (a key, its value and a root folder with its own small/);
-a cleared value leaves no files."""
+A channel's default_image is downloaded the same way into default/, and a
+group's image into groups/ under its group_key, with a tile-sized small copy.
+Each image is one target (a key, its value and a root folder with its own
+small/); a cleared value leaves no files."""
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import queue
@@ -40,9 +42,19 @@ CONTENT_TYPES = {
 }
 # Sharp at about 40 CSS px on a 3x screen.
 SMALL_PX = 128
+# A group tile is shown at about 128 CSS px on a 3x screen.
+GROUP_SMALL_PX = 384
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*\.(png|jpg|webp|svg)")
 # What a channel leaves in a folder: its image or recorded source, or a partial file.
 _CHANNEL_FILE = re.compile(r"\.?([a-z0-9][a-z0-9-]*)\.(?:png|jpg|webp|svg|url|tmp)")
+_GROUP_NAME = re.compile(r"g[0-9a-f]{16}\.(png|jpg|webp|svg)")
+_GROUP_FILE = re.compile(r"\.?(g[0-9a-f]{16})\.(?:png|jpg|webp|svg|url|tmp)")
+
+
+def group_key(name: str) -> str:
+    """The name a group's files and addresses use: a group name is free
+    text, so it never reaches a path, an address or a log line."""
+    return "g" + hashlib.sha256(name.encode()).hexdigest()[:16]
 
 
 def sniff(body: bytes) -> str | None:
@@ -96,10 +108,22 @@ class _Forget:
 
 
 @dataclass(frozen=True)
+class _Group:
+    key: str
+    value: str
+    copy_from: str | None
+
+
+@dataclass(frozen=True)
+class _ForgetGroup:
+    key: str
+
+
+@dataclass(frozen=True)
 class _Target:
     """One image kept in step with its configured value: key.<ext> and
     key.url in root, and with small_px a PNG copy at most that size in
-    root/small. A None value means the image is cleared."""
+    root/small. An empty or None value means the image is cleared."""
 
     key: str
     value: str | None
@@ -138,7 +162,8 @@ class Logos:
         self._dir = directory
         self._get = http_get
         self._blobs = blobs
-        self._queue: queue.Queue[ChannelConfig | _Forget] = queue.Queue()
+        self._groups = directory / "groups"
+        self._queue: queue.Queue[ChannelConfig | _Forget | _Group | _ForgetGroup] = queue.Queue()
         self._unavailable_reported = False
         self._unusable_reported: set[tuple[str, str]] = set()
         # The apply thread, request threads (revision reads) and the logo worker
@@ -149,8 +174,8 @@ class Logos:
         self._changes_lock = threading.Lock()
 
     def revision(self) -> str:
-        """Changes whenever a logo, small logo or default image is saved or
-        removed, and differs between runs; the player compares it to know its
+        """Changes whenever a logo, small logo, default image or group image
+        is saved or removed, and differs between runs; the player compares it to know its
         station list names stale image addresses."""
         with self._changes_lock:
             return f"{self._boot}.{self._changes}"
@@ -165,9 +190,9 @@ class Logos:
         return self._dir / "small" if small else self._dir
 
     def _subject(self, key: str, root: Path) -> dict[str, str]:
-        """The field naming a target in events: station logos and default
-        images are named by their channel."""
-        return {"channel": key}
+        """The field naming a target in events: group images by their key,
+        station logos and default images by their channel."""
+        return {"group": key} if root == self._groups else {"channel": key}
 
     def path_for(self, channel_id: str, small: bool = False, default: bool = False) -> str | None:
         """The logo's (or, with default, the default image's) address,
@@ -187,6 +212,50 @@ class Logos:
         path = self._folder(small, default) / name
         return path if path.is_file() else None
 
+    def group_path_for(self, key: str, small: bool = False) -> str | None:
+        """The group image's (or its tile copy's) address, versioned like
+        path_for."""
+        folder = self._groups / "small" if small else self._groups
+        saved = _saved_image(folder, key, ("png",) if small else EXTENSIONS)
+        if saved is None:
+            return None
+        ext, mtime_ns = saved
+        prefix = "/logos/groups/small" if small else "/logos/groups"
+        return f"{prefix}/{key}.{ext}?v={mtime_ns:x}"
+
+    def group_file(self, name: str, small: bool = False) -> Path | None:
+        if not _GROUP_NAME.fullmatch(name) or (small and not name.endswith(".png")):
+            return None
+        path = (self._groups / "small" if small else self._groups) / name
+        return path if path.is_file() else None
+
+    def request_group(self, key: str, value: str, copy_from: str | None = None) -> None:
+        """Queues a live group whose key or image is new or changed. With
+        copy_from (the key of a renamed group, forgotten after this call)
+        that key's files are copied when they came from the same value."""
+        self._queue.put(_Group(key, value, copy_from))
+
+    def forget_group(self, key: str) -> None:
+        """Queues the removal of a group's files: its image was cleared, it
+        was renamed, or it has no enabled station left."""
+        self._queue.put(_ForgetGroup(key))
+
+    def forget_groups_except(self, keys: Collection[str]) -> None:
+        """Queues the removal of every group's files in groups/ whose key is
+        not in keys: those of a group changed while tunebox was stopped."""
+        gone: set[str] = set()
+        for folder in (self._groups, self._groups / "small"):
+            try:
+                names = [path.name for path in folder.iterdir()]
+            except OSError:
+                continue
+            for name in names:
+                found = _GROUP_FILE.fullmatch(name)
+                if found and found.group(1) not in keys:
+                    gone.add(found.group(1))
+        for key in sorted(gone):
+            self.forget_group(key)
+
     def request(self, channel: ChannelConfig) -> None:
         """Queues a channel whose logo or default image is new or changed."""
         self._queue.put(channel)
@@ -203,6 +272,10 @@ class Logos:
             return False
         if isinstance(item, _Forget):
             self._remove_files(item.channel_id)
+        elif isinstance(item, _ForgetGroup):
+            self._remove_target_files(item.key, self._groups)
+        elif isinstance(item, _Group):
+            self._refresh_group(item)
         else:
             self.refresh(item)
         return True
@@ -211,15 +284,63 @@ class Logos:
         """Downloads the logo when its address is new, or copies an uploaded
         one, and keeps the small copy in step; a cleared logo leaves no
         files. The default image is kept in step the same way."""
+        if not self._ready():
+            return
+        self._refresh_target(_Target(channel.id, channel.logo, self._dir, SMALL_PX))
+        self._refresh_default(channel)
+
+    def _ready(self) -> bool:
+        """Makes the logo folder; a failure is reported once and skips the item."""
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             if not self._unavailable_reported:
                 self._unavailable_reported = True
                 event(log, logging.WARNING, "logos_unavailable", error=str(error))
+            return False
+        return True
+
+    def _refresh_group(self, group: _Group) -> None:
+        """A renamed group takes its old key's files when they came from the
+        same value, so a rename costs no download; otherwise, or when the copy
+        fails, the image is downloaded or copied from its upload."""
+        if not self._ready():
             return
-        self._refresh_target(_Target(channel.id, channel.logo, self._dir, SMALL_PX))
-        self._refresh_default(channel)
+        target = _Target(group.key, group.value, self._groups, GROUP_SMALL_PX)
+        if (
+            group.copy_from is not None
+            and not self._current_for(group.key, group.value, self._groups)
+            and self._current_for(group.copy_from, group.value, self._groups)
+        ):
+            self._copy_group(group.copy_from, group.key, group.value)
+        self._refresh_target(target)
+
+    def _copy_group(self, old: str, new: str, value: str) -> None:
+        """Copies old's image and tile copy to new. The tile is written after
+        the image, so it is newer and _make_small_for keeps it."""
+        saved = _saved_image(self._groups, old, EXTENSIONS)
+        if saved is None:
+            return
+        ext = saved[0]
+        try:
+            body = (self._groups / f"{old}.{ext}").read_bytes()
+        except OSError as error:
+            event(log, logging.WARNING, "logo_failed", group=new, error=str(error))
+            return
+        self._store_for(new, body, ext, value, self._groups)
+        tile = self._groups / "small" / f"{old}.png"
+        if not tile.is_file() or not self._current_for(new, value, self._groups):
+            return
+        partial = self._groups / "small" / f".{new}.tmp"
+        try:
+            partial.parent.mkdir(exist_ok=True)
+            partial.write_bytes(tile.read_bytes())
+            partial.replace(self._groups / "small" / f"{new}.png")
+        except OSError as error:
+            # _make_small_for makes the tile from the image instead.
+            event(log, logging.WARNING, "logo_not_shrunk", group=new, error=str(error))
+            return
+        self._changed()
 
     def _refresh_target(self, target: _Target) -> None:
         """Brings the target's files in step with its value: none at all for
@@ -253,19 +374,7 @@ class Logos:
             if key not in self._unusable_reported:
                 self._unusable_reported.add(key)
                 event(log, logging.WARNING, "default_image_unusable", channel=channel.id)
-        for name in _image_names(channel.id):
-            try:
-                if _unlink(folder / name):
-                    self._changed()
-            except OSError as error:
-                event(
-                    log,
-                    logging.WARNING,
-                    "logo_failed",
-                    channel=channel.id,
-                    kind="default",
-                    error=str(error),
-                )
+        self._remove_target_files(channel.id, folder, kind="default")
 
     def forget(self, channel_id: str) -> None:
         """Queues the removal of everything downloaded for a channel that is

@@ -10,10 +10,10 @@ import pytest
 from tests.fakes import FakeHttp, FakeSource, NoJitter, blob_store, fetch_cover
 from tunebox import runtime as runtime_module
 from tunebox.channel import Channel
-from tunebox.config import ChannelConfig, ChannelRow, ConfigState, Resolved
+from tunebox.config import ChannelConfig, ChannelRow, ConfigError, ConfigState, Resolved
 from tunebox.coverfiles import CoverFiles
 from tunebox.covers import CoverService
-from tunebox.logos import Logos
+from tunebox.logos import Logos, group_key
 from tunebox.runtime import LIVE_FIELDS, POLLER_FIELDS, Runtime, needs_restart
 from tunebox.settings import Settings
 from tunebox.store import Store
@@ -41,6 +41,9 @@ class RecordingLogos(Logos):
         self.requested_defaults: list[str | None] = []
         self.forgotten: list[str] = []
         self.swept: list[frozenset[str]] = []
+        self.groups: list[tuple[str, str, str | None]] = []
+        self.forgotten_groups: list[str] = []
+        self.swept_groups: list[frozenset[str]] = []
 
     def request(self, channel: ChannelConfig) -> None:
         self.requested.append(channel.logo)
@@ -51,6 +54,15 @@ class RecordingLogos(Logos):
 
     def forget_all_except(self, live_ids: Collection[str]) -> None:
         self.swept.append(frozenset(live_ids))
+
+    def request_group(self, key: str, value: str, copy_from: str | None = None) -> None:
+        self.groups.append((key, value, copy_from))
+
+    def forget_group(self, key: str) -> None:
+        self.forgotten_groups.append(key)
+
+    def forget_groups_except(self, keys: Collection[str]) -> None:
+        self.swept_groups.append(frozenset(keys))
 
 
 class Harness:
@@ -358,3 +370,137 @@ def test_logos_of_a_station_removed_while_stopped_are_deleted(tmp_path: Path) ->
     while real.run_once():
         pass
     assert sorted(p.name for p in folder.iterdir()) == ["a.png", "a.url"]
+
+
+GROUP_IMAGE = "https://example.invalid/group.png"
+
+
+def grouped(images: dict[str, str], *, name: str = "G", enabled: bool = True) -> ConfigState:
+    """Station a in group name, b ungrouped; images by group name."""
+    return ConfigState(
+        groups=(name, "Empty"),
+        channels=(ChannelRow("a", name, enabled, doc("a")), ChannelRow("b", None, True, doc("b"))),
+        group_images=images,
+    )
+
+
+def test_a_live_group_image_is_requested_and_swept_once(harness: Harness) -> None:
+    harness.commit(grouped({"G": GROUP_IMAGE, "Empty": GROUP_IMAGE}))
+    harness.runtime.apply()
+    key = group_key("G")
+    # Empty has no station, so it is not live and has no files.
+    assert harness.logos.groups == [(key, GROUP_IMAGE, None)]
+    assert harness.logos.swept_groups == [frozenset({key})]
+    assert harness.runtime.snapshot.group_keys == {"G": key}
+    harness.commit(grouped({"G": GROUP_IMAGE}))
+    harness.runtime.apply()
+    assert harness.logos.groups == [(key, GROUP_IMAGE, None)]
+    assert harness.logos.swept_groups == [frozenset({key})]
+
+
+def test_a_changed_group_image_is_requested(harness: Harness) -> None:
+    harness.commit(grouped({"G": GROUP_IMAGE}))
+    harness.runtime.apply()
+    other = "https://example.invalid/other.png"
+    harness.commit(grouped({"G": other}))
+    harness.runtime.apply()
+    key = group_key("G")
+    assert harness.logos.groups == [(key, GROUP_IMAGE, None), (key, other, None)]
+    assert harness.logos.forgotten_groups == []
+
+
+def test_a_renamed_group_copies_its_image(harness: Harness) -> None:
+    harness.commit(grouped({"G": GROUP_IMAGE}))
+    harness.runtime.apply()
+    harness.commit(grouped({"H": GROUP_IMAGE}, name="H"))
+    harness.runtime.apply()
+    old, new = group_key("G"), group_key("H")
+    assert harness.logos.groups[1:] == [(new, GROUP_IMAGE, old)]
+    assert harness.logos.forgotten_groups == [old]
+    assert harness.runtime.snapshot.group_keys == {"H": new}
+
+
+def test_a_cleared_group_image_is_forgotten(harness: Harness) -> None:
+    harness.commit(grouped({"G": GROUP_IMAGE}))
+    harness.runtime.apply()
+    harness.commit(grouped({}))
+    harness.runtime.apply()
+    assert harness.logos.forgotten_groups == [group_key("G")]
+    assert harness.runtime.snapshot.group_keys == {}
+
+
+def test_a_group_whose_stations_are_disabled_is_forgotten(harness: Harness) -> None:
+    harness.commit(grouped({"G": GROUP_IMAGE}))
+    harness.runtime.apply()
+    harness.commit(grouped({"G": GROUP_IMAGE}, enabled=False))
+    harness.runtime.apply()
+    assert harness.logos.forgotten_groups == [group_key("G")]
+
+
+def test_a_failed_apply_keeps_the_applied_group_images(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.commit(grouped({}))
+    harness.runtime.apply()
+
+    def refuse(_state: ConfigState) -> Resolved:
+        raise ConfigError("refused")
+
+    monkeypatch.setattr(runtime_module, "validate_state", refuse)
+    harness.commit(grouped({"G": GROUP_IMAGE}))
+    assert harness.runtime.apply() == 1
+    monkeypatch.undo()
+    # A build failure comes later in apply and keeps them too.
+    harness.unbuildable.add("c")
+    state = grouped({"H": GROUP_IMAGE}, name="H")
+    harness.commit(
+        dataclasses.replace(
+            state, channels=(*state.channels, ChannelRow("c", None, True, doc("c")))
+        )
+    )
+    assert harness.runtime.apply() == 1
+    assert harness.logos.groups == []
+    assert harness.runtime.snapshot.group_keys == {}
+    harness.unbuildable.clear()
+    assert harness.runtime.apply() == 3
+    assert harness.logos.groups == [(group_key("H"), GROUP_IMAGE, None)]
+
+
+def test_a_restart_requests_every_live_group_again(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    try:
+        harness.commit(grouped({"G": GROUP_IMAGE}))
+        harness.runtime.apply()
+        harness.runtime.stop_and_join(time.monotonic() + 5)
+        # As after data/logos/ was removed: a new runtime has nothing applied.
+        again = RecordingLogos(tmp_path / "logos")
+        harness.runtime = Runtime(harness.settings, harness.make, again)
+        harness.runtime.apply()
+        assert again.groups == [(group_key("G"), GROUP_IMAGE, None)]
+        assert again.swept_groups == [frozenset({group_key("G")})]
+    finally:
+        harness.runtime.stop_and_join(time.monotonic() + 5)
+        harness.settings.close()
+
+
+def test_group_images_reach_the_real_logos(tmp_path: Path) -> None:
+    folder = tmp_path / "logos"
+    harness = Harness(tmp_path)
+    real = Logos(
+        folder,
+        FakeHttp(lambda _url: b"\x89PNG\r\n\x1a\n" + bytes(16)),
+        blob_store(tmp_path / "blobs"),
+    )
+    harness.runtime = Runtime(harness.settings, harness.make, real)
+    try:
+        harness.commit(grouped({"G": GROUP_IMAGE}))
+        harness.runtime.apply()
+        harness.commit(grouped({"H": GROUP_IMAGE}, name="H"))
+        harness.runtime.apply()
+        while real.run_once():
+            pass
+        names = sorted(p.name for p in (folder / "groups").iterdir() if p.is_file())
+        assert names == [f"{group_key('H')}.png", f"{group_key('H')}.url"]
+    finally:
+        harness.runtime.stop_and_join(time.monotonic() + 5)
+        harness.settings.close()
