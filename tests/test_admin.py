@@ -13,16 +13,20 @@ from typing import Any
 
 import pytest
 
+from tests.fakes import offline_checks
 from tunebox import blobs as blobs_module
 from tunebox import crypto, usagedb
 from tunebox.accounts import REAUTH_S, AccountError, Accounts, Session, SessionEnded
 from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Request, Response, Route
 from tunebox.blobs import MAX_BLOB, Blobs
-from tunebox.config import AdminConfig
+from tunebox.config import AdminConfig, SourceConfig
 from tunebox.disk import MIN_FREE
+from tunebox.netguard import Probe
 from tunebox.pin import Pin
 from tunebox.rulecheck import MAX_NEW_PATTERNS
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
+from tunebox.streamcheck import PER_MINUTE, StreamChecks
+from tunebox.tracks import RawEntry
 from tunebox.usage import Usage
 from tunebox.usagecore import NAME_MAX, RETENTION_MAX, RETENTION_MIN
 
@@ -47,6 +51,7 @@ class World:
         account: bool = True,
         origin: str = ORIGIN,
         usage: bool = False,
+        checks: StreamChecks | None = None,
     ) -> None:
         self.origin = origin
         self.clock = Clock()
@@ -85,6 +90,7 @@ class World:
             self.accounts,
             AdminConfig(True, setup_page, origin),
             web,
+            checks=checks or offline_checks(),
             settings=self.settings,
             pin=self.pin,
             blobs=self.blobs,
@@ -220,6 +226,7 @@ def test_a_known_browser_grant_from_plain_http_gets_no_lane_on_https(tmp_path: P
         world.accounts,
         AdminConfig(True, False, ORIGIN),
         tmp_path / "web_admin",
+        checks=offline_checks(),
         settings=world.settings,
         pin=world.pin,
         blobs=world.blobs,
@@ -2625,3 +2632,92 @@ def test_no_device_id_reaches_the_log(usage_world: World, caplog: pytest.LogCapt
     for record in caplog.records:
         assert DEVICE not in record.getMessage()
         assert DEVICE not in repr(record.__dict__.get("fields"))
+
+
+Checking = tuple[World, list[str], list[SourceConfig]]
+
+
+@pytest.fixture
+def checking(tmp_path: Path) -> Generator[Checking]:
+    """A World whose stream and feed checks answer from fakes, with the
+    addresses and sources they were asked for."""
+    asked: list[str] = []
+    feeds: list[SourceConfig] = []
+
+    def probe(url: str) -> Probe:
+        asked.append(url)
+        return Probe("audio/aacp", {"icy-br": "256", "icy-name": "OWR_INTERNATIONAL"}, b"\xff\xf1")
+
+    def feed(source: SourceConfig) -> list[RawEntry]:
+        feeds.append(source)
+        return [
+            RawEntry("FISHER", "Stay", 2000),
+            RawEntry("CHRIS LAKE", "Turn Off The Lights", 1000),
+        ]
+
+    clock = Clock()
+    world = World(tmp_path, checks=StreamChecks(probe, feed, clock=clock))
+    yield world, asked, feeds
+    world.close()
+
+
+def test_stream_check_reports_what_the_address_plays(checking: Checking) -> None:
+    world, asked, _ = checking
+    csrf = world.login()
+    url = "https://example.test/live.aac"
+    answer = world.call("POST", "/admin/api/stream/check", {"url": f" {url} "}, csrf=csrf)
+    assert (answer.status, json_of(answer)) == (
+        200,
+        {"ok": True, "codec": "aac", "kbps": 256, "name": "OWR_INTERNATIONAL"},
+    )
+    assert asked == [url]
+
+
+def test_stream_check_refuses_a_bad_body_and_paces_checks(checking: Checking) -> None:
+    world, asked, _ = checking
+    csrf = world.login()
+    for body in ({}, {"url": 7}, {"url": ""}, {"url": "https://x.test/" + "a" * 2048}, ["u"]):
+        assert world.call("POST", "/admin/api/stream/check", body, csrf=csrf).status == 400
+    assert asked == []
+    for _ in range(PER_MINUTE):
+        world.call("POST", "/admin/api/stream/check", {"url": "https://x.test/a"}, csrf=csrf)
+    paced = world.call("POST", "/admin/api/stream/check", {"url": "https://x.test/a"}, csrf=csrf)
+    assert (paced.status, json_of(paced)) == (429, {"error": "too_many_checks"})
+
+
+def test_stream_check_needs_the_csrf_token(checking: Checking) -> None:
+    world, asked, _ = checking
+    world.login()
+    answer = world.call("POST", "/admin/api/stream/check", {"url": "https://x.test/a"})
+    assert answer.status == 403
+    assert asked == []
+
+
+def test_source_check_lists_the_feed_and_refuses_bad_settings(checking: Checking) -> None:
+    world, _, feeds = checking
+    csrf = world.login()
+    good = {"source": {"type": "triton", "mount": "OWR_INTERNATIONAL"}}
+    answer = world.call("POST", "/admin/api/source/check", good, csrf=csrf)
+    assert (answer.status, json_of(answer)) == (
+        200,
+        {
+            "ok": True,
+            "songs": [
+                {"artist": "FISHER", "title": "Stay"},
+                {"artist": "CHRIS LAKE", "title": "Turn Off The Lights"},
+            ],
+        },
+    )
+    assert feeds == [SourceConfig("triton", {"mount": "OWR_INTERNATIONAL"})]
+    for body, message in (
+        ({"source": {"type": "icy"}}, "source.type: unknown source type"),
+        ({"source": {"type": "triton"}}, "source.mount"),
+        ({"source": {"type": "triton", "mount": " "}}, "source.mount: required"),
+        ({"source": {"type": "npo", "site": "elsewhere"}}, "source.site: one of"),
+        ({"source": {"type": "triton", "mount": "X", "host": "evil.test"}}, "source"),
+        ({"source": "triton"}, "source: expected a table"),
+    ):
+        refused = world.call("POST", "/admin/api/source/check", body, csrf=csrf)
+        assert refused.status == 400 and message in json_of(refused)["message"], body
+    assert world.call("POST", "/admin/api/source/check", [1], csrf=csrf).status == 400
+    assert len(feeds) == 1

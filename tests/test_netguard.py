@@ -27,6 +27,38 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.send_header("Content-Length", "0")
             self.end_headers()
+        elif self.path == "/radio":
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/aacp")
+            self.send_header("icy-br", "128")
+            self.send_header("icy-name", "Test FM")
+            self.end_headers()
+            try:
+                for _ in range(50):
+                    self.wfile.write(b"\xff\xf1" + b"a" * 1022)
+                    self.wfile.flush()
+                    time.sleep(0.01)
+            except OSError:
+                pass  # the reader hung up, as it should
+        elif self.path == "/redirect-radio-inside":
+            self._redirect("http://inside.test/radio")
+        elif self.path == "/slow-headers":
+            self.wfile.write(b"HTTP/1.0 200 OK\r\n")
+            try:
+                for _ in range(40):
+                    self.wfile.write(b"X")
+                    self.wfile.flush()
+                    time.sleep(0.3)
+            except OSError:
+                pass  # the reader hung up, as it should
+        elif self.path == "/to-umlaut":
+            self._redirect("/str%C3%B6m-target")
+        elif self.path.startswith("/stre%C3%A9m") or self.path == "/str%C3%B6m-target":
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Content-Length", "4")
+            self.end_headers()
+            self.wfile.write(b"\xff\xfb\x90\x64")
         elif self.path == "/drip":
             self.send_response(200)
             self.end_headers()
@@ -247,3 +279,52 @@ def test_nearby_is_decided_on_the_real_client(
 @pytest.mark.parametrize("name", ["Forwarded", "X-Real-IP", "CF-Connecting-IP", "True-Client-IP"])
 def test_every_common_forwarding_header_is_known(name: str) -> None:
     assert name in OTHER_FORWARDING
+
+
+def test_probe_reads_the_headers_and_stops_at_its_byte_limit(port: int) -> None:
+    probe = guard().probe(f"http://ok.test:{port}/radio", deadline_s=5, max_bytes=3000)
+    assert probe.content_type == "audio/aacp"
+    assert probe.icy == {"icy-br": "128", "icy-name": "Test FM"}
+    assert len(probe.head) == 3000 and probe.head.startswith(b"\xff\xf1")
+
+
+def test_probe_stops_at_its_deadline(port: int) -> None:
+    started = time.monotonic()
+    probe = guard().probe(f"http://ok.test:{port}/drip", deadline_s=0.35, max_bytes=1_000_000)
+    assert time.monotonic() - started < 2
+    assert 0 < len(probe.head) < 20
+
+
+def test_probe_refuses_a_redirect_inside(port: int) -> None:
+    with pytest.raises(HttpError, match="non-public"):
+        guard().probe(f"http://ok.test:{port}/redirect-radio-inside", deadline_s=5, max_bytes=100)
+
+
+def test_probe_holds_its_deadline_while_headers_trickle_in(port: int) -> None:
+    started = time.monotonic()
+    with pytest.raises(HttpError):
+        guard().probe(f"http://ok.test:{port}/slow-headers", deadline_s=1.0, max_bytes=65_536)
+    assert time.monotonic() - started < 2.0
+
+
+def test_a_non_ascii_path_is_sent_percent_encoded(port: int) -> None:
+    typed = guard().probe(f"http://ok.test:{port}/streém", deadline_s=5, max_bytes=100)
+    assert typed.head.startswith(b"\xff\xfb")
+    redirected = guard().probe(f"http://ok.test:{port}/to-umlaut", deadline_s=5, max_bytes=100)
+    assert redirected.content_type == "audio/mpeg"
+
+
+@pytest.mark.parametrize(
+    ("address", "allowed"),
+    [
+        ("64:ff9b::a00:1", False),
+        ("64:ff9b::7f00:1", False),
+        ("::a00:1", False),
+        ("::c0a8:101", False),
+        ("64:ff9b::808:808", True),
+    ],
+)
+def test_ipv6_forms_of_an_ipv4_address_are_judged_by_that_address(
+    address: str, allowed: bool
+) -> None:
+    assert public(address) is allowed

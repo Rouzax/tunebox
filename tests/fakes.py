@@ -11,6 +11,10 @@ from pathlib import Path
 
 from tunebox.blobs import Blobs
 from tunebox.config import ChannelConfig, SourceConfig, StreamConfig
+from tunebox.http import HttpError
+from tunebox.netguard import Probe
+from tunebox.sources.base import SourceError
+from tunebox.streamcheck import StreamChecks
 from tunebox.tracks import RawEntry, Rules, Track, clean
 
 STATION_ID = r"^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b"
@@ -129,3 +133,15 @@ def owr_top30() -> list[RawEntry]:
         artist, title = (part.strip() for part in line.split("|"))
         rows.append(RawEntry(artist, title, 1))
     return rows
+
+
+def offline_checks() -> StreamChecks:
+    """The panel's stream and feed checks with no network: every one fails."""
+
+    def probe(url: str) -> Probe:
+        raise HttpError(f"{url}: no network in tests")
+
+    def feed(source: SourceConfig) -> list[RawEntry]:
+        raise SourceError(f"{source.type}: no network in tests")
+
+    return StreamChecks(probe, feed)

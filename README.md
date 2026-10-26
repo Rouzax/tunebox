@@ -369,7 +369,18 @@ The edit form has the same settings as a `[[channels]]` block (see
 Streams are open; Now playing (open for a new station), Title rules,
 Timing and Options are folded, with a summary of what they hold in their
 header, and a section with a problem opens when you save. The **?** beside
-a field opens a short explanation under it. Empty fields use the
+a field opens a short explanation under it.
+
+**Check stream** under a stream connects to its address for a few seconds
+and shows what it plays (codec, bitrate and the name the server
+announces); it fills in codec and kbps where they are empty. A Triton,
+Qmusic or NPO stream address also fills in the Now playing settings while
+they are empty, for example the mount `OWR_INTERNATIONAL` from
+`.../OWR_INTERNATIONAL_ADP.aac`. **Check feed** asks the station's feed
+with the settings in the form and lists its newest songs, so a wrong
+mount shows before you save. tunebox makes these connections itself,
+only to public addresses, at most 12 checks a minute and one at a time;
+the log records each stream check as `stream_checked`. Empty fields use the
 defaults, shown greyed out. Nothing in the form is stored until you press
 Save; leaving it with changes (Cancel, the menu, the back button or a
 reload) asks first. Unticking **Needs the PIN** on a station that has it
@@ -877,6 +888,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | The log says `tunebox: cannot listen on 0.0.0.0:<port>` | `port` in `[server]` was changed to one that is not free inside the container. | Remove `port` from `[server]` (8080 is the default) and change the published port in `compose.yaml` instead. |
 | `docker compose up` complains the port is already allocated | Another program on the machine uses that port. | Choose a free port as in [Install](#install) step 3. |
 | `store_unavailable` in the log | tunebox could open its database but the cover store could not, or a later write failed (a full disk, for example). | Check free disk space and that `data` is owned by user id 1000, then restart. Until then tunebox plays, but forgets covers and recent titles on restart. |
+| Check stream says "refused, ... has a non-public address" | The stream is on your own network (or the name resolves to a private address). tunebox only connects to public addresses for these checks, so a check cannot be used to reach devices on your network. | Nothing to fix for a public station; a stream on your own network cannot be checked this way. The player itself is not affected by this rule. |
 | The status page shows no covers for some songs | The song is in neither Deezer nor iTunes (common for unreleased tracks), or the catalogues could not be reached. | Nothing to do for unreleased tracks. A failed lookup is retried after 10 minutes, a song that was not found after 3 days. Look for `search_failed` in the log. |
 | A station's name on the status page says "(feed unreachable)" | The station's now-playing feed does not answer. | Nothing to do: tunebox keeps showing the last known songs and keeps trying, at most every 2 minutes. |
 | The title changes too early or too late | The delay does not fit this station or player. Stations other than the Tomorrowland channels start at the default and often need their own value. | See [Fine-tune when titles change](#fine-tune-when-titles-change). |

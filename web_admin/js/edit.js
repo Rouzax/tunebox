@@ -1,5 +1,6 @@
 // The station form, for a new station and for an existing one.
 import {button, el, field, section, withHelp} from './dom.js';
+import {sourceFromStream} from './deduce.js';
 import {HELP} from './help.js';
 import {addStation, logoPreview, newStation, replaceStation, validId} from './state.js';
 
@@ -53,24 +54,95 @@ function streamsTo(doc, streams, hadUrl) {
     });
 }
 
-function streamEditor(schema, streams) {
+// hooks.address(url) hears a stream address once it is typed in;
+// hooks.check(url) asks tunebox what it plays.
+function streamEditor(schema, streams, hooks) {
     const box = el('div', {class: 'streams'});
     const codecs = [['', 'unknown'], ...schema.codecs.map((codec) => [codec, codec])];
-    function draw() {
-        box.replaceChildren(...streams.map((stream, index) => el('fieldset', {class: 'stream'},
+    function streamBox(stream, index) {
+        const codec = select('', codecs, stream.codec || '', {onchange: (e) => { stream.codec = e.target.value || undefined; }});
+        const kbps = text('', stream.kbps, {type: 'number', min: 1, step: 1,
+            oninput: (e) => { stream.kbps = e.target.value ? Number(e.target.value) : undefined; }});
+        const result = el('div', {class: 'hint check-result', role: 'status'});
+        const url = text('', stream.url, {type: 'url', required: true,
+            oninput: (e) => { stream.url = e.target.value.trim(); },
+            onchange: () => hooks.address(stream.url)});
+        // A playlist names the stream inside it; this takes that address
+        // and checks it in turn.
+        const checkButton = button('check_circle', 'Check stream', () => check(), {class: 'quiet'});
+        function useInside(inside) {
+            stream.url = inside;
+            url.value = inside;
+            hooks.address(inside);
+            check();
+        }
+        // What the check found fills codec and kbps only where they are
+        // empty, and says so where the form already holds something else.
+        // An answer for an address that has changed meanwhile, or for a
+        // stream that was moved or removed, is dropped.
+        async function check() {
+            const asked = stream.url;
+            checkButton.disabled = true;
+            result.textContent = 'Checking the stream...';
+            const answer = await hooks.check(asked);
+            checkButton.disabled = false;
+            if (!answer || stream.url !== asked || !result.isConnected) {
+                result.textContent = '';
+                return;
+            }
+            if (!answer.ok && answer.inside) {
+                result.replaceChildren(
+                    el('span', null, `${answer.reason} The stream inside it is ${answer.inside}. `),
+                    button('check_circle', 'Use this address', () => useInside(answer.inside), {class: 'quiet'}));
+                return;
+            }
+            if (!answer.ok) {
+                result.textContent = `Not playable: ${answer.reason}`;
+                return;
+            }
+            const filled = [];
+            const differs = [];
+            if (!stream.codec) {
+                stream.codec = answer.codec;
+                codec.value = answer.codec;
+                filled.push('codec');
+            } else if (stream.codec !== answer.codec) {
+                differs.push(`codec ${stream.codec.toUpperCase()}`);
+            }
+            if (!stream.kbps && answer.kbps) {
+                stream.kbps = answer.kbps;
+                kbps.value = String(answer.kbps);
+                filled.push('kbps');
+            } else if (stream.kbps && answer.kbps && stream.kbps !== answer.kbps) {
+                differs.push(`${stream.kbps} kbps`);
+            }
+            const found = [answer.codec.toUpperCase(), answer.kbps ? `${answer.kbps} kbps` : null, answer.name].filter(Boolean).join(', ');
+            result.textContent = [
+                `Plays: ${found}.`,
+                filled.length ? `Filled in: ${filled.join(' and ')}.` : null,
+                differs.length ? `The form says ${differs.join(' and ')}; correct it if the stream changed.` : null,
+                answer.warning || null,
+            ].filter(Boolean).join(' ');
+            box.dispatchEvent(new Event('input', {bubbles: true}));
+        }
+        return el('fieldset', {class: 'stream'},
             el('legend', null, `Stream ${index + 1}`),
             field('Name', text('', stream.name, {required: true, oninput: (e) => { stream.name = e.target.value; }})),
-            field('URL', text('', stream.url, {type: 'url', required: true, oninput: (e) => { stream.url = e.target.value.trim(); }})),
-            field('Codec', select('', codecs, stream.codec || '', {onchange: (e) => { stream.codec = e.target.value || undefined; }}), null, HELP.codec),
-            field('kbps', text('', stream.kbps, {type: 'number', min: 1, step: 1,
-                oninput: (e) => { stream.kbps = e.target.value ? Number(e.target.value) : undefined; }}), null, HELP.kbps),
+            field('URL', url),
+            field('Codec', codec, null, HELP.codec),
+            field('kbps', kbps, null, HELP.kbps),
+            checkButton,
+            result,
             el('div', {class: 'actions'},
                 button('arrow_upward', null, () => { streams.splice(index - 1, 0, streams.splice(index, 1)[0]); draw(); },
                     {title: `Move stream ${index + 1} up`, disabled: index === 0}),
                 button('arrow_downward', null, () => { streams.splice(index + 1, 0, streams.splice(index, 1)[0]); draw(); },
                     {title: `Move stream ${index + 1} down`, disabled: index === streams.length - 1}),
                 button('delete', null, () => { streams.splice(index, 1); draw(); },
-                    {title: `Remove stream ${index + 1}`, disabled: streams.length === 1})))),
+                    {title: `Remove stream ${index + 1}`, disabled: streams.length === 1})));
+    }
+    function draw() {
+        box.replaceChildren(...streams.map(streamBox),
         button('add', 'Add stream', () => {
             streams.push({name: `Stream ${streams.length + 1}`, url: 'https://'});
             draw();
@@ -110,11 +182,26 @@ function sourceEditor(schema, source) {
             ...inputs);
     }
     draw();
-    return {box, value: () => {
+    const value = () => {
         const out = {type: settings.type};
         (schema.sources[settings.type] || []).forEach((key) => { out[key] = settings[key]; });
         return out;
-    }};
+    };
+    // Takes found ({type, <setting>}) only while the settings are still
+    // empty: a source typed in, or loaded with a saved station, stays.
+    function fill(found) {
+        const current = value();
+        const empty = Object.keys(current).every((key) => key === 'type' || !current[key]);
+        if (!empty || !schema.sources[found.type]) {
+            return false;
+        }
+        Object.keys(settings).forEach((key) => { delete settings[key]; });
+        Object.assign(settings, found);
+        draw();
+        box.dispatchEvent(new Event('input', {bubbles: true}));
+        return true;
+    }
+    return {box, value, fill};
 }
 
 // The types the server accepts for an upload; the image itself is judged by
@@ -207,6 +294,41 @@ export function render(root, ctx, id) {
         const change = pendingChange();
         return change.problem ? null : change;
     });
+    // A check's answer, or null when there is nothing to show: the session
+    // ended (the login form took over) or the page changed meanwhile.
+    const current = ctx.stillOpen;
+    async function checked(path, body) {
+        let answer;
+        try {
+            answer = await ctx.request('POST', path, body);
+        } catch (error) {
+            return {ok: false, reason: 'tunebox could not be reached.'};
+        }
+        if (!current() || answer.status === 401) {
+            return null;
+        }
+        if (answer.status === 429) {
+            return {ok: false, reason: 'Too many checks just now; wait a minute and try again.'};
+        }
+        if (!answer.ok) {
+            return {ok: false, reason: (answer.data && answer.data.message) || 'tunebox refused the check.'};
+        }
+        return answer.data;
+    }
+
+    // A stream address that gives its station away fills the feed settings
+    // in, while they are still empty.
+    const filledNote = el('p', {class: 'hint check-result', role: 'status'});
+    function fillSource(url) {
+        const found = sourceFromStream(url);
+        if (!found || !source.fill(found)) {
+            return;
+        }
+        const detail = Object.keys(found).filter((key) => key !== 'type').map((key) => found[key]);
+        filledNote.textContent = `Now playing filled in from the stream address: ${[found.type, ...detail].join(', ')}. Check feed confirms it.`;
+        sections.source.node.open = true;
+    }
+
     // Folded: the parts a station rarely changes after it is set up. A new
     // station still needs its feed, so Now playing starts open there.
     const sections = {
@@ -230,8 +352,24 @@ export function render(root, ctx, id) {
         field('Default image URL', text('default_image', doc.default_image, {type: 'url'}), 'Shown when no cover is found.', HELP.default_image));
     sections.streams.body.append(
         withHelp(el('p', {class: 'hint'}, 'The quality choices listeners see; the first is the default.'), HELP.streams, 'streams'),
-        streamEditor(schema, streams));
-    sections.source.body.append(source.box);
+        streamEditor(schema, streams, {address: fillSource, check: (url) => checked('stream/check', {url})}),
+        filledNote);
+    const feedResult = el('div', {class: 'check-result', role: 'status'});
+    sections.source.body.append(source.box,
+        button('check_circle', 'Check feed', async () => {
+            feedResult.replaceChildren(el('p', {class: 'hint'}, 'Asking the feed...'));
+            const answer = await checked('source/check', {source: source.value()});
+            if (!answer) {
+                feedResult.replaceChildren();
+            } else if (!answer.ok) {
+                feedResult.replaceChildren(el('p', {class: 'hint'}, `No songs: ${answer.reason}`));
+            } else {
+                feedResult.replaceChildren(el('p', {class: 'hint'}, 'The feed lists, newest first:'),
+                    el('ul', {class: 'feed-songs'}, answer.songs.map((song) => el('li', null,
+                        song.artist ? `${song.artist} - ${song.title}` : song.title))));
+            }
+        }, {class: 'quiet'}),
+        feedResult);
     sections.rules.body.append(...Object.keys(RULES).map((key) => field(RULES[key][0],
         text(`rules.${key}`, rules[key], {autocapitalize: 'off', spellcheck: 'false'}), RULES[key][1], HELP[`rules.${key}`])));
     sections.timing.body.append(...Object.keys(schema.defaults).map((key) => {

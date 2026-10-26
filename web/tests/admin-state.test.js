@@ -212,3 +212,8 @@ test('diffStates keys each state once', () => {
     assert.ok(performance.now() - started < 1000);
     assert.equal(changes.length, 300);
 });
+
+test('a new station leaves codec and kbps for the stream check to fill', () => {
+    const stream = newStation('a', 'A', null).doc.streams[0];
+    assert.deepEqual(stream, {name: 'Default', url: 'https://'});
+});

@@ -24,6 +24,7 @@ from tests.fakes import (
     blob_store,
     channel_config,
     fetch_cover,
+    offline_checks,
 )
 from tests.test_admin import PASSWORD, SECRET
 from tunebox import crypto
@@ -538,6 +539,7 @@ def admin_parts(tmp_path: Path) -> Generator[tuple[TuneboxServer, Accounts]]:
         accounts,
         AdminConfig(True, False, ORIGIN),
         web_admin,
+        checks=offline_checks(),
         settings=settings,
         pin=pin,
         blobs=blob_store(tmp_path / "blobs"),
@@ -596,6 +598,7 @@ def plain_server(tmp_path: Path) -> Generator[TuneboxServer]:
         accounts,
         AdminConfig(True, False, PLAIN),
         web_admin,
+        checks=offline_checks(),
         settings=settings,
         pin=pin,
         blobs=blob_store(tmp_path / "blobs"),
@@ -656,6 +659,7 @@ def test_plain_http_believes_a_trusted_proxy_about_the_client(tmp_path: Path) ->
         accounts,
         AdminConfig(True, False, PLAIN),
         tmp_path,
+        checks=offline_checks(),
         settings=settings,
         pin=pin,
         blobs=blob_store(tmp_path / "blobs"),
@@ -917,6 +921,7 @@ class Recorder(Admin):
             accounts,
             AdminConfig(True, False, ORIGIN),
             web,
+            checks=offline_checks(),
             settings=settings,
             pin=pin,
             blobs=blob_store(web.parent / "blobs"),

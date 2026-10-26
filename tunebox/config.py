@@ -497,6 +497,13 @@ def _player(table: dict[str, Any], channel_ids: set[str]) -> PlayerConfig:
     return PlayerConfig(latitude, longitude, default)
 
 
+def parse_source(raw: object) -> SourceConfig:
+    """A source table on its own, as the panel's feed check sends it."""
+    if not isinstance(raw, dict):
+        raise ConfigError("source: expected a table")
+    return _source(cast("dict[str, Any]", raw), "source")
+
+
 def _source(table: dict[str, Any], where: str) -> SourceConfig:
     source_type = _str(table, "type", f"{where}.type")
     required = SOURCE_SETTINGS.get(source_type)
