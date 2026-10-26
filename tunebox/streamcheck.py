@@ -31,7 +31,9 @@ PROBE_BYTES = 65_536
 PER_MINUTE = 12
 URL_MAX = 2048
 FEED_ENTRIES = 5
-# Asked of the feed: a few more than shown, as jingles may be among them.
+# Asked of the feed: a few more than shown, as station IDs and jingles may
+# be among them. They come without an artist (the only entries a station_id
+# rule ever applies to), and the check leaves every such entry out.
 FEED_FETCH = 10
 NAME_MAX = 60
 REASON_MAX = 120
@@ -212,7 +214,8 @@ class StreamChecks:
                 except SourceError as error:
                     answer: dict[str, Any] = {"ok": False, "reason": _tidy(str(error))}
                 else:
-                    newest = sorted(entries, key=lambda e: e.started_at_ms or 0, reverse=True)
+                    songs_only = [entry for entry in entries if entry.artist.strip()]
+                    newest = sorted(songs_only, key=lambda e: e.started_at_ms or 0, reverse=True)
                     songs = [
                         {"artist": entry.artist, "title": entry.title}
                         for entry in newest[:FEED_ENTRIES]
