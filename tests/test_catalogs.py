@@ -12,8 +12,12 @@ ARTIST_PHOTO = "https://cdn-images.dzcdn.net/images/artist/ok/1000x1000.jpg"
 PLACEHOLDER = "https://cdn-images.dzcdn.net/images/artist//1000x1000.jpg"
 
 
-def deezer_song(artist: str, title: str, cover: str = COVER) -> dict[str, object]:
-    return {"title": title, "artist": {"name": artist}, "album": {"cover_xl": cover}}
+def deezer_song(artist: str, title: str, cover: str = COVER, album: str = "") -> dict[str, object]:
+    return {
+        "title": title,
+        "artist": {"name": artist},
+        "album": {"cover_xl": cover, "title": album},
+    }
 
 
 def itunes_song(artist: str, title: str, art: str) -> dict[str, object]:
@@ -143,3 +147,39 @@ def test_artist_photo_needs_a_comparable_name() -> None:
         return body({"data": [], "results": []})
 
     assert catalogs(FakeHttp(respond)).find(make_track("ЛСП", "Monetka")) is None
+
+
+def test_a_duet_sent_as_one_name_is_searched_by_its_first_artist() -> None:
+    true = "https://example.invalid/images/cover/true/1000x1000-000000-80-0-0.jpg"
+    acoustic = "https://example.invalid/images/cover/acoustic/1000x1000-000000-80-0-0.jpg"
+
+    def respond(url: str) -> bytes:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("q", [""])[0]
+        # Deezer's artist: filter finds nothing for these at the time of
+        # writing; only the loose queries answer.
+        if query.startswith("artist:"):
+            return body({"data": []})
+        if query == "AVICII Wake Me Up":
+            return body({"data": [deezer_song("Avicii", "Wake Me Up", true, "True")]})
+        if "ALOE BLACC" in query:
+            return body(
+                {
+                    "data": [
+                        deezer_song(
+                            "Aloe Blacc", "Wake Me Up (Acoustic)", acoustic, "Lift Your Spirit"
+                        )
+                    ]
+                }
+            )
+        return body({"data": [], "results": []})
+
+    http = FakeHttp(respond)
+    found = catalogs(http).find(make_track("AVICII & ALOE BLACC", "Wake Me Up"))
+    assert found is not None and found.url == true
+
+
+def test_a_single_name_keeps_one_loose_query() -> None:
+    http = FakeHttp(lambda _url: body({"data": [], "results": []}))
+    catalogs(http).find(make_track("FISHER", "Stay"))
+    loose = [url for url in http.urls if "api.deezer.com/search?" in url and "artist%3A" not in url]
+    assert len(loose) == 1

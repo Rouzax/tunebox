@@ -1,7 +1,15 @@
 import pytest
 
 from tests.fakes import fixture_rows, make_track
-from tunebox.matching import Candidate, artists_match, best_match, compiled, titles_match
+from tunebox.matching import (
+    Candidate,
+    artists_match,
+    best_match,
+    compiled,
+    lead_artist,
+    search_names,
+    titles_match,
+)
 
 
 def recorded_matches() -> list[tuple[str, str, str, str, bool]]:
@@ -182,3 +190,22 @@ def test_own_releases_do_not_look_compiled(album: str) -> None:
 )
 def test_mixes_compilations_and_shows_look_compiled(album: str, title: str) -> None:
     assert compiled(Candidate("Artist", title, cover("x"), album))
+
+
+def test_search_names_add_the_parts_of_a_joined_name() -> None:
+    assert search_names(["AVICII & ALOE BLACC"]) == ("AVICII & ALOE BLACC", "AVICII", "ALOE BLACC")
+    assert search_names(["FISHER", "FLORENCE ARMAN"]) == ("FISHER", "FLORENCE ARMAN")
+    assert search_names(["Lilly Wood & The Prick", "Robin Schulz"]) == (
+        "Lilly Wood & The Prick",
+        "Robin Schulz",
+        "Lilly Wood",
+        "The Prick",
+    )
+    # "&" without spaces is part of a name.
+    assert search_names(["M&M"]) == ("M&M",)
+
+
+def test_lead_artist_is_the_first_named() -> None:
+    assert lead_artist("AVICII & ALOE BLACC") == "AVICII"
+    assert lead_artist("Chris Lorenzo & Chromeo") == "Chris Lorenzo"
+    assert lead_artist("FISHER") == "FISHER"

@@ -16,6 +16,7 @@ MIN_PREFIX_SHARE = 0.5
 # Signs that a catalogue entry is a DJ mix, a compilation or a radio show
 # rather than the song's own release: its cover then shows the mix, not the
 # song. Read from the album and the track title together.
+_AMPERSAND = re.compile(r"\s+&\s+")
 _COMPILED = re.compile(
     r"\bmixed\b|\bvol(?:ume)?\b\.?\s*\d|\bradio\s+\d+|\bepisode\b|\bpresents\b"
     r"|\bcompilation\b|\bclassics\b|\bhits\b|\bbest of\b"
@@ -59,6 +60,23 @@ def artists_match(artists: Sequence[str], found: str) -> bool:
         if want and (_contains_words(got, want) or _contains_words(want, got)):
             return True
     return False
+
+
+def search_names(artists: Sequence[str]) -> tuple[str, ...]:
+    """The artists as given, then the parts of names joined by " & ". Some
+    stations send a duet as one name ("AVICII & ALOE BLACC"), which the
+    catalogues do not know as an artist; "&" also occurs inside single
+    names ("Lilly Wood & The Prick"), so the parts are added, never put in
+    place of the name."""
+    names = list(artists)
+    for artist in artists:
+        names.extend(part for part in _AMPERSAND.split(artist) if part.strip())
+    return tuple(dict.fromkeys(name.strip() for name in names if name.strip()))
+
+
+def lead_artist(name: str) -> str:
+    """The first-named artist of a name joined by " & ", else the name."""
+    return _AMPERSAND.split(name, maxsplit=1)[0].strip() or name
 
 
 def compiled(candidate: Candidate) -> bool:
