@@ -20,8 +20,8 @@ For listeners:
 
 - **A player for every screen.** Stations in groups with their logos (with
   several groups the station page opens on a tile per group, with its own
-  image or a mosaic of its stations' logos), a quality choice per station (for example a lower bitrate on 4G), recently
-  played songs with covers, and a layout that puts the cover above the
+  image or a mosaic of its stations' logos), a quality choice per station
+  (for example a lower bitrate on 4G), recently played songs with covers, and a layout that puts the cover above the
   title in a narrow window and beside it in a wide one. The station's name
   sits at the top. The title, artists and Played-by credit sit on a card,
   resting on the control bar in a narrow window and beside the cover in a
@@ -366,10 +366,12 @@ seconds), without a restart.
 - A group can be deleted once it has no stations.
 - A group's pencil opens its form: its name and an image, either a link
   (tunebox downloads it after you save) or a file you upload there. The
-  image shows beside the group's heading once it is downloaded. In the
-  player, the channel page then opens on group tiles when there are two
-  or more groups. A PNG gives the lightest tiles. Renaming a group keeps
-  its image; clearing the field removes it.
+  image shows beside the group's heading once it is downloaded, from the
+  next save or a reload of the page on; tunebox only keeps
+  the image of a group with at least one station switched on. In the
+  player, the channel page opens on group tiles when two or more groups
+  have a station that device can see. A PNG gives the lightest tiles.
+  Renaming a group keeps its image; clearing the field removes it.
 - From 16 stations on, the list folds by group: tap a group's name to open
   or fold it (a folded group shows how many stations it has and how many
   are off), or use **Open all** and **Fold all**. The browser remembers
@@ -757,8 +759,9 @@ badge = '^(#\d+)\s+|\s*\[((?:Top 30|Last Week)[^\]]*)\]\s*$'
   [Fine-tune when titles change](#fine-tune-when-titles-change)).
   A single `stream_url = "..."` still works and becomes one stream named
   "Default".
-- **`group`** puts stations under a heading on the channel page. With two
-  or more groups the channel page opens on tiles, one per group (its image,
+- **`group`** puts stations under a heading on the channel page. When two
+  or more groups have a station the device can see, the channel page opens
+  on tiles, one per group (its image,
   set in `[[groups]]` or the admin panel, or else a mosaic of its first
   four station logos) and one per station without a group; tapping a group
   shows its stations.
@@ -1017,8 +1020,9 @@ under `/logos/small/`, or `null` when there is none: use `logo` then),
 `group_image` (the image of the station's group, a path such as
 `/logos/groups/g0123456789abcdef.png?v=18df62ef34e6b8a7`, or `null` when the
 station has no group, the group has no image or the image is not downloaded
-yet) and `group_image_small` (a 384 px copy under `/logos/groups/small/` for
-a PNG group image, or `null`: use `group_image` then).
+yet) and `group_image_small` (a 384 px copy under `/logos/groups/small/`,
+made for a PNG group image larger than that, or `null`: use `group_image`
+then).
 Ungrouped stations come first, then each group in order. The answer carries
 the configuration version in an `X-Tunebox-Version` header and the image
 revision in an `X-Tunebox-Images` header, and is sent with
@@ -1028,11 +1032,12 @@ revision in an `X-Tunebox-Images` header, and is sent with
 **`GET /logos/default/<file>`** serve a downloaded logo, its small copy and
 a downloaded default image. **`GET /logos/groups/<file>`** and
 **`GET /logos/groups/small/<file>`** serve a group's image and its small
-copy the same way. A group's image is served only while at least one station
-of the group is visible to the request; with a listening PIN that hides all
-of them, the answer is the same 404 as for a missing file. Browsers may keep them for a year: the `v` in
-the path from `/api/channels` changes whenever the image is downloaded
-again, so use that path as given. SVG logos are sent with a
+copy the same way. A group's image is served only while at least one
+station of the group is visible to the request; with a listening PIN that
+hides all of them, the answer is the same 404 as for a missing file.
+Browsers may keep them for a year: the `v` in the path from
+`/api/channels` changes whenever the image is downloaded again, so use
+that path as given. SVG logos are sent with a
 policy that keeps them from running script.
 
 **`GET /api/channels/<id>/now?buffer_s=<seconds>&stream=<name>`** answers what is playing:
