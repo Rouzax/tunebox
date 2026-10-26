@@ -22,6 +22,7 @@ from tunebox import app
 from tunebox.accounts import Accounts
 from tunebox.app import WEB_ADMIN_DIR, StopSignal, main, open_settings, shut_down
 from tunebox.config import Config, state_from_toml
+from tunebox.logos import group_key
 from tunebox.pin import Pin
 from tunebox.runtime import EMPTY, Runtime
 from tunebox.server import TuneboxServer
@@ -308,7 +309,9 @@ def test_start_up_warns_about_a_group_image_whose_upload_is_gone(
     text = (tmp_path / "tunebox.log").read_text("utf-8")
     lines = [json.loads(x) for x in text.splitlines()]
     missing = [line for line in lines if line["event"] == "logo_blob_missing"]
-    assert [(line["level"], line["kind"]) for line in missing] == [("warning", "group")]
+    assert [(line["level"], line["kind"], line["group"]) for line in missing] == [
+        ("warning", "group", group_key("Secret group"))
+    ]
     assert "Secret group" not in json.dumps(missing)
 
 
