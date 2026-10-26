@@ -218,3 +218,12 @@ def test_tidy_waits_while_the_database_is_young(tmp_path: Path) -> None:
     assert asked == []
     assert store.tidy(now - BLOB_GRACE_S - 1, keep) == 0
     assert asked == [1]
+
+
+def test_missing_names_a_group_image(tmp_path: Path) -> None:
+    store = Blobs(tmp_path, free_space=lambda: None)
+    ref = "blob:" + "b" * 64
+    state = ConfigState(groups=("G",), group_images={"G": ref})
+    assert store.missing(state) == f"group_images.G: no uploaded logo {ref}"
+    (tmp_path / f"{'b' * 64}.png").write_bytes(b"x")
+    assert store.missing(state) is None

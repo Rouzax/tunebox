@@ -289,6 +289,29 @@ def test_start_up_warns_about_a_logo_whose_upload_is_gone(
     assert [(line["level"], line["channel"]) for line in missing] == [("warning", "owr")]
 
 
+def test_start_up_warns_about_a_group_image_whose_upload_is_gone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        config = tmp_path / "tunebox.toml"
+        config.write_text(
+            f'[server]\nhost = "127.0.0.1"\nport = {taken.getsockname()[1]}\n'
+            f'log_file = "tunebox.log"\n\n[[groups]]\nname = "Secret group"\n'
+            f'image = "blob:{"e" * 64}"\n\n{CHANNEL_TOML}',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LOG_LEVEL", "info")
+        monkeypatch.setenv("TUNEBOX_CONFIG", str(config))
+        assert main() == 2
+    text = (tmp_path / "tunebox.log").read_text("utf-8")
+    lines = [json.loads(x) for x in text.splitlines()]
+    missing = [line for line in lines if line["event"] == "logo_blob_missing"]
+    assert [(line["level"], line["kind"]) for line in missing] == [("warning", "group")]
+    assert "Secret group" not in json.dumps(missing)
+
+
 def test_start_up_removes_old_unnamed_blobs_and_keeps_named_ones(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -270,6 +270,12 @@ def test_referenced_blobs_include_stored_stations_and_history(settings: Settings
     assert settings.referenced_blobs() == {first, second}
 
 
+def test_referenced_blobs_include_group_images(settings: Settings) -> None:
+    ref = "blob:" + "c" * 64
+    settings.commit(dataclasses.replace(state("a", group="G"), group_images={"G": ref}), 0, "save")
+    assert ref in settings.referenced_blobs()
+
+
 def test_oldest_change_is_the_first_history_entry(settings: Settings) -> None:
     assert settings.oldest_change() is None
     version = settings.commit(state("a"), 0, "edit")

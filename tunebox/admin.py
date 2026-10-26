@@ -681,8 +681,13 @@ class Admin:
         target = payload.get("target")
         if isinstance(target, str) and (len(target) > MAX_TARGET or not encodable(target)):
             return _error(400, "bad_request")
+        raw_state = payload.get("state")
+        # An absent key reads as "no images", so a panel tab loaded before
+        # group images existed would wipe every one on its next save.
+        if isinstance(raw_state, dict) and "group_images" not in raw_state:
+            return _invalid("group_images: missing", None)
         try:
-            state = state_from_dict(payload.get("state"))
+            state = state_from_dict(cast("object", raw_state))
         except ConfigError as error:
             return _invalid(str(error), None)
         return self._commit(

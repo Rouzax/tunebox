@@ -291,12 +291,13 @@ class Settings:
         return cast("float | None", row[0])
 
     def referenced_blobs(self) -> set[str]:
-        """Every uploaded-logo reference in the stored stations and in all
-        history, which keeps a restore able to find its logos."""
+        """Every uploaded-logo reference in the stored stations, the group
+        images and all history, which keeps a restore able to find its logos."""
         found: set[str] = set()
         with self.read() as db:
             for table, columns in (
                 ("channels", "doc_json"),
+                ("settings", "value_json"),
                 ("history", "before_json || after_json"),
             ):
                 for (text,) in db.execute(

@@ -24,7 +24,7 @@ from tunebox.disk import MIN_FREE
 from tunebox.netguard import Probe
 from tunebox.pin import Pin
 from tunebox.rulecheck import MAX_NEW_PATTERNS
-from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
+from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError, state_from_dict
 from tunebox.streamcheck import PER_MINUTE, StreamChecks
 from tunebox.tracks import RawEntry
 from tunebox.usage import Usage
@@ -685,7 +685,14 @@ def station(cid: str, **extra: Any) -> dict[str, Any]:
 
 
 def state_of(*stations: dict[str, Any], **top: Any) -> dict[str, Any]:
-    return {"defaults": {}, "player": {}, "groups": [], "channels": list(stations), **top}
+    return {
+        "defaults": {},
+        "player": {},
+        "groups": [],
+        "channels": list(stations),
+        "group_images": {},
+        **top,
+    }
 
 
 def save(world: World, csrf: str, based_on: int, state: dict[str, Any]) -> Response:
@@ -1032,7 +1039,10 @@ def test_a_non_finite_number_is_refused(world: World) -> None:
     )
     assert answer.status == 400
     assert "defaults.delay_s" in json_of(answer)["message"]
-    raw = '{"based_on": 0, "state": {"defaults": {"delay_s": NaN}, "channels": []}}'
+    raw = (
+        '{"based_on": 0, "state": {"defaults": {"delay_s": NaN}, '
+        '"channels": [], "group_images": {}}}'
+    )
     request = Request(
         "POST",
         "/admin/api/config",
@@ -1136,7 +1146,7 @@ def test_an_invalid_state_names_the_field(world: World) -> None:
     assert answer.status == 400
     assert json_of(answer)["error"] == "invalid"
     assert "channels[0] (a).stream_url" in json_of(answer)["message"]
-    shape = save(world, csrf, 0, {"channels": [5]})
+    shape = save(world, csrf, 0, {"channels": [5], "group_images": {}})
     assert json_of(shape) == {"error": "invalid", "message": "channels[0]: expected an object"}
     assert world.applied == []
 
@@ -2117,6 +2127,41 @@ def test_a_preview_names_an_absent_blob(world: World) -> None:
     answer = world.call("POST", "/admin/api/import/preview", {"toml": text}, csrf=csrf)
     assert answer.status == 400
     assert gone in json_of(answer)["message"]
+
+
+def test_a_save_without_group_images_is_refused(world: World) -> None:
+    csrf = world.login()
+    config = json_of(world.call("GET", "/admin/api/config"))
+    state = config["state"]
+    del state["group_images"]
+    answer = save(world, csrf, config["version"], state)
+    assert (answer.status, json_of(answer)) == (
+        400,
+        {"error": "invalid", "message": "group_images: missing"},
+    )
+    assert world.settings.load()[1] == config["version"]
+
+
+def test_a_preview_names_an_absent_group_image_blob(world: World) -> None:
+    csrf = world.login()
+    gone = "blob:" + "2" * 64
+    text = STATIONS_TOML + f'\n[[groups]]\nname = "G"\nimage = "{gone}"\n'
+    answer = world.call("POST", "/admin/api/import/preview", {"toml": text}, csrf=csrf)
+    assert answer.status == 400
+    assert json_of(answer)["message"] == f"group_images.G: no uploaded logo {gone}"
+
+
+def test_a_restore_names_an_absent_group_image_blob(world: World) -> None:
+    csrf = world.login()
+    gone = "blob:" + "3" * 64
+    old = state_from_dict(state_of(station("a"), groups=["G"], group_images={"G": gone}))
+    world.settings.commit(old, 0, "edit")
+    world.settings.commit(state_from_dict(state_of(station("a"))), 1, "edit")
+    entry = json_of(world.call("GET", "/admin/api/history"))["entries"][0]["id"]
+    answer = world.call("POST", f"/admin/api/history/{entry}/restore", {"based_on": 2}, csrf=csrf)
+    assert answer.status == 400
+    assert json_of(answer)["message"] == f"group_images.G: no uploaded logo {gone}"
+    assert world.settings.load()[1] == 2
 
 
 def test_a_logo_upload_is_granted_its_own_limit_to_a_live_session(world: World) -> None:
