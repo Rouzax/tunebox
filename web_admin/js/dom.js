@@ -73,12 +73,15 @@ export function withHelp(node, help, name) {
 }
 
 // A part of a long form that folds away; status says what is inside while
-// it is folded.
-export function section(title, open, ...children) {
+// it is folded. The fields go in body: a details element lays its content
+// out in a box of its own, which only ::details-content can style, and
+// Chromium 120 has none, so the spacing between fields lives on body.
+export function section(title, open) {
     const status = el('span', {class: 'status'});
+    const body = el('div', {class: 'section-body'});
     const node = el('details', {class: 'section', open},
-        el('summary', null, el('h3', null, title), status), ...children);
-    return {node, status: (textValue) => { status.textContent = textValue; }};
+        el('summary', null, el('h3', null, title), status), body);
+    return {node, body, status: (textValue) => { status.textContent = textValue; }};
 }
 
 export function when(seconds) {
