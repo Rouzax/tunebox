@@ -238,11 +238,18 @@ def test_itunes_falls_back_to_the_full_name_of_a_band_with_an_ampersand() -> Non
     assert terms == ["YEARS King", "YEARS & YEARS King"]
 
 
-def test_artist_photo_alone_asks_only_for_the_artist() -> None:
-    http = FakeHttp(lambda _url: body({"data": [{"name": "Jef Nice", "picture_xl": ARTIST_PHOTO}]}))
+def test_artist_photo_asks_deezer_only_and_the_song_before_the_name() -> None:
+    def respond(url: str) -> bytes:
+        if "/search/artist" in url:
+            return body({"data": [{"name": "Jef Nice", "picture_xl": ARTIST_PHOTO}]})
+        return body({"data": []})
+
+    http = FakeHttp(respond)
     found = catalogs(http).artist_photo(make_track("JEF NICE", "When Le Soleil Takes Over"))
     assert found == Found(ARTIST_PHOTO, "artist", "deezer artist: Jef Nice")
-    assert all("/search/artist" in url for url in http.urls)
+    assert all("api.deezer.com" in url for url in http.urls)
+    assert "/search/artist" in http.urls[-1]
+    assert not any("/search/artist" in url for url in http.urls[:-1])
 
 
 def test_artist_photo_alone_tells_a_failure_from_a_miss() -> None:
@@ -269,3 +276,60 @@ def test_artist_photo_from_the_profile_with_the_most_fans() -> None:
 
     found = catalogs(FakeHttp(respond)).artist_photo(make_track("ROUTE 94", "4Get The Girl"))
     assert found == Found(ARTIST_PHOTO, "artist", "deezer artist: Route 94")
+
+
+def test_artist_photo_comes_from_the_artist_of_the_song() -> None:
+    # Deezer has several artists named Rafael; a name search ranks others
+    # first ("Rafa'EL" reads as "rafael" too). The song names its own.
+    own = "https://example.invalid/images/artist/own/1000x1000-000000-80-0-0.jpg"
+    other = "https://example.invalid/images/artist/other/1000x1000-000000-80-0-0.jpg"
+
+    def respond(url: str) -> bytes:
+        if "/search/artist" in url:
+            return body({"data": [{"name": "Rafa'EL", "nb_fan": 60, "picture_xl": other}]})
+        if "api.deezer.com/search?" in url and "artist%3A" not in url:
+            song = deezer_song(
+                "Rafael", "Gotta Be Cool (Luch Remix)", COVER, "Gotta Be Cool (Luch Remix)"
+            )
+            song["artist"] = {"name": "Rafael", "picture_xl": own}
+            return body({"data": [song]})
+        return body({"data": [], "results": []})
+
+    found = catalogs(FakeHttp(respond)).artist_photo(
+        make_track("RAFAEL", "Gotta Be Cool (Luch Remix)")
+    )
+    assert found == Found(own, "artist", "deezer artist: Rafael")
+
+
+def test_artist_photo_falls_back_to_the_name_when_the_song_has_no_photo() -> None:
+    def respond(url: str) -> bytes:
+        if "/search/artist" in url:
+            return body({"data": [{"name": "Jef Nice", "picture_xl": ARTIST_PHOTO}]})
+        if "api.deezer.com/search?" in url and "artist%3A" not in url:
+            song = deezer_song("Jef Nice", "When Le Soleil Takes Over")
+            song["artist"] = {"name": "Jef Nice", "picture_xl": PLACEHOLDER}
+            return body({"data": [song]})
+        return body({"data": [], "results": []})
+
+    found = catalogs(FakeHttp(respond)).artist_photo(
+        make_track("JEF NICE", "When Le Soleil Takes Over")
+    )
+    assert found == Found(ARTIST_PHOTO, "artist", "deezer artist: Jef Nice")
+
+
+def test_artist_photo_is_of_the_first_named_artist() -> None:
+    first = "https://example.invalid/images/artist/first/1000x1000-000000-80-0-0.jpg"
+    second = "https://example.invalid/images/artist/second/1000x1000-000000-80-0-0.jpg"
+
+    def respond(url: str) -> bytes:
+        if "/search/artist" in url:
+            return body({"data": [{"name": "Ben Böhmer", "picture_xl": first}]})
+        if "api.deezer.com/search?" in url and "artist%3A" not in url:
+            song = deezer_song("Spencer Brown", "Phosphene", COVER, "Phosphene")
+            song["artist"] = {"name": "Spencer Brown", "picture_xl": second}
+            return body({"data": [song]})
+        return body({"data": [], "results": []})
+
+    track = make_track("BEN BOHMER, SPENCER BROWN", "Phosphene")
+    found = catalogs(FakeHttp(respond)).artist_photo(track)
+    assert found == Found(first, "artist", "deezer artist: Ben Böhmer")

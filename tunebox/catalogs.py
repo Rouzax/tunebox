@@ -13,7 +13,14 @@ from typing import Any, Literal, cast
 
 from tunebox.http import HttpError, HttpGet
 from tunebox.logs import event
-from tunebox.matching import Candidate, base_title, best_match, lead_artist, search_names
+from tunebox.matching import (
+    Candidate,
+    artists_match,
+    base_title,
+    best_match,
+    lead_artist,
+    search_names,
+)
 from tunebox.tracks import Track, norm
 
 log = logging.getLogger(__name__)
@@ -99,8 +106,22 @@ class Catalogs:
         return found
 
     def artist_photo(self, track: Track) -> Found | None:
-        """The artists' photo alone, shown beside a song's own cover."""
+        """The artists' photo alone, shown beside a song's own cover. The
+        song's own Deezer entry names its artist, which a name search cannot
+        tell apart from others of the same name (Deezer has several Rafaels,
+        and "Rafa'EL" reads as "rafael" too); the name search is for a song
+        Deezer does not have."""
         failures: list[str] = []
+        song = self._deezer_match(track, failures)
+        # Deezer may list a song under its second artist; the photo is of
+        # the first-named one, as the name search would choose.
+        lead = lead_artist(track.artists[0])
+        if (
+            song is not None
+            and _real_picture(song.artist_image)
+            and artists_match([lead], song.artist)
+        ):
+            return Found(song.artist_image, "artist", f"deezer artist: {song.artist}")
         found = self._artist_photo(track, failures)
         if found is None and failures:
             raise SearchError("; ".join(failures))
@@ -128,6 +149,12 @@ class Catalogs:
         return result
 
     def _deezer_song(self, track: Track, failures: list[str]) -> Found | None:
+        found = self._deezer_match(track, failures)
+        if found is None:
+            return None
+        return Found(found.image, "album", f"deezer: {found.artist} - {found.title}")
+
+    def _deezer_match(self, track: Track, failures: list[str]) -> Candidate | None:
         names = search_names(track.artists)
         first, base = track.artists[0], base_title(track.title)
         queries = [f'artist:"{first}" track:"{track.title}"']
@@ -147,11 +174,12 @@ class Catalogs:
                     _text(i, "title"),
                     _text(i, "album", "cover_xl"),
                     _text(i, "album", "title"),
+                    _text(i, "artist", "picture_xl"),
                 )
                 for i in _items(data, "data")
             ]
             if found := best_match(names, track.title, candidates):
-                return Found(found.image, "album", f"deezer: {found.artist} - {found.title}")
+                return found
         return None
 
     def _itunes_song(self, track: Track, failures: list[str]) -> Found | None:
@@ -185,18 +213,15 @@ class Catalogs:
         for name in track.artists:
             if not norm(name):
                 continue  # nothing to compare: any name in another script would "match"
-            url = f"{DEEZER}/search/artist?" + urllib.parse.urlencode({"q": name, "limit": 5})
+            url = f"{DEEZER}/search/artist?" + urllib.parse.urlencode({"q": name, "limit": 25})
             # Deezer keeps duplicate profiles under one name; a small one often
             # has an album cover for its picture and may be listed first. The
             # profile with the most fans is the artist's own.
             best: dict[str, Any] | None = None
             for item in _items(self._json(url, self._deezer, failures), "data"):
-                picture = _text(item, "picture_xl")
-                # Deezer's placeholder for an artist without a photo has an empty id.
                 if (
                     norm(_text(item, "name")) == norm(name)
-                    and picture
-                    and "/artist//" not in picture
+                    and _real_picture(_text(item, "picture_xl"))
                     and (best is None or _fans(item) > _fans(best))
                 ):
                     best = item
@@ -205,6 +230,11 @@ class Catalogs:
                     _text(best, "picture_xl"), "artist", f"deezer artist: {_text(best, 'name')}"
                 )
         return None
+
+
+def _real_picture(picture: str) -> bool:
+    # Deezer's placeholder for an artist without a photo has an empty id.
+    return bool(picture) and "/artist//" not in picture
 
 
 def _fans(item: dict[str, Any]) -> int:

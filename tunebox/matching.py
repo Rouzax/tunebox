@@ -32,6 +32,8 @@ class Candidate:
     title: str
     image: str
     album: str = ""
+    # The artist's own picture, where the catalogue gives one with the song.
+    artist_image: str = ""
 
 
 def base_title(title: str) -> str:
