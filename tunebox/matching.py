@@ -13,10 +13,11 @@ _BRACKETS = re.compile(r"\s*[\(\[][^)\]]*[\)\]]")
 # This keeps "It's Not Right (But It's Ok)" against "It's Not Right But It's
 # Okay" (exactly half) and rejects "Running" against "Running Up That Hill".
 MIN_PREFIX_SHARE = 0.5
+_AMPERSAND = re.compile(r"\s+&\s+")
+_VERSION_LABELS = re.compile(r"[\(\[]([^)\]]*)[\)\]]")
 # Signs that a catalogue entry is a DJ mix, a compilation or a radio show
 # rather than the song's own release: its cover then shows the mix, not the
-# song. Read from the album and the track title together.
-_AMPERSAND = re.compile(r"\s+&\s+")
+# song. Read from norm() text of the album and the version labels.
 _COMPILED = re.compile(
     r"\bmixed\b|\bvol(?:ume)?\b\.?\s*\d|\bradio\s+\d+|\bepisode\b|\bpresents\b"
     r"|\bcompilation\b|\bclassics\b|\bhits\b|\bbest of\b"
@@ -80,7 +81,15 @@ def lead_artist(name: str) -> str:
 
 
 def compiled(candidate: Candidate) -> bool:
-    return bool(_COMPILED.search(f"{candidate.album} {candidate.title}"))
+    """Whether the album or a version label ("(Mixed by ...)") looks like a
+    mix, compilation or show. The song's own name is left out of the album:
+    "Mixed Emotions" on its single "Mixed Emotions" is no mix."""
+    song = norm(base_title(candidate.title))
+    album = f" {norm(candidate.album)} "
+    if song:
+        album = album.replace(f" {song} ", " ", 1)
+    labels = " ".join(norm(label) for label in _VERSION_LABELS.findall(candidate.title))
+    return bool(_COMPILED.search(f"{album} {labels}"))
 
 
 def best_match(

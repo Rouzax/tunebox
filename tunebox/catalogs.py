@@ -149,10 +149,13 @@ class Catalogs:
     def _itunes_song(self, track: Track, failures: list[str]) -> Found | None:
         names = search_names(track.artists)
         first, base = track.artists[0], base_title(track.title)
-        lead = lead_artist(first)
-        terms = [f"{lead} {track.title}"]
-        if base != track.title:
-            terms.append(f"{lead} {base}")
+        # The first-named artist first, as on Deezer; the full name stays as
+        # the fallback for a band whose name holds "&" ("YEARS & YEARS").
+        terms = [
+            f"{name} {title}"
+            for name in dict.fromkeys((lead_artist(first), first))
+            for title in dict.fromkeys((track.title, base))
+        ]
         for term in terms:
             params = {"term": term, "media": "music", "entity": "song", "limit": 10}
             url = f"{ITUNES}?" + urllib.parse.urlencode(params)

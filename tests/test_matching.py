@@ -209,3 +209,14 @@ def test_lead_artist_is_the_first_named() -> None:
     assert lead_artist("AVICII & ALOE BLACC") == "AVICII"
     assert lead_artist("Chris Lorenzo & Chromeo") == "Chris Lorenzo"
     assert lead_artist("FISHER") == "FISHER"
+
+
+def test_a_song_named_like_a_compilation_keeps_its_own_release() -> None:
+    own = Candidate("The Rolling Stones", "Mixed Emotions", cover("own"), "Mixed Emotions")
+    assert not compiled(own)
+    assert not compiled(
+        Candidate("The Rolling Stones", "Mixed Emotions", cover("x"), "Steel Wheels")
+    )
+    hits = Candidate("The Rolling Stones", "Mixed Emotions", cover("hits"), "Greatest Hits")
+    found = best_match(("THE ROLLING STONES",), "Mixed Emotions", [hits, own])
+    assert found is not None and found.image == cover("own")
