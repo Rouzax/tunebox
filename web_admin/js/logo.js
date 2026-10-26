@@ -10,19 +10,24 @@ export const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+x
 // An uploaded logo is shown from the panel at the size of the page and of a
 // list row; a URL is only downloaded after saving. kept() gives the form's
 // unsaved change, which an upload that meets an ended session hands to the
-// login so it can be offered again.
-export function logoPart(ctx, input, kept) {
+// login so it can be offered again. saved ({value, src}, optional) is the
+// stored link and the panel's address of its download, shown while the
+// field still holds that link.
+export function logoPart(ctx, input, kept, saved) {
     const current = ctx.stillOpen;
     const preview = el('div', {class: 'logo-preview'});
     const picker = el('input', {type: 'file', name: 'logo-file', hidden: true,
         accept: LOGO_TYPES.join(',')});
     const note = el('span', {class: 'hint', role: 'alert'});
     function draw() {
-        const shown = logoPreview(input.value.trim());
-        if (shown.kind === 'blob') {
+        const value = input.value.trim();
+        const shown = logoPreview(value);
+        const downloaded = saved && saved.src && value === saved.value ? saved.src : null;
+        if (shown.kind === 'blob' || downloaded) {
+            const src = downloaded || shown.src;
             preview.replaceChildren(
-                el('img', {class: 'logo-full', src: shown.src, alt: 'Logo'}),
-                el('img', {class: 'logo-small', src: shown.src, alt: 'Logo at list size'}));
+                el('img', {class: 'logo-full', src, alt: 'Logo'}),
+                el('img', {class: 'logo-small', src, alt: 'Logo at list size'}));
         } else if (shown.kind === 'url') {
             preview.replaceChildren(el('span', {class: 'hint'}, 'Shown after saving.'));
         } else {

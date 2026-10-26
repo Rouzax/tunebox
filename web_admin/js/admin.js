@@ -111,9 +111,11 @@ const ctx = {
     // server's reason; a stale version reloads and asks to try again.
     // basedOn is the version the state was built on; a change kept across a
     // login passes the one it started from, so the stale check still holds.
-    save(state, target, done, basedOn) {
+    // keep marks a form's save outside the station form (the group form on
+    // the Stations page), kept for the next login as that form's is.
+    save(state, target, done, basedOn, keep) {
         const body = {based_on: basedOn === undefined ? ctx.config.version : basedOn, state, target};
-        return once(() => call('POST', 'config', body), done, {state, target, done, basedOn: body.based_on});
+        return once(() => call('POST', 'config', body), done, {state, target, done, basedOn: body.based_on, keep: Boolean(keep)});
     },
     // Any other admin call: a refused session goes to the login form, as
     // it does for saves. options as for call.
@@ -280,10 +282,12 @@ async function commit(answer, done, retry) {
 let pending = null;
 
 // A refused session goes back to the login form; anything else is a message.
-// A form's save that the session ended is kept for the next login.
+// A form's save that the session ended is kept for the next login: the
+// station form's, and a save marked keep. Any other page is drawn again
+// from the stored state after the login.
 async function answered(status, data, retry) {
     if (status === 401) {
-        if (retry && onForm()) {
+        if (retry && (onForm() || retry.keep)) {
             pending = retry;
         }
         setCsrf(null);

@@ -119,19 +119,20 @@ function groupForm(ctx, group, redraw) {
             return {problem: `There is already a group named ${name}.`};
         }
         const renamed = name === group.name ? current : renameGroup(current, group.name, name);
-        return {state: setGroupImage(renamed, name, imageInput.value), target: name, done: `Saved group ${name}.`};
+        return {state: setGroupImage(renamed, name, imageInput.value), target: name, done: `Saved group ${name}.`, keep: true};
     }
+    const stored = own(ctx.config.state.group_images, group.name);
     const logo = logoPart(ctx, imageInput, () => {
         const change = pendingChange();
         return change.problem ? null : change;
-    });
+    }, stored ? {value: stored, src: own(ctx.config.group_images, group.name)} : null);
     const form = el('form', {class: 'group-edit', onsubmit: async (event) => {
         event.preventDefault();
         const change = pendingChange();
         error.textContent = change.problem || '';
         error.hidden = !change.problem;
         if (!change.problem) {
-            await ctx.save(change.state, change.target, change.done);
+            await ctx.save(change.state, change.target, change.done, undefined, true);
         }
     }},
     field('Name', nameInput),

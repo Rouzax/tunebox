@@ -2176,6 +2176,41 @@ async function run() {
             return (await until(shown)) ? null : 'the Stations heading shows no image for Pictured';
         });
 
+        await step('a group form that meets an ended session offers its change after login', async () => {
+            if (!(await openPage('#stations', `document.querySelector('button[title="Edit group Pictured"]')`))) {
+                return 'no group Pictured';
+            }
+            await click('button[title="Edit group Pictured"]');
+            if (!(await until(`document.querySelector('form.group-edit input[name=logo-file]')`))) {
+                return 'the pencil opened no group form';
+            }
+            const image = await evaluate(`document.querySelector('form.group-edit').elements.image.value`);
+            await evaluate(`document.querySelector('form.group-edit').elements.name.value = 'Pictured Two'`);
+            await otherLogin();
+            await endPageSession();
+            await setFile('form.group-edit input[name=logo-file]', join(transfer, 'logo.png'));
+            if (!(await until(`!document.querySelector('#login').hidden`))) {
+                return `the login form did not show (message: ${await message()})`;
+            }
+            const problem = await pageLogin();
+            if (problem) {
+                return problem;
+            }
+            if (!(await until(`document.querySelector('#shell .pending') && !document.querySelector('#shell .pending').hidden`))) {
+                return 'no box after login';
+            }
+            const text = await evaluate(`document.querySelector('#shell .pending').textContent`);
+            if (text.indexOf('The image was not uploaded') < 0) {
+                return `box says: ${text}`;
+            }
+            await buttonNamed('Save it now');
+            if (!(await until(`document.querySelector('#shell .pending').hidden && document.querySelector('button[title="Edit group Pictured Two"]')`))) {
+                return `the kept change was not saved (message: ${await message()})`;
+            }
+            const stored = await evaluate(`fetch('/admin/api/config').then((r) => r.json()).then((c) => JSON.stringify([c.state.groups.indexOf('Pictured') < 0, c.state.group_images['Pictured Two']]))`);
+            return stored === JSON.stringify([true, image]) ? null : `stored: ${stored}, the form held ${image}`;
+        });
+
         rmSync(transfer, {recursive: true, force: true});
 
         // A first start: no account, the setup page on, the link from the log.
