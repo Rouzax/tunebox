@@ -1,4 +1,4 @@
-import {groupChannels, streamLabel} from './channels.js';
+import {groupChannels, mosaicFor, streamLabel, tilesFor} from './channels.js';
 import {coverFor, nextCover, timeAgo} from './tracks.js';
 
 export const PAGES = ['main', 'history', 'channels', 'viz'];
@@ -28,7 +28,10 @@ export function bindPages(app) {
     const historyList = root.querySelector('.history-list');
     const historyEmpty = root.querySelector('.history-empty');
     const groups = root.querySelector('.channel-groups');
+    const toTiles = root.querySelector('.btn-tiles');
     let page = 'main';
+    // The group whose stations the channel page shows instead of the tiles.
+    let openGroup = null;
 
     // Focus moving to a button on another page (keyboard, screen reader)
     // makes the browser scroll this overflow: hidden container; the pages
@@ -46,6 +49,10 @@ export function bindPages(app) {
         if (page === 'history') {
             renderHistory();
         } else if (page === 'channels') {
+            if (openGroup !== null) {
+                openGroup = null;
+                renderChannels();
+            }
             loadLogos();
             markActive();
             centreActive();
@@ -59,7 +66,12 @@ export function bindPages(app) {
         back.addEventListener('click', () => app.showPage('main'));
     }
     document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') {
+        if (event.key !== 'Escape') {
+            return;
+        }
+        if (page === 'channels' && openGroup !== null) {
+            showGroup(null);
+        } else {
             app.showPage('main');
         }
     });
@@ -102,38 +114,151 @@ export function bindPages(app) {
         }
     }, AGO_REFRESH_MS);
 
+    function stationRows(channels) {
+        const list = element('ul');
+        for (const channel of channels) {
+            const item = element('li');
+            const button = element('button', 'channel');
+            button.type = 'button';
+            button.dataset.id = channel.id;
+            if (channel.logo) {
+                const logo = element('img');
+                logo.alt = '';
+                logo.dataset.src = channel.logo_small || channel.logo;
+                button.append(logo);
+            }
+            button.append(element('span', 'name', channel.name));
+            item.append(button);
+            list.append(item);
+        }
+        return list;
+    }
+
+    function mosaic(sources, lazy) {
+        const box = element('span', 'mosaic');
+        for (const source of sources) {
+            const image = element('img');
+            image.alt = '';
+            if (lazy) {
+                image.dataset.src = source;
+            } else {
+                image.src = source;
+            }
+            box.append(image);
+        }
+        return box;
+    }
+
+    function tileButton(tile) {
+        const button = element('button', 'tile');
+        button.type = 'button';
+        const art = element('span', 'tile-art');
+        if (tile.kind === 'group') {
+            button.dataset.group = tile.name;
+        } else {
+            button.dataset.id = tile.id;
+        }
+        if (tile.image) {
+            const image = element('img');
+            image.alt = '';
+            image.dataset.src = tile.image;
+            art.append(image);
+        } else if (tile.mosaic && tile.mosaic.length) {
+            art.append(mosaic(tile.mosaic, true));
+        }
+        const playing = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        playing.setAttribute('class', 'tile-playing');
+        playing.setAttribute('viewBox', '0 0 24 24');
+        playing.setAttribute('aria-hidden', 'true');
+        const bars = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        bars.setAttribute('d', 'M7 18h2V6H7v12zm4 4h2V2h-2v20zm-8-8h2v-4H3v4zm12 4h2V6h-2v12zm4-8v4h2v-4h-2z');
+        playing.append(bars);
+        button.append(art, playing, element('span', 'name', tile.name));
+        return button;
+    }
+
+    // Three views: the plain list (fewer than two groups), the tiles, or the
+    // stations of one open group. A group's rows are built only when it
+    // opens, so the tile page loads tile and mosaic images alone.
     function renderChannels() {
-        const sections = groupChannels(app.channels).map((group) => {
-            const section = element('section');
-            if (group.name) {
-                section.append(element('h4', '', group.name));
-            }
-            const list = element('ul');
-            for (const channel of group.channels) {
-                const item = element('li');
-                const button = element('button', 'channel');
-                button.type = 'button';
-                button.dataset.id = channel.id;
-                if (channel.logo) {
-                    const logo = element('img');
-                    logo.alt = '';
-                    logo.dataset.src = channel.logo_small || channel.logo;
-                    button.append(logo);
+        const tiles = tilesFor(app.channels);
+        const listed = groupChannels(app.channels);
+        const open = tiles && listed.find((group) => group.name !== null && group.name === openGroup);
+        if (!open) {
+            openGroup = null;
+        }
+        let content;
+        if (!tiles) {
+            content = listed.map((group) => {
+                const section = element('section');
+                if (group.name) {
+                    section.append(element('h4', '', group.name));
                 }
-                button.append(element('span', 'name', channel.name));
-                item.append(button);
-                list.append(item);
-            }
-            section.append(list);
-            return section;
-        });
+                section.append(stationRows(group.channels));
+                return section;
+            });
+        } else if (open) {
+            const section = element('section');
+            section.append(element('h4', '', open.name), stationRows(open.channels));
+            content = [section];
+        } else {
+            const grid = element('div', 'channel-tiles');
+            grid.append(...tiles.map(tileButton));
+            content = [grid];
+        }
         if (app.morePin) {
             const more = element('button', 'btn more-stations', 'More stations with the PIN');
             more.type = 'button';
-            sections.push(more);
+            content.push(more);
         }
-        replaceContent(groups, sections);
+        toTiles.classList.toggle('hidden', !open);
+        groups.classList.toggle('tiled', Boolean(tiles) && !open);
+        replaceContent(groups, content);
     }
+
+    // Opens a group's stations, or the tiles again with null. Keyboard focus
+    // follows to the control that replaced the pressed one, which the
+    // re-render removed.
+    function showGroup(name) {
+        const left = openGroup;
+        const hadFocus = root.contains(document.activeElement) && document.activeElement !== document.body;
+        openGroup = name;
+        renderChannels();
+        loadLogos();
+        markActive();
+        const pageBox = groups.closest('.page');
+        pageBox.scrollTop = 0;
+        centreActive();
+        if (hadFocus) {
+            const target = openGroup !== null
+                ? toTiles
+                : [...groups.querySelectorAll('.tile[data-group]')].find((tile) => tile.dataset.group === left);
+            if (target) {
+                target.focus({preventScroll: true});
+            }
+        }
+    }
+
+    // A tile image that does not load gives way to the group's mosaic, a
+    // mosaic piece to the others, and an empty mosaic to the name alone.
+    groups.addEventListener('error', (event) => {
+        const image = event.target;
+        if (!image || image.tagName !== 'IMG' || !image.closest('.tile')) {
+            return;
+        }
+        const art = image.parentElement;
+        image.remove();
+        const tile = art.closest('.tile');
+        if (art.classList.contains('tile-art') && tile.dataset.group !== undefined) {
+            const group = groupChannels(app.channels).find((candidate) => candidate.name === tile.dataset.group);
+            const sources = group ? mosaicFor(group.channels) : [];
+            if (sources.length) {
+                art.append(mosaic(sources, false));
+            }
+        } else if (art.classList.contains('mosaic') && !art.children.length) {
+            art.remove();
+        }
+    }, true);
 
     // Logos load when the channel page is first opened, not with the page:
     // loading="lazy" does not hold them back on the hidden page, and on
@@ -149,7 +274,7 @@ export function bindPages(app) {
     // page container sideways, which is overflow: hidden but still scrollable,
     // and leave every page shifted.
     function centreActive() {
-        const active = groups.querySelector('.channel.active');
+        const active = groups.querySelector('.channel.active, .tile.active');
         const pageBox = groups.closest('.page');
         if (!active || !pageBox) {
             return;
@@ -178,6 +303,13 @@ export function bindPages(app) {
                 button.after(streams);
             }
         }
+        // The tile of the playing station, or of the group holding it.
+        for (const tile of groups.querySelectorAll('.tile')) {
+            const active = Boolean(app.channel) && (tile.dataset.group !== undefined
+                ? tile.dataset.group === app.channel.group
+                : tile.dataset.id === app.channel.id);
+            tile.classList.toggle('active', active);
+        }
     }
 
     groups.addEventListener('click', (event) => {
@@ -190,7 +322,12 @@ export function bindPages(app) {
             app.selectStream(choice.dataset.stream);
             return;
         }
-        const button = event.target.closest('.channel');
+        const group = event.target.closest('.tile[data-group]');
+        if (group) {
+            showGroup(group.dataset.group);
+            return;
+        }
+        const button = event.target.closest('.channel, .tile[data-id]');
         if (!button) {
             return;
         }
@@ -199,6 +336,7 @@ export function bindPages(app) {
         }
         app.showPage('main');
     });
+    toTiles.addEventListener('click', () => showGroup(null));
     events.on('channel', markActive);
     events.on('stream', markActive);
     events.on('channels', () => {

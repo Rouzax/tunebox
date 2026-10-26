@@ -2,7 +2,9 @@
 // window size the player is used at, on every page, in day and night, stopped
 // and playing, embedded or not, with long titles. Also checks that a page
 // open loads only the current channel's logo before the channel page is
-// opened.
+// opened, and, when the config has two or more groups, that the channel
+// page's tiles load no station logo beyond their own images and that a
+// group opens and closes again.
 //
 // Needs Google Chrome or Chromium (or CHROME=<path>) and a running tunebox.
 // Node 22 or later (Node 20 needs --experimental-websocket):
@@ -33,7 +35,8 @@ const SIZES = [
     {name: 'phone-landscape', width: 844, height: 390, mobile: true},
     {name: 'desktop', width: 1280, height: 800},
 ];
-const PAGES = ['main', 'history', 'channels', 'viz'];
+// 'group' is the channel page with a group opened from its tile.
+const PAGES = ['main', 'history', 'channels', 'group', 'viz'];
 const LONG_TITLE = 'An Extremely Long Track Title That Will Never Fit On One Line (Extended Festival Mix)';
 const LONG_ARTIST = 'ARTIST ONE, ARTIST TWO, ARTIST THREE, ARTIST FOUR, ARTIST FIVE';
 const LONG_PLAYED = 'Somebody With A Long Name Mainstage Tomorrowland Winter 2026';
@@ -138,7 +141,7 @@ function inspect(page, slack) {
     }
 
     // The active page fills the area above the bar.
-    const activePage = document.querySelector(`.page.${page === 'channels' ? 'channels-page' : page === 'viz' ? 'viz-page' : page}`);
+    const activePage = document.querySelector(`.page.${page === 'channels' || page === 'group' ? 'channels-page' : page === 'viz' ? 'viz-page' : page}`);
     const pageRect = box(activePage);
     if (!inside(pageRect, viewport)) {
         problems.push(`active page is not within the window (${Math.round(pageRect.left)},${Math.round(pageRect.top)} ${Math.round(pageRect.width)}x${Math.round(pageRect.height)})`);
@@ -418,8 +421,8 @@ function inspect(page, slack) {
         toast.textContent = oldText;
         toast.classList.toggle('hidden', wasHidden);
     }
-    if (page === 'channels') {
-        const unloaded = [...document.querySelectorAll('.channel img')].filter((img) => !img.getAttribute('src'));
+    if (page === 'channels' || page === 'group') {
+        const unloaded = [...document.querySelectorAll('.channel img, .tile img')].filter((img) => !img.getAttribute('src'));
         if (unloaded.length) {
             problems.push(`${unloaded.length} channel logo(s) not loaded on the channel page`);
         }
@@ -505,6 +508,68 @@ async function checkStaleHeight(send, evaluate) {
     return gap === 0 ? [] : [`a page sized from a stale --car-vh leaves a ${gap} px gap above the control bar`];
 }
 
+// The tiles open a group, and the group closes again by its own button and
+// by Escape; a second Escape leaves the channel page. Resolves to the
+// problems found, or null when the config has fewer than two groups.
+async function checkTiles(send, evaluate) {
+    await send('Emulation.setDeviceMetricsOverride', {width: 489, height: 518, deviceScaleFactor: 1, mobile: false});
+    await send('Page.navigate', {url: `${BASE}/`});
+    await sleep(2500);
+    const state = () => evaluate(`(() => {
+        const root = document.querySelector('.tunebox');
+        const heading = root.querySelector('.channel-groups h4');
+        return {
+            page: root.dataset.page,
+            tiles: root.querySelectorAll('.channel-tiles .tile').length,
+            rows: root.querySelectorAll('.channel-groups .channel').length,
+            heading: heading ? heading.textContent : null,
+            back: !root.querySelector('.btn-tiles').classList.contains('hidden'),
+        };
+    })()`);
+    await evaluate(`document.querySelector('.open-channels').click()`);
+    await sleep(700);
+    const tiles = await state();
+    if (!tiles.tiles) {
+        return null;
+    }
+    const problems = [];
+    const tilePage = (what, now) => {
+        if (now.page !== 'channels' || !now.tiles || now.rows || now.back) {
+            problems.push(`${what}: not the tile page (${JSON.stringify(now)})`);
+        }
+    };
+    tilePage('opening the channel page', tiles);
+    const group = await evaluate(`(() => {
+        const tile = document.querySelector('.tile[data-group]');
+        tile.click();
+        return {name: tile.dataset.group};
+    })()`);
+    await sleep(300);
+    const opened = await state();
+    const members = await evaluate(`fetch('/api/channels').then((r) => r.json())
+        .then((list) => list.filter((c) => c.group === ${JSON.stringify(group.name)}).length)`);
+    if (opened.tiles || opened.heading !== group.name || opened.rows !== members || !opened.back) {
+        problems.push(`a group tile does not open its ${members} stations (${JSON.stringify(opened)})`);
+    }
+    await evaluate(`document.querySelector('.btn-tiles').click()`);
+    await sleep(300);
+    tilePage('All groups', await state());
+    await evaluate(`document.querySelector('.tile[data-group]').click()`);
+    await sleep(300);
+    const key = async () => {
+        await send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
+        await send('Input.dispatchKeyEvent', {type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
+        await sleep(300);
+    };
+    await key();
+    tilePage('Escape inside a group', await state());
+    await key();
+    if ((await state()).page !== 'main') {
+        problems.push('Escape on the tile page does not go back to now playing');
+    }
+    return problems;
+}
+
 async function run() {
     const {send, errors, close, evaluate} = await connect({port: PORT});
     const failures = [];
@@ -515,6 +580,12 @@ async function run() {
     try {
         failures.push(...await checkFocusRing(send, evaluate));
         failures.push(...await checkStaleHeight(send, evaluate));
+        const tileProblems = await checkTiles(send, evaluate);
+        if (tileProblems === null) {
+            console.log('fewer than two groups in this config: tiles and open groups not checked');
+        } else {
+            failures.push(...tileProblems);
+        }
         for (const size of SIZES) {
             await send('Emulation.setDeviceMetricsOverride', {
                 width: size.width, height: size.height, deviceScaleFactor: 1, mobile: Boolean(size.mobile),
@@ -539,6 +610,8 @@ async function run() {
                     if (logos > 1) {
                         failures.push(`${size.name} ${embed ? 'embed ' : ''}${mode}: page open loads ${logos} station logos`);
                     }
+                    const loadedAtOpen = await evaluate(`performance.getEntriesByType('resource')
+                        .filter((e) => e.name.indexOf('/logos/') >= 0).map((e) => e.name)`);
                     for (const state of ['stopped', 'playing']) {
                         // Layout only: the state and the long text are set directly.
                         await evaluate(`(() => {
@@ -552,20 +625,51 @@ async function run() {
                             badge.hidden = false;
                         })()`);
                         for (const page of PAGES) {
-                            await evaluate(`(() => {
+                            const opened = await evaluate(`(() => {
                                 const root = document.querySelector('.tunebox');
-                                const open = {history: '.open-history', channels: '.open-channels', viz: '.viz-toggle'}['${page}'];
+                                const open = {history: '.open-history', channels: '.open-channels', group: '.open-channels', viz: '.viz-toggle'}['${page}'];
                                 if (root.dataset.page !== 'main') {
                                     root.querySelector('.page:not(.main) .btn-back') && [...root.querySelectorAll('.btn-back')][0].click();
                                 }
                                 if (open) {
                                     root.querySelector(open).click();
                                 }
+                                if ('${page}' !== 'group') {
+                                    return true;
+                                }
+                                // The playing station's group, so its stream choices show.
+                                const tiles = [...root.querySelectorAll('.tile[data-group]')];
+                                const tile = tiles.find((t) => t.classList.contains('active')) || tiles[0];
+                                if (tile) {
+                                    tile.click();
+                                }
+                                return Boolean(tile);
                             })()`);
+                            if (!opened) {
+                                continue;
+                            }
                             // Page slide (600 ms) and fonts.
                             await sleep(900);
                             const view = `${size.name} ${embed ? 'embed ' : ''}${mode} ${state} ${page}`;
                             const result = await evaluate(`(${inspect.toString()})('${page}', ${SLACK})`);
+                            // The tile page loads the tiles' own images and the
+                            // group mosaics, never the logos of the rows behind them.
+                            if (page === 'channels' && state === 'stopped') {
+                                const extra = await evaluate(`(() => {
+                                    const known = new Set(${JSON.stringify(loadedAtOpen)});
+                                    for (const img of document.querySelectorAll('.channel-tiles img')) {
+                                        known.add(img.src);
+                                    }
+                                    if (!document.querySelector('.channel-tiles')) {
+                                        return [];
+                                    }
+                                    return performance.getEntriesByType('resource')
+                                        .filter((e) => e.name.indexOf('/logos/') >= 0 && !known.has(e.name)).map((e) => e.name);
+                                })()`);
+                                if (extra.length) {
+                                    failures.push(`${size.name} ${embed ? 'embed ' : ''}${mode}: the tile page loads ${extra.length} other logo(s), first ${extra[0]}`);
+                                }
+                            }
                             views += 1;
                             for (const problem of [...result.problems, ...await evaluate(`(${steadyCard.toString()})()`)]) {
                                 failures.push(`${view} [${result.layout}]: ${problem}`);

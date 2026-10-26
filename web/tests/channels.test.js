@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {canPlay, groupChannels, keepSelection, listOutdated, nextChannel, pickChannel, pickStream, streamLabel} from '../js/channels.js';
+import {canPlay, groupChannels, keepSelection, listOutdated, nextChannel, pickChannel, pickStream, streamLabel, tilesFor} from '../js/channels.js';
 
 const HIGH = {name: 'High', url: 'https://example.invalid/h', codec: 'aac', kbps: 256};
 const MP3 = {name: 'Compatible', url: 'https://example.invalid/m', codec: 'mp3', kbps: null};
@@ -92,4 +92,25 @@ test('a new image revision refreshes the stations', () => {
     assert.equal(listOutdated({version: 3, pin: 'stations.1', images: 'ab.1'}, app), false);
     assert.equal(listOutdated({version: 3, pin: 'stations.1', images: 'ab.2'}, app), true);
     assert.equal(listOutdated({version: 3, pin: 'stations.1'}, app), false);
+});
+
+const ch = (id, group, extra) => Object.assign({id, name: id.toUpperCase(), group, logo: `/logos/${id}.png`, logo_small: null, group_image: null, group_image_small: null}, extra || {});
+
+test('fewer than two groups give no tiles', () => {
+    assert.equal(tilesFor([ch('a', null), ch('b', 'G')]), null);
+    assert.equal(tilesFor([ch('a', null)]), null);
+});
+
+test('tiles list ungrouped stations first, then groups in order', () => {
+    const tiles = tilesFor([ch('a', 'G'), ch('u', null), ch('b', 'H'), ch('c', 'G')]);
+    assert.deepEqual(tiles.map((t) => t.kind === 'group' ? `g:${t.name}:${t.count}` : `s:${t.id}`), ['s:u', 'g:G:2', 'g:H:1']);
+});
+
+test('a group shows its small image, else its image, else a mosaic of four logos', () => {
+    const withSmall = tilesFor([ch('a', 'G', {group_image: '/g.png', group_image_small: '/gs.png'}), ch('b', 'H')]);
+    assert.equal(withSmall[0].image, '/gs.png');
+    assert.equal(withSmall[0].mosaic, null);
+    const mosaic = tilesFor([ch('a', 'G', {logo_small: '/as.png'}), ch('b', 'G'), ch('c', 'G'), ch('d', 'G'), ch('e', 'G'), ch('f', 'H')]);
+    assert.equal(mosaic[0].image, null);
+    assert.deepEqual(mosaic[0].mosaic, ['/as.png', '/logos/b.png', '/logos/c.png', '/logos/d.png']);
 });

@@ -19,6 +19,39 @@ export function groupChannels(channels) {
     return ungrouped.channels.length ? [ungrouped, ...groups] : groups;
 }
 
+// The channel page's first view when there is a choice of groups: one tile
+// per ungrouped station, then one per group, in listing order. null keeps
+// the plain list (fewer than two groups).
+export function tilesFor(channels) {
+    const groups = groupChannels(channels).filter((group) => group.name !== null);
+    if (groups.length < 2) {
+        return null;
+    }
+    const tiles = [];
+    for (const channel of channels) {
+        if (!channel.group) {
+            tiles.push({kind: 'station', id: channel.id, name: channel.name, image: channel.logo || null});
+        }
+    }
+    for (const group of groups) {
+        const first = group.channels[0];
+        const image = first.group_image_small || first.group_image || null;
+        tiles.push({
+            kind: 'group',
+            name: group.name,
+            count: group.channels.length,
+            image,
+            mosaic: image ? null : mosaicFor(group.channels),
+        });
+    }
+    return tiles;
+}
+
+// A group's tile without an image of its own: its first four stations' logos.
+export function mosaicFor(channels) {
+    return channels.slice(0, 4).map((c) => c.logo_small || c.logo).filter(Boolean);
+}
+
 export function nextChannel(channels, currentId, step) {
     const index = channels.findIndex((channel) => channel.id === currentId);
     if (index < 0) {
