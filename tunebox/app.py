@@ -281,7 +281,11 @@ def _ignored_parts(file: ConfigState, stored: ConfigState) -> list[str]:
     """The parts of tunebox.toml that say something other than the
     database, which the panel's tunebox does not read."""
     parts = {
-        "channels": (file.channels, (file.groups, file.channels), (stored.groups, stored.channels)),
+        "channels": (
+            file.channels,
+            (file.groups, file.channels, file.group_images),
+            (stored.groups, stored.channels, stored.group_images),
+        ),
         "defaults": (file.defaults, file.defaults, stored.defaults),
         "player": (file.player, file.player, stored.player),
     }

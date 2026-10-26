@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import logging
 import re
@@ -274,3 +275,27 @@ def test_oldest_change_is_the_first_history_entry(settings: Settings) -> None:
     version = settings.commit(state("a"), 0, "edit")
     settings.commit(state("a", "b"), version, "edit")
     assert settings.oldest_change() == 1000.0
+
+
+def test_group_images_are_stored_and_read_back(settings: Settings) -> None:
+    wanted = dataclasses.replace(state("a", group="G"), group_images={"G": "https://x.test/g.png"})
+    settings.commit(wanted, 0, "save")
+    assert settings.load()[0].group_images == {"G": "https://x.test/g.png"}
+
+
+def test_a_database_without_the_row_reads_no_images(settings: Settings) -> None:
+    settings.commit(state("a"), 0, "save")
+    # A database written before group images has no such settings row.
+    with settings._db:  # pyright: ignore[reportPrivateUsage]
+        settings._db.execute("DELETE FROM settings WHERE key = 'group_images'")  # pyright: ignore[reportPrivateUsage]
+    assert settings.load()[0].group_images == {}
+
+
+def test_state_from_dict_reads_group_images_and_defaults_them() -> None:
+    assert state_from_dict({"groups": [], "channels": []}).group_images == {}
+    given = {"groups": ["G"], "channels": [], "group_images": {"G": "https://x.test/g.png"}}
+    assert state_from_dict(given).group_images == {"G": "https://x.test/g.png"}
+    with pytest.raises(ConfigError, match="group_images: expected an object of strings"):
+        state_from_dict({"groups": [], "channels": [], "group_images": {"G": 3}})
+    with pytest.raises(ConfigError, match="group_images: expected an object of strings"):
+        state_from_dict({"groups": [], "channels": [], "group_images": []})

@@ -118,6 +118,7 @@ def state_to_json(state: ConfigState) -> str:
             "defaults": state.defaults,
             "player": state.player,
             "groups": list(state.groups),
+            "group_images": state.group_images,
             "channels": [
                 {"id": c.id, "group": c.group, "enabled": c.enabled, "doc": c.doc}
                 for c in state.channels
@@ -144,6 +145,12 @@ def state_from_dict(data: object) -> ConfigState:
         raise ConfigError("groups: expected a list")
     if not isinstance(channels, list):
         raise ConfigError("channels: expected a list")
+    images = table.get("group_images", {})
+    if not isinstance(images, dict) or not all(
+        isinstance(k, str) and isinstance(v, str)
+        for k, v in cast("dict[object, object]", images).items()
+    ):
+        raise ConfigError("group_images: expected an object of strings")
     names: list[str] = []
     for index, name in enumerate(cast("list[object]", groups)):
         if not isinstance(name, str):
@@ -174,6 +181,7 @@ def state_from_dict(data: object) -> ConfigState:
         cast("dict[str, Any]", player),
         tuple(names),
         tuple(rows),
+        cast("dict[str, str]", images),
     )
 
 
@@ -382,6 +390,7 @@ class Settings:
                 ChannelRow(cid, group, bool(enabled), cast("dict[str, Any]", json.loads(raw)))
                 for cid, group, enabled, raw in rows
             ),
+            cast("dict[str, str]", settings.get("group_images", {})),
         )
 
     def _write(self, state: ConfigState) -> None:
@@ -408,5 +417,9 @@ class Settings:
             )
         self._db.executemany(
             "INSERT INTO settings VALUES (?, ?)",
-            [("defaults", _json(state.defaults)), ("player", _json(state.player))],
+            [
+                ("defaults", _json(state.defaults)),
+                ("player", _json(state.player)),
+                ("group_images", _json(state.group_images)),
+            ],
         )

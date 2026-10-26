@@ -177,6 +177,14 @@ def test_with_the_panel_on_the_file_is_imported_once(
     assert [r.__dict__["fields"]["parts"] for r in ignored] == [["channels"]]
 
 
+def test_group_images_count_with_the_stations_part_of_the_file() -> None:
+    stored = state_from_toml({"channels": [CHANNEL_DOC]})
+    file = dataclasses.replace(stored, group_images={"G": "https://x.test/g.png"})
+    ignored_parts = app._ignored_parts  # pyright: ignore[reportPrivateUsage]
+    assert ignored_parts(file, stored) == ["channels"]
+    assert ignored_parts(stored, stored) == []
+
+
 def test_with_the_panel_on_a_file_like_the_database_is_quiet(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
