@@ -147,6 +147,12 @@ export function render(root, ctx) {
     function draw() {
         const state = ctx.config.state;
         const folding = state.channels.length >= FOLD_FROM;
+        // A short list has no find box, so it has no search either: one
+        // left from a longer list (a station deleted while finding) would
+        // hide stations with nothing on the page to clear it.
+        if (!folding) {
+            query = '';
+        }
         const groups = stationsByGroup(state);
         const named = groups.filter((group) => group.name !== null);
         const shown = groups.map((group) => {
