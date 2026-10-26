@@ -130,7 +130,10 @@ class Catalogs:
             data = self._json(url, self._deezer, failures)
             candidates = [
                 Candidate(
-                    _text(i, "artist", "name"), _text(i, "title"), _text(i, "album", "cover_xl")
+                    _text(i, "artist", "name"),
+                    _text(i, "title"),
+                    _text(i, "album", "cover_xl"),
+                    _text(i, "album", "title"),
                 )
                 for i in _items(data, "data")
             ]
@@ -152,6 +155,7 @@ class Catalogs:
                     _text(i, "artistName"),
                     _text(i, "trackName"),
                     _text(i, "artworkUrl100").replace("100x100bb", "1000x1000bb"),
+                    _text(i, "collectionName"),
                 )
                 for i in _items(data, "results")
             ]
