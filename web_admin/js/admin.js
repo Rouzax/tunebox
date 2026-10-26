@@ -10,7 +10,7 @@ import {qrMatrix, qrSvg} from './qr.js';
 import {render as renderSettings} from './settings.js';
 import {render as renderStations} from './stations.js';
 import {render as renderUsage} from './usage.js';
-import {decodeHashPart, saveMessage, tickets} from './state.js';
+import {decodeHashPart, invalidText, saveMessage, tickets} from './state.js';
 
 const ERRORS = {
     login_failed: 'Login failed.',
@@ -263,7 +263,7 @@ async function commit(answer, done, retry) {
         return {ok: false, stale: true};
     }
     if (status === 400 && data.error === 'invalid') {
-        const text = data.message;
+        const text = invalidText(data.message);
         if (!onForm()) {
             route();
         }

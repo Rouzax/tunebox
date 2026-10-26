@@ -4,7 +4,7 @@
 import {button, el, field} from './dom.js';
 import {logoPart} from './logo.js';
 import {
-    FOLD_FROM, addGroup, deleteGroup, deleteStation, duplicateStation, groupSummary, matchesStation,
+    FOLD_FROM, addGroup, deleteGroup, deleteStation, duplicateStation, groupImageWaiting, groupSummary, matchesStation,
     moveGroup, moveStation, renameGroup, setEnabled, setGroupImage, stationsByGroup,
 } from './state.js';
 
@@ -122,10 +122,11 @@ function groupForm(ctx, group, redraw) {
         return {state: setGroupImage(renamed, name, imageInput.value), target: name, done: `Saved group ${name}.`, keep: true};
     }
     const stored = own(ctx.config.state.group_images, group.name);
+    const waiting = groupImageWaiting(group.rows);
     const logo = logoPart(ctx, imageInput, () => {
         const change = pendingChange();
         return change.problem ? null : change;
-    }, stored ? {value: stored, src: own(ctx.config.group_images, group.name)} : null);
+    }, stored ? {value: stored, src: own(ctx.config.group_images, group.name), waiting} : null);
     const form = el('form', {class: 'group-edit', onsubmit: async (event) => {
         event.preventDefault();
         const change = pendingChange();

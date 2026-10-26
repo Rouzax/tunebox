@@ -1,7 +1,7 @@
 // The logo control of the station and group forms: a link field with an
 // Upload button and a preview of an uploaded image.
 import {button, el} from './dom.js';
-import {logoPreview} from './state.js';
+import {logoHint, logoPreview} from './state.js';
 
 // The types the server accepts for an upload; the image itself is judged by
 // its bytes there.
@@ -10,9 +10,10 @@ export const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+x
 // An uploaded logo is shown from the panel at the size of the page and of a
 // list row; a URL is only downloaded after saving. kept() gives the form's
 // unsaved change, which an upload that meets an ended session hands to the
-// login so it can be offered again. saved ({value, src}, optional) is the
-// stored link and the panel's address of its download, shown while the
-// field still holds that link.
+// login so it can be offered again. saved ({value, src, waiting}, optional)
+// is the stored link and the panel's address of its download, shown while
+// the field still holds that link; waiting, when given, is the hint for
+// that link while it has no download (logoHint).
 export function logoPart(ctx, input, kept, saved) {
     const current = ctx.stillOpen;
     const preview = el('div', {class: 'logo-preview'});
@@ -29,7 +30,7 @@ export function logoPart(ctx, input, kept, saved) {
                 el('img', {class: 'logo-full', src, alt: 'Logo'}),
                 el('img', {class: 'logo-small', src, alt: 'Logo at list size'}));
         } else if (shown.kind === 'url') {
-            preview.replaceChildren(el('span', {class: 'hint'}, 'Shown after saving.'));
+            preview.replaceChildren(el('span', {class: 'hint'}, logoHint(value, saved)));
         } else {
             preview.replaceChildren();
         }
