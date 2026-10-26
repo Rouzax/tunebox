@@ -8,6 +8,19 @@ import {createWatchdog, lagSeconds, retryDelayMs} from './reconnect.js';
 const NOT_SUPPORTED = 4;
 const TICK_MS = 1000;
 
+// The address one connection asks for. Firefox keeps a stream's data in its
+// media cache by address, and a stopped stream goes on downloading for about
+// a minute: the next player for the same address (the pop-out, a restart)
+// then starts from that minute, reaches Firefox's read-ahead limit at once,
+// pauses the download, and the live stream breaks with a network error on
+// every reconnect. A parameter of its own per connection keeps the cache out
+// of it; the stations' servers ignore it.
+export function connectionUrl(url, stamp) {
+    const hash = url.indexOf('#');
+    const base = hash >= 0 ? url.slice(0, hash) : url;
+    return `${base}${base.indexOf('?') >= 0 ? '&' : '?'}tb=${stamp}${hash >= 0 ? url.slice(hash) : ''}`;
+}
+
 // One live stream. Stop pauses and keeps the source: Chromium takes a page
 // with no media source off the system's media controls, and the car's play
 // key would no longer reach it. A paused stream downloads about a minute
@@ -122,7 +135,7 @@ export function createPlayer({events, makeAudio, timers, now, resumeAfterPause =
         const el = element(!noCors.has(url));
         watchdog.start(now());
         requestedAt = now();
-        el.src = url;
+        el.src = connectionUrl(url, requestedAt);
         const started = el.play();
         if (started && started.catch) {
             started.catch((error) => {
