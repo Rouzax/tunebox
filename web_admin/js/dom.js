@@ -47,8 +47,38 @@ export function button(iconName, label, onclick, extra) {
     return el('button', attrs, icon(iconName), label);
 }
 
-export function field(label, input, hint) {
-    return el('label', null, label, input, hint ? el('span', {class: 'hint'}, hint) : null);
+// help adds a ? button beside the field that opens a card with a longer
+// explanation under it.
+export function field(label, input, hint, help) {
+    const node = el('label', null, label, input, hint ? el('span', {class: 'hint'}, hint) : null);
+    return help ? withHelp(node, help, label) : node;
+}
+
+let helpSerial = 0;
+
+// The ? button and its card sit beside the label, not in it: a button
+// inside a label before its input would take the label's name, and the
+// card's text would be read out as part of the field's name.
+export function withHelp(node, help, name) {
+    helpSerial += 1;
+    const id = `help-${helpSerial}`;
+    const card = el('p', {class: 'help-card', id, hidden: true}, help);
+    const toggle = el('button', {type: 'button', class: 'help', 'aria-expanded': 'false', 'aria-controls': id,
+        title: `About ${name}`, 'aria-label': `About ${name}`}, '?');
+    toggle.addEventListener('click', () => {
+        card.hidden = !card.hidden;
+        toggle.setAttribute('aria-expanded', String(!card.hidden));
+    });
+    return el('div', {class: 'field'}, node, toggle, card);
+}
+
+// A part of a long form that folds away; status says what is inside while
+// it is folded.
+export function section(title, open, ...children) {
+    const status = el('span', {class: 'status'});
+    const node = el('details', {class: 'section', open},
+        el('summary', null, el('h3', null, title), status), ...children);
+    return {node, status: (textValue) => { status.textContent = textValue; }};
 }
 
 export function when(seconds) {

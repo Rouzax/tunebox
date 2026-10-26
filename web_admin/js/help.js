@@ -1,0 +1,27 @@
+// The longer explanations behind the station form's ? buttons. The short
+// hints under the fields stay; these say what a setting does, when to
+// change it and how to find the right value.
+export const HELP = {
+    name: 'The station as listeners see it: in the station list, in the header above the cover, and in place of the title while a jingle plays.',
+    id: 'Part of the station\'s addresses, such as ?channel=<id> in a player link and /api/channels/<id>/now, and of what listeners\' browsers remember. It cannot change once saved: to rename it, duplicate the station with a new id and delete the old one.',
+    group: 'The heading the station is listed under on the player\'s station page. Groups are made, renamed and ordered on the Stations page. With None the station is listed above all groups.',
+    logo: 'A square image works best. Give an https:// address, which tunebox downloads once after saving and serves itself, so listeners\' browsers never contact that site; or upload a PNG, JPEG, WebP or SVG here. A large PNG also gets a small copy for the station list.',
+    default_image: 'What the player shows when a song has no cover: during a jingle, or when Deezer and iTunes do not know the song. An https:// address, downloaded once like the logo. When empty, the player shows the logo.',
+    streams: 'Each stream is a quality choice listeners can pick; the first one is the default. Addresses must start with https://, because browsers refuse plain-http audio on the player\'s https page.',
+    codec: 'The audio format: aac or mp3. The player skips a stream the browser cannot play, and shows the codec in the choice, for example "High (AAC 256)".',
+    kbps: 'The stream\'s real bitrate. It is shown in the choice, and tunebox uses it to measure how far behind live the stream starts, which keeps the titles in step with the music. Without it the titles change a few seconds early.',
+    'source.type': 'Where tunebox reads what is playing. triton: stations streamed by Triton Digital, whose stream addresses are on playerservices.streamtheworld.com (Radio 538, Radio 10, Sky Radio, SLAM!, Veronica, Tomorrowland). qmusic: Qmusic\'s own channels. npo: NPO Radio 1, Radio 2 and 3FM.',
+    'source.mount': 'The station\'s name in Triton\'s now-playing feed. It is usually in the stream address: for .../livestream-redirect/OWR_INTERNATIONAL_ADP.aac it is OWR_INTERNATIONAL, without a quality suffix such as _ADP or AAC. To check it, open https://np.tritondigital.com/public/nowplaying?mountName=<mount>&numberToFetch=5&eventType=track in a browser: the right mount lists the station\'s recent songs.',
+    'source.station': 'Qmusic\'s id for the channel, such as qmusic_nl (Qmusic itself), qnl_nonstop, qnl_foute_uur, qnl_top40 or qnl_thema.',
+    'source.site': 'Which NPO station\'s track list to read: nporadio1, nporadio2 or npo3fm.',
+    'rules.station_id': 'Some stations put jingles and voice-overs in the feed as titles without an artist. An entry with no artist whose title matches this regular expression is treated as a jingle: the player shows the station name instead, and it is not kept in Recently played. Example: ^[A-Z]\\d{4} matches "E1700 16 Oct 2026 M19 VO".',
+    'rules.played_by': 'For a credit at the end of a title, such as "Stay (Played by Fisher at Tomorrowland)". The first group, the part in parentheses in the pattern, is kept and shown as "Played by ..."; the whole match is removed from the title, so the cover search uses the plain title.',
+    'rules.badge': 'For a label inside a title, such as a chart position in "#8 Stay". The first group that took part in the match is shown as a badge before the title; the match is removed from the title. With alternatives, each in its own group, one pattern can catch several kinds of label.',
+    'rules.artist_separator': 'What separates several artists in the feed. Only this splits: "&", "." and "/" inside a name are kept, so "Lilly Wood & The Prick" stays one name. When empty, a comma.',
+    delay_s: 'Stations announce a song in their feed some seconds before you hear it. This is how many seconds after that the player switches to the new title; the player adds its own distance behind live on top. If the title changes before the song, raise it; if after, lower it. When empty, the default from Settings applies.',
+    pawtunes_delay_s: 'The same as the delay, for PawTunes players reading /api/pawtunes. It only matters while you still use PawTunes.',
+    poll_interval_s: 'Seconds between checks of the station\'s feed, plus up to 3 seconds of random spread. Lower shows titles sooner but asks the station\'s feed more often. After a failed check the wait doubles, up to 120 seconds. Checks only run while the station is active (see Always poll).',
+    history_size: 'How many songs tunebox keeps for the station\'s Recently played list.',
+    always: 'Normally tunebox checks a station\'s feed only while someone listened to it in the last 10 minutes, so stations nobody plays cost nothing. With this on it keeps checking day and night, so Recently played has no gaps and covers are ready when someone tunes in.',
+    needs_pin: 'Only matters when the listening PIN in Settings is set to chosen stations: the station is then hidden from devices that have not typed the PIN. Turning it off shows the station to everyone, so it asks for a code from your authenticator app.',
+};
