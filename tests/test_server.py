@@ -10,7 +10,7 @@ import sqlite3
 import struct
 import threading
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from datetime import UTC
 from pathlib import Path
 from typing import Any, cast
@@ -35,7 +35,7 @@ from tunebox.channel import Channel
 from tunebox.config import AdminConfig, ChannelConfig, PlayerConfig, StreamConfig
 from tunebox.coverfiles import CoverFiles, name_for
 from tunebox.covers import CoverService
-from tunebox.logos import Logos
+from tunebox.logos import Logos, group_key
 from tunebox.logs import configure
 from tunebox.pin import Attempt, Pin
 from tunebox.runtime import EMPTY, Snapshot
@@ -79,6 +79,8 @@ def make_server(
     extra: tuple[ChannelConfig, ...] = (),
     clock: Callable[[], float] = time.monotonic,
     usage: Usage | None = None,
+    group_keys: Mapping[str, str] | None = None,
+    group_files: tuple[str, ...] = (),
 ) -> TuneboxServer:
     pin = pin or make_pin(tmp_path)
     web = tmp_path / "web"
@@ -111,6 +113,10 @@ def make_server(
     (logo_dir / "small" / "owr.png").write_bytes(b"\x89PNG\r\n\x1a\nsmall")
     (logo_dir / "default").mkdir()
     (logo_dir / "default" / "owr.jpg").write_bytes(b"\xff\xd8\xff\xe0default")
+    (logo_dir / "groups" / "small").mkdir(parents=True)
+    for key in group_files:
+        (logo_dir / "groups" / f"{key}.png").write_bytes(b"\x89PNG\r\n\x1a\ngroup")
+        (logo_dir / "groups" / "small" / f"{key}.png").write_bytes(b"\x89PNG\r\n\x1a\ntile")
     logos = Logos(logo_dir, lambda _url: b"", blob_store(tmp_path / "blobs"))
     channels: dict[str, Channel] = {"owr": channel}
     for config in extra:
@@ -119,7 +125,12 @@ def make_server(
         )
         (logo_dir / f"{config.id}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
         (logo_dir / "default" / f"{config.id}.jpg").write_bytes(b"\xff\xd8\xff\xe0default")
-    snapshot = Snapshot(1, channels, PlayerConfig(52.0, 5.0, extra[0].id if extra else None))
+    snapshot = Snapshot(
+        1,
+        channels,
+        PlayerConfig(52.0, 5.0, extra[0].id if extra else None),
+        group_keys or {},
+    )
     httpd = TuneboxServer(
         ("127.0.0.1", 0),
         lambda: snapshot,
@@ -1828,3 +1839,93 @@ def test_a_head_of_now_is_not_heard(tmp_path: Path) -> None:
 def test_without_usage_nothing_is_set(server: TuneboxServer) -> None:
     status, headers, _ = request(server, "/")
     assert status == 200 and "set-cookie" not in headers
+
+
+GROUP_STATIONS = tuple(
+    dataclasses.replace(channel_config(group=group), id=cid, name=cid, needs_pin=needs_pin)
+    for cid, group, needs_pin in [
+        ("a1", "Open", False),
+        ("h1", "Hidden", True),
+        ("h2", "Hidden", True),
+        ("m1", "Mixed", False),
+        ("m2", "Mixed", True),
+        ("n1", "NoFile", False),
+    ]
+)
+GROUP_NAMES = ("Open", "Hidden", "Mixed", "NoFile")
+GROUP_KEYS = {name: group_key(name) for name in GROUP_NAMES}
+DISABLED_KEY = group_key("Disabled")
+GROUP_FILES = (*(GROUP_KEYS[n] for n in GROUP_NAMES if n != "NoFile"), DISABLED_KEY)
+
+
+def group_world(tmp_path: Path, mode: str) -> PinWorld:
+    made = PinWorld.__new__(PinWorld)
+    made.settings = Settings(tmp_path / "pin.db")
+    made.pin = Pin(made.settings, lambda: b"k" * 32)
+    made.pin.change(mode, "123456")
+    made.httpd = make_server(
+        tmp_path,
+        pin=made.pin,
+        extra=GROUP_STATIONS,
+        group_keys=GROUP_KEYS,
+        group_files=GROUP_FILES,
+    )
+    return made
+
+
+@pytest.fixture
+def grouped(tmp_path: Path) -> Generator[PinWorld]:
+    made = group_world(tmp_path, "stations")
+    yield made
+    made.close()
+
+
+def test_channel_list_names_the_group_images(grouped: PinWorld) -> None:
+    listed = {c["id"]: c for c in json.loads(request(grouped.httpd, "/api/channels")[2])}
+    key = GROUP_KEYS["Open"]
+    assert listed["a1"]["group_image"].startswith(f"/logos/groups/{key}.png?v=")
+    assert listed["a1"]["group_image_small"].startswith(f"/logos/groups/small/{key}.png?v=")
+    # A group whose file is not downloaded yet, and an ungrouped station.
+    assert listed["n1"]["group_image"] is None and listed["n1"]["group_image_small"] is None
+    assert listed["owr"]["group_image"] is None and listed["owr"]["group_image_small"] is None
+
+
+def test_group_images_are_served_like_logos(grouped: PinWorld) -> None:
+    key = GROUP_KEYS["Open"]
+    for path, tail in [
+        (f"/logos/groups/{key}.png?v=1", b"group"),
+        (f"/logos/groups/small/{key}.png?v=1", b"tile"),
+    ]:
+        status, headers, body = request(grouped.httpd, path)
+        assert (status, headers["content-type"]) == (200, "image/png")
+        assert body.endswith(tail)
+        # Private while a PIN is on, like every locked route.
+        assert headers["cache-control"] == "private, max-age=31536000, immutable"
+        assert headers["content-security-policy"] == "sandbox"
+        status, headers, body = request(grouped.httpd, path, "HEAD")
+        assert (status, body) == (200, b"")
+        assert headers["content-type"] == "image/png"
+
+
+def test_a_group_without_a_visible_station_is_not_served(grouped: PinWorld) -> None:
+    _, _, missing = request(grouped.httpd, "/logos/groups/missing.png")
+    for name in ["Hidden", "NoFile"]:
+        # No grant: Hidden has no visible station; NoFile has no file.
+        key = GROUP_KEYS[name]
+        for path in [f"/logos/groups/{key}.png", f"/logos/groups/small/{key}.png"]:
+            answer = request(grouped.httpd, path)
+            assert (answer[0], answer[2]) == (404, missing), path
+            assert request(grouped.httpd, path, "HEAD")[0] == 404
+    for key in [DISABLED_KEY, "gffffffffffffffff", "../x", "x"]:
+        status, _, body = request(grouped.httpd, f"/logos/groups/{key}.png")
+        assert (status, body) == (404, missing), key
+    assert request(grouped.httpd, f"/logos/groups/{GROUP_KEYS['Mixed']}.png")[0] == 200
+    assert request(grouped.httpd, "/logos/groups/")[0] == 404
+    assert request(grouped.httpd, f"/logos/groups/small/{GROUP_KEYS['Open']}.jpg")[0] == 404
+
+
+def test_a_grant_shows_the_hidden_groups_image(grouped: PinWorld) -> None:
+    grant = grant_of(grouped.httpd)
+    key = GROUP_KEYS["Hidden"]
+    status, _, _ = request(grouped.httpd, f"/logos/groups/{key}.png", headers={"Cookie": grant})
+    assert status == 200

@@ -998,7 +998,12 @@ usable), `group`, `streams` (each with `name`, `url`, `codec`,
 `kbps`; `stream_url` is the first one's address) and `logo` (a path such as
 `/logos/owr.png?v=18df62ef34e6b8a7`, or `null` until the logo is downloaded
 or when none is configured) and `logo_small` (the same for the small copy
-under `/logos/small/`, or `null` when there is none: use `logo` then).
+under `/logos/small/`, or `null` when there is none: use `logo` then),
+`group_image` (the image of the station's group, a path such as
+`/logos/groups/g0123456789abcdef.png?v=18df62ef34e6b8a7`, or `null` when the
+station has no group, the group has no image or the image is not downloaded
+yet) and `group_image_small` (a 384 px copy under `/logos/groups/small/` for
+a PNG group image, or `null`: use `group_image` then).
 Ungrouped stations come first, then each group in order. The answer carries
 the configuration version in an `X-Tunebox-Version` header and the image
 revision in an `X-Tunebox-Images` header, and is sent with
@@ -1006,7 +1011,11 @@ revision in an `X-Tunebox-Images` header, and is sent with
 
 **`GET /logos/<file>`**, **`GET /logos/small/<file>`** and
 **`GET /logos/default/<file>`** serve a downloaded logo, its small copy and
-a downloaded default image. Browsers may keep them for a year: the `v` in
+a downloaded default image. **`GET /logos/groups/<file>`** and
+**`GET /logos/groups/small/<file>`** serve a group's image and its small
+copy the same way. A group's image is served only while at least one station
+of the group is visible to the request; with a listening PIN that hides all
+of them, the answer is the same 404 as for a missing file. Browsers may keep them for a year: the `v` in
 the path from `/api/channels` changes whenever the image is downloaded
 again, so use that path as given. SVG logos are sent with a
 policy that keeps them from running script.

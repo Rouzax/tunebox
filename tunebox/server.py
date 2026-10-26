@@ -518,9 +518,25 @@ class Handler(BaseHTTPRequestHandler):
             # Read before the listing: a save finishing while the addresses are
             # looked up then shows as a newer revision on the next request.
             images = logos.revision() if logos else ""
+            # Once per group, not per station.
+            group_images = {
+                name: (
+                    logos.group_path_for(key) if logos else None,
+                    logos.group_path_for(key, small=True) if logos else None,
+                )
+                for name, key in snapshot.group_keys.items()
+            }
+            no_image: tuple[str | None, str | None] = (None, None)
             listing = [
                 {
                     **channel.info(),
+                    **dict(
+                        zip(
+                            ("group_image", "group_image_small"),
+                            group_images.get(channel.config.group or "", no_image),
+                            strict=True,
+                        )
+                    ),
                     "default_image": default_image_address(
                         channel.config.default_image,
                         logos.path_for(cid, default=True) if logos else None,
@@ -602,6 +618,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(200, channel.pawtunes_view(), head, headers)
         if parts and parts[0] == "api":
             return self._send_json(404, {"error": "not_found"}, head)
+        if parts[:2] == ["logos", "groups"]:
+            keys = snapshot.group_keys
+            shown = {
+                keys[group]
+                for c in visible.values()
+                if (group := c.config.group) is not None and group in keys
+            }
+            return self._group_logo(parts, head, shown)
         if parts and parts[0] == "logos":
             return self._logo(parts, head, hidden=set(channels) - set(visible))
         if parts and parts[0] == "covers":
@@ -625,6 +649,26 @@ class Handler(BaseHTTPRequestHandler):
             "Content-Security-Policy": "sandbox",
         }
         self._send(200, body, COVER_TYPES[target.suffix.removeprefix(".")], head, headers)
+
+    def _group_logo(self, parts: list[str], head: bool, shown: set[str]) -> None:
+        """A group's image is public to whoever sees one of its stations. Any
+        other key gets the answer a missing file gets, before the file is
+        looked up, so the two cannot be told apart."""
+        small = len(parts) == 4 and parts[2] == "small"
+        name = urllib.parse.unquote(parts[-1])
+        logos = self.app.logos
+        target = None
+        if logos and (len(parts) == 3 or small) and name.split(".")[0] in shown:
+            target = logos.group_file(name, small=small)
+        if target is None:
+            return self._send_json(404, {"error": "not_found"}, head)
+        headers = {
+            "Cache-Control": "max-age=31536000, immutable",
+            "Content-Security-Policy": "sandbox",
+        }
+        self._send(
+            200, target.read_bytes(), LOGO_TYPES[target.suffix.removeprefix(".")], head, headers
+        )
 
     def _logo(self, parts: list[str], head: bool, hidden: set[str]) -> None:
         if urllib.parse.unquote(parts[-1]).split(".")[0] in hidden:
