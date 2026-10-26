@@ -183,7 +183,7 @@ function chart(title, buckets, key, format) {
     const total = buckets.reduce((sum, bucket) => sum + bucket[key], 0);
     const plot = el('div', {class: 'bars', role: 'img', 'aria-label': `${title}: ${format(total)} in total`});
     for (const bar of bars(buckets, key)) {
-        const node = el('div', {class: 'bar', title: `${bar.label}: ${format(bar[key])}`});
+        const node = el('div', {class: 'column', title: `${bar.label}: ${format(bar[key])}`});
         // The CSP refuses style attributes; a property set from script is allowed.
         node.style.height = `${bar.share * 100}%`;
         plot.append(node);

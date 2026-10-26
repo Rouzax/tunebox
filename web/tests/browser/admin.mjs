@@ -935,6 +935,10 @@ async function run() {
         });
         await until(`document.querySelector('.usage-summary .bars')`);
         await noSideways('usage');
+        await step('the chart leaves the page bar alone', async () => {
+            const paint = await evaluate(`getComputedStyle(document.querySelector('header.bar')).backgroundColor`);
+            return paint === 'rgba(0, 0, 0, 0)' ? null : `the page bar is painted ${paint}`;
+        });
 
         await step('rename the device that played', async () => {
             // A second poll keeps the session live, whatever the waits took.
