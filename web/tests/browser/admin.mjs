@@ -2123,6 +2123,62 @@ async function run() {
         rmSync(transfer, {recursive: true, force: true});
 
         // A first start: no account, the setup page on, the link from the log.
+        await step('a long station list folds by group and finds a station', async () => {
+            // Eighteen more stations in two groups make the list long enough to fold.
+            const saved = await evaluate(`(async () => {
+                const csrf = (await (await fetch('/admin/api/state')).json()).session.csrf;
+                const config = await (await fetch('/admin/api/config')).json();
+                const model = config.state.channels[0];
+                const extra = [];
+                for (let i = 0; i < 18; i++) {
+                    const id = 'extra-' + i;
+                    const group = i < 9 ? 'Ninety' : 'Hundred';
+                    extra.push({...model, id, group, enabled: i % 4 !== 0, doc: {...model.doc, id, name: 'Extra Station ' + i}});
+                }
+                const groups = [...config.state.groups.filter((g) => g !== 'Ninety' && g !== 'Hundred'), 'Ninety', 'Hundred'];
+                const answer = await fetch('/admin/api/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'X-Tunebox-CSRF': csrf},
+                    body: JSON.stringify({based_on: config.version, state: {...config.state, groups, channels: [...config.state.channels, ...extra]}}),
+                });
+                return answer.status;
+            })()`);
+            if (saved !== 200) {
+                return `saving the long list answered ${saved}`;
+            }
+            // The panel holds the configuration it loaded; a reload reads
+            // the long list, as a visit would.
+            await evaluate(`localStorage.removeItem('tunebox.admin.open-groups'); window.location.hash = '#stations'`);
+            await send('Page.reload', {});
+            if (!(await until(`document.querySelector('input.find')`))) {
+                return 'no find box on a long list';
+            }
+            await noSideways('stations long');
+            const ninety = `[...document.querySelectorAll('section.group')].find((g) => g.textContent.indexOf('Ninety') >= 0)`;
+            const folded = await evaluate(`(() => { const g = ${ninety}; return JSON.stringify({folded: g.classList.contains('folded'), hidden: getComputedStyle(g.querySelector('ul')).display === 'none', summary: g.querySelector('.group-summary').textContent}); })()`);
+            if (folded !== JSON.stringify({folded: true, hidden: true, summary: '9 stations · 3 off'})) {
+                return `a group on a long list starts as ${folded}`;
+            }
+            await evaluate(`(() => { const f = document.querySelector('input.find'); f.focus(); f.value = 'extra station 12'; f.dispatchEvent(new Event('input', {bubbles: true})); })()`);
+            const found = await evaluate(`JSON.stringify([...document.querySelectorAll('.station')].filter((s) => s.getClientRects().length > 0).map((s) => s.dataset.id))`);
+            if (found !== JSON.stringify(['extra-12'])) {
+                return `finding "extra station 12" shows ${found}`;
+            }
+            const focusKept = await evaluate(`document.activeElement === document.querySelector('input.find')`);
+            await evaluate(`(() => { const f = document.querySelector('input.find'); f.value = ''; f.dispatchEvent(new Event('input', {bubbles: true})); })()`);
+            if (!focusKept) {
+                return 'the find box lost focus while typing';
+            }
+            await evaluate(`${ninety}.querySelector('button.fold').click()`);
+            await evaluate(`document.body.dataset.beforeReload = '1'`);
+            await send('Page.reload', {});
+            if (!(await until(`!document.body.dataset.beforeReload && ${ninety}`))) {
+                return 'no list after a reload';
+            }
+            const kept = await evaluate(`(() => { const g = ${ninety}; return g.querySelector('ul').getClientRects().length > 0 && g.querySelector('button.fold').getAttribute('aria-expanded') === 'true'; })()`);
+            return kept ? null : 'an opened group did not stay open after a reload';
+        });
+
         await step('the setup link shows the form, keeps its secret and leaves the address bar clean', async () => {
             const setupFolder = ownedFolder('tunebox-setup-');
             let first = null;

@@ -54,8 +54,10 @@ section {
     gap: 1rem;
 }
 
+/* Hidden means hidden: a class that sets display (.stations is a grid)
+   would otherwise show what the page hid. */
 [hidden] {
-    display: none;
+    display: none !important;
 }
 
 label {
@@ -728,4 +730,42 @@ button.help[aria-expanded="true"] {
     margin: 0.25rem 0 0;
     padding-left: 1.25rem;
     font-size: 0.9rem;
+}
+
+/* A long station list folds by group: the group's name is the button,
+   with its station count while folded. */
+.group-head h2 {
+    flex: 1 1 12rem;
+    min-width: 0;
+}
+
+button.fold {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.6rem;
+    width: 100%;
+    padding: 0.25rem 0;
+    font: inherit;
+    text-align: left;
+    color: var(--fg);
+    background: transparent;
+}
+
+button.fold .fold-mark::before {
+    content: "\25BE";
+    color: var(--muted);
+}
+
+.group.folded button.fold .fold-mark::before {
+    content: "\25B8";
+}
+
+.group-summary {
+    font-weight: 400;
+}
+
+input.find {
+    flex: 1 1 12rem;
+    min-width: 0;
 }
