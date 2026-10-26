@@ -162,8 +162,10 @@
     border-radius: .25rem;
 }
 
+/* Dimmed, not see-through: the light wall and the colour fields run behind
+   the header. */
 .tunebox.car-night .car-station {
-    opacity: .7;
+    filter: brightness(.7);
 }
 
 /* The fullscreen button ends the right-hand group; the gap before it
