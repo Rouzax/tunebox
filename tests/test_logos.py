@@ -1,6 +1,7 @@
 import dataclasses
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -9,7 +10,14 @@ import pytest
 
 from tests.fakes import FakeHttp, blob_store, channel_config
 from tunebox.http import HttpError
-from tunebox.logos import SMALL_PX, Logos, default_image_address, sniff
+from tunebox.logos import (
+    GROUP_SMALL_PX,
+    SMALL_PX,
+    Logos,
+    default_image_address,
+    group_key,
+    sniff,
+)
 from tunebox.png import Image, read, write
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
@@ -19,6 +27,22 @@ SVG = b'<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 URL = "https://example.invalid/owr.png"
 DEFAULT_URL = "https://example.invalid/default.jpg"
 BIG_PNG = write(Image(300, 150, bytes((200, 30, 30, 255)) * 300 * 150))
+GROUP_URL = "https://example.invalid/group.png"
+
+
+def big_png(px: int) -> bytes:
+    """A square PNG of px x px."""
+    return write(Image(px, px, bytes((30, 30, 200, 255)) * px * px))
+
+
+def png_size(body: bytes) -> tuple[int, int]:
+    image = read(body)
+    return image.width, image.height
+
+
+def drain(logos: Logos) -> None:
+    while logos.run_once():
+        pass
 
 
 @pytest.mark.parametrize(
@@ -534,3 +558,143 @@ def test_a_cleared_logo_that_cannot_be_removed_says_so(
     assert failed
     assert "cleared" in {getattr(r, "fields", {}).get("kind") for r in failed}
     assert all(getattr(r, "fields", {}).get("channel") == "owr" for r in failed)
+
+
+def test_group_key_is_stable_and_safe() -> None:
+    assert group_key("Tomorrowland") == group_key("Tomorrowland")
+    assert re.fullmatch(r"g[0-9a-f]{16}", group_key("../x"))
+    assert group_key("A") != group_key("B")
+
+
+def test_a_group_image_is_downloaded_with_a_tile_copy(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    logos = Logos(tmp_path, FakeHttp(lambda _url: big_png(1000)), blob_store(tmp_path / "b"))
+    key = group_key("G")
+    before = logos.revision()
+    logos.request_group(key, GROUP_URL)
+    drain(logos)
+    assert (logos.group_path_for(key) or "").startswith(f"/logos/groups/{key}.png?v=")
+    small = logos.group_path_for(key, small=True) or ""
+    assert small.startswith(f"/logos/groups/small/{key}.png?v=")
+    tile = logos.group_file(f"{key}.png", small=True)
+    assert tile is not None
+    assert png_size(tile.read_bytes()) == (GROUP_SMALL_PX, GROUP_SMALL_PX)
+    assert logos.group_file(f"{key}.png") == tmp_path / "groups" / f"{key}.png"
+    assert logos.revision() != before
+    # Group events name the key, never the group or a channel.
+    fields = [getattr(r, "fields", {}) for r in caplog.records if r.name == "tunebox.logos"]
+    assert fields and all(f.get("group") == key and "channel" not in f for f in fields)
+
+
+def test_a_group_file_name_must_be_a_group_key(tmp_path: Path) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), blob_store(tmp_path / "b"))
+    key = group_key("G")
+    logos.request_group(key, GROUP_URL)
+    drain(logos)
+    assert logos.group_file(f"{key}.png") is not None
+    assert logos.group_file(f"{key}.url") is None
+    assert logos.group_file(f"../{key}.png") is None
+    assert logos.group_file("owr.png") is None
+    assert logos.group_file(f"{key}.jpg") is None
+    assert logos.group_file(f"{key}.jpg", small=True) is None
+    # PNG is small already, so no tile copy is made.
+    assert logos.group_path_for(key, small=True) is None
+
+
+def test_a_renamed_group_copies_instead_of_downloading(tmp_path: Path) -> None:
+    http = FakeHttp(lambda _url: big_png(1000))
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "b"))
+    old, new = group_key("Old"), group_key("New")
+    logos.request_group(old, GROUP_URL)
+    logos.request_group(new, GROUP_URL, copy_from=old)
+    logos.forget_group(old)
+    drain(logos)
+    assert http.urls == [GROUP_URL]
+    assert logos.group_path_for(new) is not None and logos.group_path_for(old) is None
+    assert logos.group_path_for(new, small=True) is not None
+    assert (tmp_path / "groups" / f"{new}.url").read_text(encoding="utf-8") == GROUP_URL
+    left = sorted(p.name for p in (tmp_path / "groups").rglob("*") if p.is_file())
+    assert left == [f"{new}.png", f"{new}.png", f"{new}.url"]
+
+
+def test_a_rename_downloads_when_there_is_nothing_to_copy(tmp_path: Path) -> None:
+    http = FakeHttp(lambda _url: PNG)
+    logos = Logos(tmp_path, http, blob_store(tmp_path / "b"))
+    old, new = group_key("Old"), group_key("New")
+    logos.request_group(new, GROUP_URL, copy_from=old)
+    other = "https://example.invalid/other.png"
+    logos.request_group(old, other)
+    logos.request_group(group_key("Third"), GROUP_URL, copy_from=old)
+    drain(logos)
+    # Nothing to copy at first, then a source from another address.
+    assert http.urls == [GROUP_URL, other, GROUP_URL]
+
+
+def test_a_group_image_from_an_upload_is_copied(tmp_path: Path) -> None:
+    blobs = blob_store(tmp_path / "b")
+    ref, _ = blobs.save(PNG)
+    http = FakeHttp(lambda _url: b"")
+    logos = Logos(tmp_path / "logos", http, blobs)
+    key = group_key("G")
+    logos.request_group(key, ref)
+    drain(logos)
+    assert http.urls == []
+    assert (logos.group_path_for(key) or "").startswith(f"/logos/groups/{key}.png?v=")
+
+
+def test_a_forgotten_group_leaves_no_files(tmp_path: Path) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: big_png(1000)), blob_store(tmp_path / "b"))
+    key = group_key("G")
+    logos.request_group(key, GROUP_URL)
+    drain(logos)
+    (tmp_path / "groups" / f".{key}.tmp").write_bytes(b"partial")
+    before = logos.revision()
+    logos.forget_group(key)
+    drain(logos)
+    assert [p for p in (tmp_path / "groups").rglob("*") if p.is_file()] == []
+    assert logos.revision() != before
+
+
+def test_stale_group_files_are_swept(tmp_path: Path) -> None:
+    groups = tmp_path / "groups"
+    (groups / "small").mkdir(parents=True)
+    gone, kept, tile_only = group_key("Gone"), group_key("Kept"), group_key("Tile")
+    (groups / f"{gone}.png").write_bytes(b"x")
+    (groups / f"{gone}.url").write_text(GROUP_URL, encoding="utf-8")
+    (groups / f"{kept}.png").write_bytes(b"x")
+    (groups / "small" / f".{tile_only}.tmp").write_bytes(b"x")
+    (groups / "notes.txt").write_bytes(b"x")
+    logos = Logos(tmp_path, FakeHttp(lambda _url: b""), blob_store(tmp_path / "b"))
+    logos.forget_groups_except({kept})
+    drain(logos)
+    left = sorted(str(p.relative_to(groups)) for p in groups.rglob("*") if p.is_file())
+    assert left == [f"{kept}.png", "notes.txt"]
+
+
+def test_sweeping_groups_without_a_folder_is_fine(tmp_path: Path) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: b""), blob_store(tmp_path / "b"))
+    logos.forget_groups_except(set())
+    assert not logos.run_once()
+
+
+def test_a_group_image_without_a_logo_folder_says_so_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    (tmp_path / "file").write_bytes(b"x")
+    logos = Logos(
+        tmp_path / "file" / "logos", FakeHttp(lambda _url: PNG), blob_store(tmp_path / "b")
+    )
+    logos.request_group(group_key("A"), GROUP_URL)
+    logos.request_group(group_key("B"), GROUP_URL)
+    drain(logos)
+    assert [r.getMessage() for r in caplog.records].count("logos_unavailable") == 1
+
+
+def test_a_station_default_on_tunebox_leaves_no_partial_file(tmp_path: Path) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: JPG), blob_store(tmp_path / "blobs"))
+    logos.refresh(channel_config(default_image=DEFAULT_URL))
+    (tmp_path / "default" / ".owr.tmp").write_bytes(b"partial")
+    logos.refresh(channel_config(default_image="/img/default.jpg"))
+    assert [p.name for p in (tmp_path / "default").iterdir() if p.is_file()] == []
