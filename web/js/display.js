@@ -95,9 +95,20 @@ export function bindDisplay(app) {
             showFlip(flip.photo(null));
         }
     });
-    events.on('photo', ({photo}) => showFlip(flip.photo(photo)));
+    // The newest photo for the song shown or about to be shown. A photo
+    // arriving while a new song's card is still sliding out belongs to that
+    // song: the swap reads it here when it runs, rather than the value the
+    // song came with, and the old song's back is left alone meanwhile.
+    let photoNext = null;
+    events.on('photo', ({photo}) => {
+        photoNext = photo;
+        if (swap === null) {
+            showFlip(flip.photo(photo));
+        }
+    });
 
     events.on('track', ({lines, cover, photo, channel}) => {
+        photoNext = photo;
         channelLine.textContent = channel.name;
         // The small copy where tunebox made one: the header shows it at
         // text size.
@@ -120,7 +131,7 @@ export function bindDisplay(app) {
             if (image.getAttribute('src') !== cover) {
                 image.src = cover;
             }
-            showFlip(flip.song(photo));
+            showFlip(flip.song(photoNext));
         });
     });
 }
