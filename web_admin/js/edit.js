@@ -217,7 +217,7 @@ export function render(root, ctx, id) {
         timing: section('Timing', false),
         options: section('Options', false),
     };
-    sections.basics.node.append(
+    sections.basics.body.append(
         field('Name', text('name', doc.name, {required: true}), null, HELP.name),
         existing
             ? withHelp(el('p', {class: 'hint'}, `Id: ${row.id} (fixed; duplicate the station to change it)`), HELP.id, 'the id')
@@ -228,18 +228,18 @@ export function render(root, ctx, id) {
         logo.controls,
         logo.preview,
         field('Default image URL', text('default_image', doc.default_image, {type: 'url'}), 'Shown when no cover is found.', HELP.default_image));
-    sections.streams.node.append(
+    sections.streams.body.append(
         withHelp(el('p', {class: 'hint'}, 'The quality choices listeners see; the first is the default.'), HELP.streams, 'streams'),
         streamEditor(schema, streams));
-    sections.source.node.append(source.box);
-    sections.rules.node.append(...Object.keys(RULES).map((key) => field(RULES[key][0],
+    sections.source.body.append(source.box);
+    sections.rules.body.append(...Object.keys(RULES).map((key) => field(RULES[key][0],
         text(`rules.${key}`, rules[key], {autocapitalize: 'off', spellcheck: 'false'}), RULES[key][1], HELP[`rules.${key}`])));
-    sections.timing.node.append(...Object.keys(schema.defaults).map((key) => {
+    sections.timing.body.append(...Object.keys(schema.defaults).map((key) => {
         const [label, hint] = NUMBERS[key] || [key, null];
         return field(label, text(key, doc[key], {type: 'number', step: key === 'history_size' ? 1 : 'any', min: 0,
             placeholder: `${(state.defaults || {})[key] !== undefined ? state.defaults[key] : schema.defaults[key]} (default)`}), hint, HELP[key]);
     }));
-    sections.options.node.append(
+    sections.options.body.append(
         withHelp(el('label', {class: 'check'}, el('input', {type: 'checkbox', name: 'always', checked: Boolean(doc.always)}),
             'Always poll the feed, also when nobody listens'), HELP.always, 'always polling'),
         withHelp(el('label', {class: 'check'}, el('input', {type: 'checkbox', name: 'needs_pin', checked: Boolean(doc.needs_pin)}),

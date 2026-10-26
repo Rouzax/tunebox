@@ -373,8 +373,15 @@ select:focus-visible {
 .check {
     display: flex;
     gap: 0.5rem;
-    align-items: center;
+    align-items: baseline;
     color: var(--fg);
+}
+
+/* On the first line of a label that wraps, not beside its middle. */
+.check input {
+    flex: none;
+    align-self: flex-start;
+    margin-top: 0.2em;
 }
 
 fieldset {
@@ -619,11 +626,11 @@ details.section {
     min-width: 0;
 }
 
-/* Only an open section lays out its fields: a folded one in a grid keeps
-   the gap of its hidden content under the header. */
-details.section[open] {
+details.section > .section-body {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
+    padding: 0.5rem 0 0.75rem;
 }
 
 details.section > summary {
