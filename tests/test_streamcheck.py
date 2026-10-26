@@ -282,3 +282,16 @@ def test_a_playlist_address_keeps_its_letters() -> None:
     body = "[playlist]\nFile1=https://radio.test/ström\n".encode()
     answer = describe(Probe("audio/x-scpls", {}, body), "https://x.test/list.pls")
     assert answer["inside"] == "https://radio.test/ström"
+
+
+def test_feed_leaves_out_station_ids_and_jingles() -> None:
+    entries = [
+        RawEntry("FISHER", "Stay", 4000),
+        RawEntry("", "A1630 26 Oct 2026 M05 VO", 3000),
+        RawEntry("  ", "Jingle", 2000),
+        RawEntry("CHRIS LAKE", "Turn Off The Lights", 1000),
+    ]
+    answer = checks(entries=entries).feed(TRITON)
+    assert [song["title"] for song in answer["songs"]] == ["Stay", "Turn Off The Lights"]
+    only_ids = checks(entries=[RawEntry("", "A1630 26 Oct 2026 M05 VO", 1)]).feed(TRITON)
+    assert not only_ids["ok"] and "no songs" in only_ids["reason"]
