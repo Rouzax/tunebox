@@ -47,6 +47,17 @@ export function tilesFor(channels) {
     return tiles;
 }
 
+// The group the channel page keeps open after the station list changed: the
+// same one while it still has a station and there are tiles to return to;
+// null shows the tiles, or the plain list when there are fewer than two
+// groups. A renamed group counts as gone.
+export function openGroupAfter(channels, openGroup) {
+    if (openGroup === null || !tilesFor(channels)) {
+        return null;
+    }
+    return channels.some((channel) => channel.group === openGroup) ? openGroup : null;
+}
+
 // A group's tile without an image of its own: its first four stations' logos.
 export function mosaicFor(channels) {
     return channels.slice(0, 4).map((c) => c.logo_small || c.logo).filter(Boolean);

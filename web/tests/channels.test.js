@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {canPlay, groupChannels, keepSelection, listOutdated, nextChannel, pickChannel, pickStream, streamLabel, tilesFor} from '../js/channels.js';
+import {canPlay, groupChannels, keepSelection, listOutdated, nextChannel, openGroupAfter, pickChannel, pickStream, streamLabel, tilesFor} from '../js/channels.js';
 
 const HIGH = {name: 'High', url: 'https://example.invalid/h', codec: 'aac', kbps: 256};
 const MP3 = {name: 'Compatible', url: 'https://example.invalid/m', codec: 'mp3', kbps: null};
@@ -113,4 +113,24 @@ test('a group shows its small image, else its image, else a mosaic of four logos
     const mosaic = tilesFor([ch('a', 'G', {logo_small: '/as.png'}), ch('b', 'G'), ch('c', 'G'), ch('d', 'G'), ch('e', 'G'), ch('f', 'H')]);
     assert.equal(mosaic[0].image, null);
     assert.deepEqual(mosaic[0].mosaic, ['/as.png', '/logos/b.png', '/logos/c.png', '/logos/d.png']);
+});
+
+test('an open group stays open while it still has a station', () => {
+    assert.equal(openGroupAfter([ch('a', 'G'), ch('b', 'H'), ch('c', 'G')], 'G'), 'G');
+});
+
+test('a renamed open group closes to the tiles', () => {
+    assert.equal(openGroupAfter([ch('a', 'G2'), ch('b', 'H'), ch('c', 'J')], 'G'), null);
+});
+
+test('an emptied open group closes to the tiles', () => {
+    assert.equal(openGroupAfter([ch('a', 'H'), ch('b', 'J'), ch('c', null)], 'G'), null);
+});
+
+test('fewer than two groups close the open group to the plain list', () => {
+    assert.equal(openGroupAfter([ch('a', 'G'), ch('b', null)], 'G'), null);
+});
+
+test('no open group stays none', () => {
+    assert.equal(openGroupAfter([ch('a', 'G'), ch('b', 'H')], null), null);
 });
