@@ -98,6 +98,14 @@ class Catalogs:
             raise SearchError("; ".join(failures))
         return found
 
+    def artist_photo(self, track: Track) -> Found | None:
+        """The artists' photo alone, shown beside a song's own cover."""
+        failures: list[str] = []
+        found = self._artist_photo(track, failures)
+        if found is None and failures:
+            raise SearchError("; ".join(failures))
+        return found
+
     def _json(self, url: str, throttle: Throttle, failures: list[str]) -> dict[str, Any]:
         throttle.wait()
         where = url.split("?")[0]
@@ -164,6 +172,10 @@ class Catalogs:
             if not norm(name):
                 continue  # nothing to compare: any name in another script would "match"
             url = f"{DEEZER}/search/artist?" + urllib.parse.urlencode({"q": name, "limit": 5})
+            # Deezer keeps duplicate profiles under one name; a small one often
+            # has an album cover for its picture and may be listed first. The
+            # profile with the most fans is the artist's own.
+            best: dict[str, Any] | None = None
             for item in _items(self._json(url, self._deezer, failures), "data"):
                 picture = _text(item, "picture_xl")
                 # Deezer's placeholder for an artist without a photo has an empty id.
@@ -171,6 +183,16 @@ class Catalogs:
                     norm(_text(item, "name")) == norm(name)
                     and picture
                     and "/artist//" not in picture
+                    and (best is None or _fans(item) > _fans(best))
                 ):
-                    return Found(picture, "artist", f"deezer artist: {_text(item, 'name')}")
+                    best = item
+            if best is not None:
+                return Found(
+                    _text(best, "picture_xl"), "artist", f"deezer artist: {_text(best, 'name')}"
+                )
         return None
+
+
+def _fans(item: dict[str, Any]) -> int:
+    fans = item.get("nb_fan")
+    return fans if isinstance(fans, int) and not isinstance(fans, bool) else 0

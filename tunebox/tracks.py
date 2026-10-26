@@ -50,6 +50,13 @@ class Track:
     def ident(self) -> tuple[int, str]:
         return (self.started_at, self.key)
 
+    @property
+    def photo_key(self) -> str:
+        """The key of the artists' photo, shared by all their songs. No song
+        key can equal it: a song key's artist part is either letters and
+        digits only (no colon) or holds no ASCII letter at all."""
+        return f"photo:{_key_part(' '.join(self.artists))}"
+
 
 def norm(text: str) -> str:
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()

@@ -1,3 +1,4 @@
+import {createFlip} from './flip.js';
 import {nextCover} from './tracks.js';
 
 // Title, artist, Played-by and cover of what is shown as playing.
@@ -13,6 +14,9 @@ export function bindDisplay(app) {
     const artist = root.querySelector('.car-artist');
     const played = root.querySelector('.car-played');
     const image = root.querySelector('img.artwork');
+    const artBox = root.querySelector('.artwork-img');
+    const photoImage = root.querySelector('img.artwork-photo');
+    const flip = createFlip();
     let channelShown = {default_image: null, logo: null};
     const card = root.querySelector('.onair');
     const reduce = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
@@ -58,7 +62,42 @@ export function bindDisplay(app) {
         }
     });
 
-    events.on('track', ({lines, cover, channel}) => {
+    // A tap turns the cover when there is a photo on its back; the photo is
+    // loaded as it arrives, so the turn shows it at once.
+    function showFlip(state) {
+        if (state.photo === null) {
+            photoImage.removeAttribute('src');
+        } else if (photoImage.getAttribute('src') !== state.photo) {
+            photoImage.src = state.photo;
+        }
+        artBox.classList.toggle('flipped', state.flipped);
+        artBox.classList.toggle('can-flip', state.canFlip);
+        if (state.canFlip) {
+            artBox.setAttribute('role', 'button');
+            artBox.setAttribute('tabindex', '0');
+            artBox.setAttribute('aria-label', state.flipped ? 'Show the cover' : 'Show the artist photo');
+        } else {
+            artBox.removeAttribute('role');
+            artBox.removeAttribute('tabindex');
+            artBox.removeAttribute('aria-label');
+        }
+    }
+    artBox.addEventListener('click', () => showFlip(flip.tap()));
+    artBox.addEventListener('keydown', (event) => {
+        if (artBox.classList.contains('can-flip') && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            showFlip(flip.tap());
+        }
+    });
+    // A photo that will not load leaves the cover with nothing behind it.
+    photoImage.addEventListener('error', () => {
+        if (photoImage.getAttribute('src')) {
+            showFlip(flip.photo(null));
+        }
+    });
+    events.on('photo', ({photo}) => showFlip(flip.photo(photo)));
+
+    events.on('track', ({lines, cover, photo, channel}) => {
         channelLine.textContent = channel.name;
         // The small copy where tunebox made one: the header shows it at
         // text size.
@@ -81,6 +120,7 @@ export function bindDisplay(app) {
             if (image.getAttribute('src') !== cover) {
                 image.src = cover;
             }
+            showFlip(flip.song(photo));
         });
     });
 }

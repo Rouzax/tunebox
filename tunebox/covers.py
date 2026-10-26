@@ -10,7 +10,7 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from tunebox.catalogs import Found, SearchError
@@ -34,6 +34,8 @@ TTL: dict[Outcome, float] = {
 }
 NOW = 0
 HISTORY = 1
+# An artist photo only adds a second side to a cover: it waits for every song.
+PHOTO = 2
 # Decisions held in memory; older ones are read back from the store on demand.
 MEMORY = 2000
 # A song still played is searched again at least every 90 days, so a decision
@@ -78,9 +80,11 @@ class CoverService:
         files: CoverFiles,
         fetch: HttpGet,
         clock: Callable[[], float] = time.time,
+        find_photo: Callable[[Track], Found | None] | None = None,
     ) -> None:
         self._store = store
         self._find = find
+        self._find_photo = find_photo
         self._files = files
         self._fetch = fetch
         self._clock = clock
@@ -141,6 +145,20 @@ class CoverService:
         self._files.touch(path)
         return Cover(address, "artist" if _is_artist_photo(decision) else "album")
 
+    def photo(self, track: Track) -> str | None:
+        """The local address of the artists' photo, the other side of a
+        song's own cover; None while it is not downloaded or not found."""
+        with self._lock:
+            decision = self._known(track.photo_key)
+        if decision is None or decision.url is None:
+            return None
+        found = self._files.found(decision.url)
+        if found is None:
+            return None
+        path, address = found
+        self._files.touch(path)
+        return address
+
     def remote_link(self, track: Track) -> str | None:
         """The catalogue link, for PawTunes, which counts a changed artwork
         link as a new track."""
@@ -149,24 +167,40 @@ class CoverService:
         return decision.url if decision else None
 
     def request(self, track: Track, priority: int) -> None:
+        """Queues what the track still needs. A song about to play whose own
+        cover was found also queues its artists' photo, after every song."""
         if not searchable(track):
             return
         with self._lock:
-            if track.key in self._searching:
-                return
-            kind: JobKind
-            if not self._fresh(track.key):
-                kind = "search"
-            elif self._needs_download(track.key):
-                kind = "download"
-            else:
-                return
-            pending = self._pending.get(track.key)
-            if pending is not None and pending[0] <= priority:
-                return
-            self._pending[track.key] = (priority, track, kind)
-            heapq.heappush(self._queue, (priority, next(self._seq), track.key))
-            self._lock.notify()
+            self._queue_job(track, priority)
+            if self._find_photo is not None and priority == NOW and self._has_own_cover(track):
+                # The photo job runs as the song under the photo's key, so
+                # search, download and failure handling stay one path.
+                self._queue_job(replace(track, key=track.photo_key), PHOTO)
+
+    def _has_own_cover(self, track: Track) -> bool:
+        """Caller holds the lock. A song whose only image is its artists'
+        photo has no other side to show."""
+        decision = self._known(track.key)
+        return decision is not None and decision.url is not None and not _is_artist_photo(decision)
+
+    def _queue_job(self, track: Track, priority: int) -> None:
+        """Caller holds the lock."""
+        if track.key in self._searching:
+            return
+        kind: JobKind
+        if not self._fresh(track.key):
+            kind = "search"
+        elif self._needs_download(track.key):
+            kind = "download"
+        else:
+            return
+        pending = self._pending.get(track.key)
+        if pending is not None and pending[0] <= priority:
+            return
+        self._pending[track.key] = (priority, track, kind)
+        heapq.heappush(self._queue, (priority, next(self._seq), track.key))
+        self._lock.notify()
 
     def run_once(self) -> bool:
         """Runs the most urgent queued job; False when nothing was queued."""
@@ -233,8 +267,11 @@ class CoverService:
         outcome: Outcome = "error"
         found: Found | None = None
         with bound("cover"):
+            find = self._find
+            if self._find_photo is not None and track.key == track.photo_key:
+                find = self._find_photo
             try:
-                found = self._find(track)
+                found = find(track)
                 if found is None:
                     outcome = "miss"
                 else:

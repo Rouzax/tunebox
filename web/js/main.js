@@ -97,6 +97,7 @@ async function start(root) {
         bindDebug(app);
     }
     let shown = null;
+    let shownPhoto = null;
     let unreachable = false;
     // Whether to resume after a reload. Only the full player keeps it: the
     // pop-out and embeds share this storage, and the pop-out resumes from
@@ -109,16 +110,25 @@ async function start(root) {
 
     // Only a change of what is shown is announced: rewriting the same text
     // would replay the card's change on every poll.
+    // The artists' photo can arrive a poll after its song; it changes only
+    // the cover's back, so it has an event of its own.
     function show(track) {
         const key = `${app.channel.id}\u0000${trackKey(track)}`;
+        const photo = (track && track.artist_photo) || null;
         if (key === shown) {
+            if (photo !== shownPhoto) {
+                shownPhoto = photo;
+                events.emit('photo', {photo});
+            }
             return;
         }
         shown = key;
+        shownPhoto = photo;
         events.emit('track', {
             track,
             lines: displayLines(track, app.channel.name),
             cover: coverFor(track, app.channel),
+            photo,
             channel: app.channel,
         });
     }

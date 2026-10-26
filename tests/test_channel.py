@@ -62,11 +62,23 @@ def make(
     config: ChannelConfig | None = None,
     store: Store | None = None,
     carry: Channel | None = None,
+    photo: str | None = None,
 ) -> tuple[Channel, CoverService, Finder]:
     finder = Finder()
     store = store or Store(None)
     files = CoverFiles(_scratch[0] / f"covers-{next(_serial)}", free=lambda: None)
-    covers = CoverService(store, finder, files, fetch_cover, clock=lambda: clock.ms / 1000)
+
+    def find_photo(_track: Track) -> Found | None:
+        return Found(photo, "artist", "test artist") if photo else None
+
+    covers = CoverService(
+        store,
+        finder,
+        files,
+        fetch_cover,
+        clock=lambda: clock.ms / 1000,
+        find_photo=find_photo if photo else None,
+    )
     channel = Channel(
         config or channel_config(),
         source,
@@ -115,7 +127,7 @@ def test_now_view_applies_the_delay() -> None:
     assert body["history"] == []
     assert body["stale_since"] is None
     keys = {"artist", "artists", "title", "played_by", "badge", "started_at", "cover", "cover_kind"}
-    assert set(body["current"]) == keys
+    assert set(body["current"]) == keys | {"artist_photo"}
 
 
 def test_station_id_shows_as_no_current_and_null_upcoming_track() -> None:
@@ -587,3 +599,35 @@ def test_a_cover_arriving_changes_the_etag() -> None:
     drain(covers)
     _, after = channel.now_view()
     assert before != after
+
+
+def test_the_playing_song_carries_its_artists_photo_and_history_does_not() -> None:
+    source = FakeSource()
+    source.responses = [[NEW, OLD], [NEW, OLD]]
+    photo = "https://example.invalid/images/artist/p/1000x1000-000000-80-0-0.jpg"
+    channel, covers, finder = make(source, Clock(1_300_000), photo=photo)
+    finder.covers["My People"] = M_URL
+    finder.covers["Stay"] = M_URL
+    channel.poll_once()
+    drain(covers)
+    body, before = channel.now_view()
+    assert body["current"]["artist_photo"] is None
+    channel.poll_once()
+    drain(covers)
+    body, after = channel.now_view()
+    assert body["current"]["artist_photo"].startswith("/covers/")
+    assert body["current"]["artist_photo"] != body["current"]["cover"]
+    assert all("artist_photo" not in entry for entry in body["history"])
+    assert before != after
+
+
+def test_no_artist_photo_without_a_cover_of_the_songs_own() -> None:
+    source = FakeSource()
+    source.responses = [[NEW, OLD], [NEW, OLD]]
+    photo = "https://example.invalid/images/artist/p/1000x1000-000000-80-0-0.jpg"
+    channel, covers, _ = make(source, Clock(1_300_000), photo=photo)
+    for _ in range(2):
+        channel.poll_once()
+        drain(covers)
+    current = channel.now_view()[0]["current"]
+    assert current["cover"] is None and current["artist_photo"] is None
