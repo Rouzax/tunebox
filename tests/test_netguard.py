@@ -59,6 +59,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "4")
             self.end_headers()
             self.wfile.write(b"\xff\xfb\x90\x64")
+        elif self.path == "/stall-after-start":
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self.end_headers()
+            try:
+                time.sleep(0.6)
+                self.wfile.write(b"\xff\xfb\x90\x64")
+                self.wfile.flush()
+                time.sleep(10)
+            except OSError:
+                pass  # the reader hung up, as it should
         elif self.path == "/drip":
             self.send_response(200)
             self.end_headers()
@@ -328,3 +339,12 @@ def test_ipv6_forms_of_an_ipv4_address_are_judged_by_that_address(
     address: str, allowed: bool
 ) -> None:
     assert public(address) is allowed
+
+
+def test_probe_holds_its_deadline_while_the_audio_stalls(port: int) -> None:
+    started = time.monotonic()
+    probe = guard().probe(
+        f"http://ok.test:{port}/stall-after-start", deadline_s=1.0, max_bytes=65_536
+    )
+    assert time.monotonic() - started < 1.6
+    assert probe.head == b"\xff\xfb\x90\x64"
