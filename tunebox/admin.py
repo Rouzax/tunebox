@@ -41,6 +41,7 @@ from tunebox.config import (
     ConfigState,
     encodable,
     keeps_a_channel,
+    parse_source,
     state_from_import,
     state_to_toml,
     validate_state,
@@ -62,6 +63,7 @@ from tunebox.settings import (
     state_from_dict,
     state_to_json,
 )
+from tunebox.streamcheck import URL_MAX, Busy, StreamChecks
 from tunebox.tomlout import dumps
 from tunebox.usage import Usage, UsageSettings, UsageUnavailable
 from tunebox.usagecore import NAME_MAX, RETENTION_MAX, RETENTION_MIN, valid_device
@@ -244,6 +246,7 @@ class Admin:
         *,
         blobs: Blobs,
         free_space: Callable[[], int | None],
+        checks: StreamChecks,
         usage: Usage | None = None,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
@@ -260,6 +263,7 @@ class Admin:
         self._blobs = blobs
         self._free = free_space
         self._usage = usage
+        self._checks = checks
         self._origin = config.public_origin
         # Over plain http a browser drops Secure cookies and refuses the
         # __Secure- prefix; the server then serves the panel only to the
@@ -303,6 +307,8 @@ class Admin:
             ("POST", "account/sessions/{part}/end"): Route(self._end_session),
             ("GET", "pin"): Route(self._pin_status),
             ("POST", "pin"): Route(self._pin_change, code=True),
+            ("POST", "stream/check"): Route(self._stream_check),
+            ("POST", "source/check"): Route(self._source_check),
             ("GET", "usage/live"): Route(self._using(self._usage_live)),
             ("GET", "usage/summary"): Route(self._using(self._usage_summary)),
             ("GET", "usage/devices"): Route(self._using(self._usage_devices)),
@@ -1056,6 +1062,38 @@ class Admin:
                 return _error(400, "bad_request")
         page = usage.device(device, before)
         return _error(404, "not_found") if page is None else _json(200, page)
+
+    def _stream_check(self, request: Request, _session: Session) -> Response:
+        """What a stream address plays, for the station form; tunebox fetches
+        it through the guard (public addresses only, bounded in time and
+        bytes) and paces these checks."""
+        body = _body(request, ("url",))
+        if body is None or not 0 < len(body["url"]) <= URL_MAX:
+            return _error(400, "bad_request")
+        try:
+            return _json(200, self._checks.stream(body["url"].strip()))
+        except Busy:
+            return _error(429, "too_many_checks")
+
+    def _source_check(self, request: Request, _session: Session) -> Response:
+        """The newest songs a now-playing source lists with the settings the
+        form holds; the source type fixes the host it asks."""
+        payload = _object(request)
+        if payload is None:
+            return _error(400, "bad_request")
+        try:
+            source = parse_source(payload.get("source"))
+        except ConfigError as error:
+            return _json(400, {"error": "invalid", "message": str(error)})
+        # A saved station may carry an empty setting; asking a feed with one
+        # only reads as "no songs", so the check names it instead.
+        empty = next((key for key, value in source.settings.items() if not value.strip()), None)
+        if empty is not None:
+            return _json(400, {"error": "invalid", "message": f"source.{empty}: required"})
+        try:
+            return _json(200, self._checks.feed(source))
+        except Busy:
+            return _error(429, "too_many_checks")
 
     def _usage_rename(self, request: Request, _session: Session, usage: Usage) -> Response:
         body = _body(request, ("id", "name"))

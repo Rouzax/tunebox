@@ -11,6 +11,7 @@ and whether that address is on the owner's own network."""
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import ipaddress
 import socket
@@ -19,6 +20,7 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Generator
+from dataclasses import dataclass
 
 from tunebox.config import Network
 from tunebox.http import MAX_BYTES, STREAM_CHUNK, USER_AGENT, HttpError
@@ -30,6 +32,21 @@ _REDIRECTS = (301, 302, 303, 307, 308)
 _TLS = ssl.create_default_context()
 
 Resolver = Callable[[str, int], list[str]]
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+# What a request line may carry as is; everything else in a path (a typed
+# "é", a redirect to "/ström") is percent-encoded, as browsers do.
+_PATH_SAFE = "/%:@!$&'()*+,;=?~-._"
+
+
+@dataclass(frozen=True)
+class Probe:
+    """The start of an answer: its content type, the icy-* and ice-*
+    headers a stream server sends (names lower-case) and its first bytes."""
+
+    content_type: str
+    icy: dict[str, str]
+    head: bytes
+
 
 # Headers through which proxies name the client, besides X-Forwarded-For.
 OTHER_FORWARDING = (
@@ -60,8 +77,16 @@ NEARBY = tuple(
 
 def public(address: str) -> bool:
     ip = ipaddress.ip_address(address)
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv6Address):
+        # IPv4 addresses inside IPv6 are judged as IPv4: ::ffff:0:0/96
+        # (mapped), 64:ff9b::/96 (NAT64, which a resolver behind DNS64
+        # answers) and the old IPv4-compatible ::/96, whose private
+        # addresses would otherwise read as global.
+        packed = int(ip)
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip in _NAT64 or (packed >> 32 == 0 and packed > 1):
+            ip = ipaddress.IPv4Address(packed & 0xFFFF_FFFF)
     # is_global is false for private, loopback, link-local, reserved and
     # shared (100.64.0.0/10) ranges, but true for multicast.
     return ip.is_global and not ip.is_multicast
@@ -171,6 +196,15 @@ class _Pinned(http.client.HTTPConnection):
         self.sock = sock
 
 
+def _cut(connection: http.client.HTTPConnection, cut: threading.Event) -> None:
+    cut.set()
+    sock = connection.sock
+    if sock is not None:
+        # Already closed means the request ended on its own.
+        with contextlib.suppress(OSError):
+            sock.shutdown(socket.SHUT_RDWR)
+
+
 class Guard:
     def __init__(
         self,
@@ -216,6 +250,30 @@ class Guard:
         finally:
             connection.close()
 
+    def probe(self, url: str, deadline_s: float, max_bytes: int) -> Probe:
+        """The headers and first bytes of an answer, for a stream the panel
+        checks: http is allowed, as for a stream_url, and reading stops at
+        max_bytes or the deadline, whichever comes first."""
+        ends = time.monotonic() + deadline_s
+        response, connection = self._open(url, ends, ("https", "http"))
+        try:
+            head = bytearray()
+            while len(head) < max_bytes and time.monotonic() < ends:
+                chunk = response.read1(min(STREAM_CHUNK, max_bytes - len(head)))
+                if not chunk:
+                    break
+                head += chunk
+            icy = {
+                name.lower(): value
+                for name, value in response.getheaders()
+                if name.lower().startswith(("icy-", "ice-"))
+            }
+            return Probe(response.getheader("Content-Type") or "", icy, bytes(head))
+        except (http.client.HTTPException, OSError) as error:
+            raise HttpError(f"{_short(url)}: {error}") from error
+        finally:
+            connection.close()
+
     def _open(
         self, url: str, ends: float, schemes: tuple[str, ...]
     ) -> tuple[http.client.HTTPResponse, http.client.HTTPConnection]:
@@ -239,12 +297,27 @@ class Guard:
             timeout = min(self._timeout, remaining)
             connection = _Pinned(parts.hostname, port, addresses[0], tls, timeout)
             path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+            path = urllib.parse.quote(path, safe=_PATH_SAFE)
+            # The socket timeout bounds each read only: a server sending its
+            # headers a byte at a time would hold the request far past the
+            # deadline, so the deadline also cuts the connection.
+            # A cut connection can also read as a short, complete answer,
+            # so the cut itself is what fails the request.
+            cut = threading.Event()
+            watchdog = threading.Timer(max(0.0, ends - time.monotonic()), _cut, (connection, cut))
+            watchdog.start()
             try:
                 connection.request("GET", path, headers={"User-Agent": USER_AGENT})
                 response = connection.getresponse()
-            except (http.client.HTTPException, OSError) as error:
+            except (http.client.HTTPException, OSError, UnicodeError) as error:
                 connection.close()
-                raise HttpError(f"{_short(url)}: {error}") from error
+                late = cut.is_set() or time.monotonic() >= ends
+                raise HttpError(f"{_short(url)}: {'took too long' if late else error}") from error
+            finally:
+                watchdog.cancel()
+            if cut.is_set():
+                connection.close()
+                raise HttpError(f"{_short(url)}: took too long")
             if response.status in _REDIRECTS:
                 location = response.getheader("Location")
                 connection.close()

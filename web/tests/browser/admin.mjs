@@ -851,6 +851,50 @@ async function run() {
             return open === 'Station, Streams, Now playing' ? null : `open: ${open}`;
         });
 
+        await step('a new station fills in its feed and checks its stream', async () => {
+            await evaluate(`window.location.hash = '#new'`);
+            if (!(await until(`document.querySelector('form.edit fieldset.stream input[type=url]')`))) {
+                return 'no new-station form';
+            }
+            const codecBefore = await evaluate(`document.querySelector('form.edit fieldset.stream select').value`);
+            if (codecBefore !== '') {
+                return `a new stream starts with codec ${codecBefore}, so a check cannot fill it`;
+            }
+            // Check feed with nothing filled in yet: the server names the missing setting.
+            await evaluate(`[...document.querySelectorAll('form.edit button')].find((b) => b.textContent.trim() === 'Check feed').click()`);
+            if (!(await until(`(document.querySelector('form.edit details.section:nth-of-type(3) .check-result') || {}).textContent.indexOf('source.mount') >= 0`))) {
+                return `Check feed with no mount said: ${await evaluate(`document.querySelector('form.edit details.section:nth-of-type(3) .check-result').textContent`)}`;
+            }
+            await evaluate(`(() => {
+                const url = document.querySelector('form.edit fieldset.stream input[type=url]');
+                url.value = 'https://playerservices.streamtheworld.com/api/livestream-redirect/OWR_INTERNATIONAL_ADP.aac';
+                url.dispatchEvent(new Event('input', {bubbles: true}));
+                url.dispatchEvent(new Event('change', {bubbles: true}));
+            })()`);
+            const mount = await evaluate(`(document.querySelector('form.edit [name="source.mount"]') || {}).value`);
+            if (mount !== 'OWR_INTERNATIONAL') {
+                return `mount filled in as ${mount}`;
+            }
+            if (!(await evaluate(`document.querySelectorAll('form.edit details.section')[2].open`))) {
+                return 'Now playing did not open when it was filled in';
+            }
+            // The test's own stream is on this machine: the guard refuses it.
+            await evaluate(`(() => {
+                const url = document.querySelector('form.edit fieldset.stream input[type=url]');
+                url.value = ${JSON.stringify(stream.url)};
+                url.dispatchEvent(new Event('input', {bubbles: true}));
+                [...document.querySelectorAll('form.edit fieldset.stream button')].find((b) => b.textContent.trim() === 'Check stream').click();
+            })()`);
+            const said = `(document.querySelector('form.edit fieldset.stream .check-result') || {}).textContent || ''`;
+            if (!(await until(`${said}.indexOf('non-public') >= 0`, 8000))) {
+                return `Check stream on a local address said: ${await evaluate(said)}`;
+            }
+            await evaluate(`window.location.hash = '#stations'`);
+            await until(`document.querySelector('form.edit .confirm')`);
+            await answer('Leave without saving');
+            return (await until(`location.hash === '#stations' && document.querySelector('.station[data-id="first"]')`)) ? null : 'could not leave the form';
+        });
+
         await step('a dangerous title rule is refused', async () => {
             await until(`location.hash === '#stations' && document.querySelector('.station[data-id="first"]')`);
             await click(`.station[data-id="first"] button[title="Edit Renamed Station"]`);

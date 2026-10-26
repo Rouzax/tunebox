@@ -16,7 +16,7 @@ export function newStation(id, name, group) {
             id,
             name,
             source: {type: 'triton', mount: ''},
-            streams: [{name: 'Default', url: 'https://', codec: 'aac', kbps: 128}],
+            streams: [{name: 'Default', url: 'https://'}],
         },
     };
 }

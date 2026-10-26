@@ -718,3 +718,14 @@ button.help[aria-expanded="true"] {
     font-size: 0.9rem;
     overflow-wrap: anywhere;
 }
+
+/* What a stream or feed check found, under its button. */
+.check-result:empty {
+    display: none;
+}
+
+.feed-songs {
+    margin: 0.25rem 0 0;
+    padding-left: 1.25rem;
+    font-size: 0.9rem;
+}
