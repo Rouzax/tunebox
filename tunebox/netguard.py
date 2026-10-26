@@ -188,12 +188,18 @@ class _Pinned(http.client.HTTPConnection):
         self._tls = tls
         # Keeps the Host header free of :443 on TLS.
         self.default_port = 443 if tls else 80
+        # The socket the answer is read from. http.client drops self.sock
+        # once it has an answer that ends with the connection (HTTP/1.0
+        # without a length, as stream servers send), while the body is
+        # still read from it.
+        self.opened: socket.socket | None = None
 
     def connect(self) -> None:
         sock = socket.create_connection((self._address, self.port), self.timeout)
         if self._tls:
             sock = _TLS.wrap_socket(sock, server_hostname=self.host)
         self.sock = sock
+        self.opened = sock
 
 
 def _cut(connection: http.client.HTTPConnection, cut: threading.Event) -> None:
@@ -258,8 +264,20 @@ class Guard:
         response, connection = self._open(url, ends, ("https", "http"))
         try:
             head = bytearray()
-            while len(head) < max_bytes and time.monotonic() < ends:
-                chunk = response.read1(min(STREAM_CHUNK, max_bytes - len(head)))
+            while len(head) < max_bytes and (left := ends - time.monotonic()) > 0:
+                # Each read waits no longer than the time left: a stream that
+                # stalls after its first bytes ends the probe with what came.
+                # A socket http.client has already closed holds nothing more
+                # to wait for; what it read stays in the response's buffer.
+                if connection.opened is not None:
+                    with contextlib.suppress(OSError):
+                        connection.opened.settimeout(left)
+                try:
+                    chunk = response.read1(min(STREAM_CHUNK, max_bytes - len(head)))
+                except TimeoutError:
+                    if head:
+                        break
+                    raise
                 if not chunk:
                     break
                 head += chunk
@@ -276,7 +294,7 @@ class Guard:
 
     def _open(
         self, url: str, ends: float, schemes: tuple[str, ...]
-    ) -> tuple[http.client.HTTPResponse, http.client.HTTPConnection]:
+    ) -> tuple[http.client.HTTPResponse, _Pinned]:
         for _ in range(MAX_REDIRECTS + 1):
             try:
                 parts = urllib.parse.urlsplit(url)

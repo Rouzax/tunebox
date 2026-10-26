@@ -124,7 +124,9 @@ def playlist_address(probe: Probe) -> str | None:
     )
     if found is None or len(found.group(1)) > URL_MAX:
         return None
-    return found.group(1).decode("ascii", "replace")
+    # Playlists are UTF-8 or ASCII; a non-ASCII path stays as written, and
+    # the probe percent-encodes it when the address is checked.
+    return found.group(1).decode("utf-8", "replace")
 
 
 def describe(probe: Probe, url: str) -> dict[str, Any]:

@@ -276,3 +276,9 @@ def test_every_check_is_logged_with_its_outcome(caplog: pytest.LogCaptureFixture
         for r in caplog.records
         if r.getMessage().endswith("_checked")
     )
+
+
+def test_a_playlist_address_keeps_its_letters() -> None:
+    body = "[playlist]\nFile1=https://radio.test/ström\n".encode()
+    answer = describe(Probe("audio/x-scpls", {}, body), "https://x.test/list.pls")
+    assert answer["inside"] == "https://radio.test/ström"

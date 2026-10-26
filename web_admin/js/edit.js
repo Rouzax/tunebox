@@ -355,11 +355,20 @@ export function render(root, ctx, id) {
         streamEditor(schema, streams, {address: fillSource, check: (url) => checked('stream/check', {url})}),
         filledNote);
     const feedResult = el('div', {class: 'check-result', role: 'status'});
+    // Only the newest check may speak, and only for the settings it asked
+    // about: a mount changed meanwhile must not read as confirmed.
+    let feedAsked = 0;
     sections.source.body.append(source.box,
         button('check_circle', 'Check feed', async () => {
+            feedAsked += 1;
+            const mine = feedAsked;
+            const asked = JSON.stringify(source.value());
             feedResult.replaceChildren(el('p', {class: 'hint'}, 'Asking the feed...'));
             const answer = await checked('source/check', {source: source.value()});
-            if (!answer) {
+            if (mine !== feedAsked) {
+                return;
+            }
+            if (!answer || JSON.stringify(source.value()) !== asked) {
                 feedResult.replaceChildren();
             } else if (!answer.ok) {
                 feedResult.replaceChildren(el('p', {class: 'hint'}, `No songs: ${answer.reason}`));
