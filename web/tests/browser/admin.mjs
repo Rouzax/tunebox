@@ -806,6 +806,51 @@ async function run() {
             return `name not live within 2 s (message: ${await message()})`;
         });
 
+        await step('the station form folds what is rarely changed', async () => {
+            await until(`location.hash === '#stations' && document.querySelector('.station[data-id="first"]')`);
+            await click(`.station[data-id="first"] button[title="Edit Renamed Station"]`);
+            await until(`document.querySelector('form.edit details.section')`);
+            const open = await evaluate(`JSON.stringify([...document.querySelectorAll('form.edit details.section')].map((d) => [d.querySelector('h3').textContent, d.open, d.querySelector('.status').textContent]))`);
+            const sections = JSON.parse(open);
+            const shape = sections.map(([title, isOpen]) => `${title}:${isOpen ? 'open' : 'folded'}`).join(' ');
+            if (shape !== 'Station:open Streams:open Now playing:folded Title rules:folded Timing:folded Options:folded') {
+                return `sections ${shape}`;
+            }
+            if (sections.some(([title, isOpen, status]) => !isOpen && !status)) {
+                return `a folded section says nothing: ${open}`;
+            }
+            await click(`form.edit details.section:nth-of-type(3) > summary`);
+            if (!(await evaluate(`document.querySelectorAll('form.edit details.section')[2].open`))) {
+                return 'Now playing did not open on a tap';
+            }
+            const helpButton = `form.edit details.section[open] button.help[title="About Mount"]`;
+            if (!(await until(`document.querySelector('${helpButton}')`))) {
+                return 'no ? beside Mount';
+            }
+            await click(helpButton);
+            const card = `document.getElementById(document.querySelector('${helpButton}').getAttribute('aria-controls'))`;
+            if (!(await evaluate(`!${card}.hidden && ${card}.textContent.indexOf('np.tritondigital.com') >= 0 && document.querySelector('${helpButton}').getAttribute('aria-expanded') === 'true'`))) {
+                return 'the Mount card did not open';
+            }
+            await click(helpButton);
+            if (!(await evaluate(`${card}.hidden`))) {
+                return 'the Mount card did not close';
+            }
+            await evaluate(`[...document.querySelectorAll('form.edit .actions button')].find((b) => b.textContent.trim() === 'Cancel').click()`);
+            return (await until(`location.hash === '#stations'`)) ? null : 'could not leave the form';
+        });
+
+        await step('a new station opens its feed settings', async () => {
+            await evaluate(`window.location.hash = '#new'`);
+            if (!(await until(`document.querySelector('form.edit details.section')`))) {
+                return 'no new-station form';
+            }
+            const open = await evaluate(`[...document.querySelectorAll('form.edit details.section')].filter((d) => d.open).map((d) => d.querySelector('h3').textContent).join(', ')`);
+            await evaluate(`window.location.hash = '#stations'`);
+            await until(`location.hash === '#stations' && document.querySelector('.station[data-id="first"]')`);
+            return open === 'Station, Streams, Now playing' ? null : `open: ${open}`;
+        });
+
         await step('a dangerous title rule is refused', async () => {
             await until(`location.hash === '#stations' && document.querySelector('.station[data-id="first"]')`);
             await click(`.station[data-id="first"] button[title="Edit Renamed Station"]`);
@@ -821,6 +866,9 @@ async function run() {
             const stored = await evaluate(`fetch('/admin/api/config').then((r) => r.json()).then((d) => JSON.stringify(d.state.channels.map((c) => c.doc.rules || null)))`);
             if (stored.indexOf('(a+)+') >= 0) {
                 return 'the pattern was stored';
+            }
+            if (!(await evaluate(`document.querySelector('form.edit [name="rules.played_by"]').closest('details').open`))) {
+                return 'the folded Title rules section stayed shut on the refusal';
             }
             // The refused pattern is still in the form, unsaved.
             await evaluate(`[...document.querySelectorAll('form.edit .actions button')].find((b) => b.textContent.trim() === 'Cancel').click()`);

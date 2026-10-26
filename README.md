@@ -360,7 +360,11 @@ seconds), without a restart.
 - A group can be deleted once it has no stations.
 
 The edit form has the same settings as a `[[channels]]` block (see
-[Change the stations](#change-the-stations)). Empty fields use the
+[Change the stations](#change-the-stations)), in sections. Station and
+Streams are open; Now playing (open for a new station), Title rules,
+Timing and Options are folded, with a summary of what they hold in their
+header, and a section with a problem opens when you save. The **?** beside
+a field opens a short explanation under it. Empty fields use the
 defaults, shown greyed out. Nothing in the form is stored until you press
 Save; leaving it with changes (Cancel, the menu, the back button or a
 reload) asks first. Unticking **Needs the PIN** on a station that has it

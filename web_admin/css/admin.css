@@ -610,3 +610,104 @@ button.link {
 .device {
     padding-top: 0.5rem;
 }
+
+/* The station form's folding sections: the header is the whole tap
+   target, and a folded one says what it holds. */
+details.section {
+    border-top: 1px solid var(--line);
+    padding-top: 0.5rem;
+    min-width: 0;
+}
+
+/* Only an open section lays out its fields: a folded one in a grid keeps
+   the gap of its hidden content under the header. */
+details.section[open] {
+    display: grid;
+    gap: 1rem;
+}
+
+details.section > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.75rem;
+    padding: 0.35rem 0;
+    cursor: pointer;
+    list-style: none;
+}
+
+/* Chromium 120 and Firefox draw their own marker without this. */
+details.section > summary::-webkit-details-marker {
+    display: none;
+}
+
+details.section > summary::before {
+    content: "\25B8";
+    color: var(--muted);
+}
+
+details.section[open] > summary::before {
+    content: "\25BE";
+}
+
+details.section > summary h3 {
+    display: inline;
+    margin: 0;
+    color: var(--fg);
+}
+
+details.section > summary .status {
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+details.section[open] > summary .status {
+    display: none;
+}
+
+/* A field with a ? button: the button sits at the top right, on the
+   label's line above the input, and its card opens under the field. A
+   paragraph runs under the button, so it keeps clear of it. */
+.field {
+    position: relative;
+    display: grid;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.field > p,
+.field > .check {
+    padding-right: 2rem;
+}
+
+button.help {
+    position: absolute;
+    top: 0;
+    right: 0;
+    justify-content: center;
+    width: 1.4rem;
+    height: 1.4rem;
+    font-size: 0.85rem;
+    padding: 0;
+    border-radius: 50%;
+    font-weight: 600;
+    color: var(--fg);
+    background: transparent;
+    border: 1px solid var(--line);
+}
+
+button.help[aria-expanded="true"] {
+    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.help-card {
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    border-left: 3px solid var(--accent);
+    border-radius: 0.25rem;
+    background: var(--field);
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+}
