@@ -145,6 +145,7 @@ class ConfigState:
     player: dict[str, Any] = field(default_factory=dict[str, Any])
     groups: tuple[str, ...] = ()
     channels: tuple[ChannelRow, ...] = ()
+    group_images: dict[str, str] = field(default_factory=dict[str, str])
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,8 @@ class Resolved:
     # Enabled channels in listing order: ungrouped first, as the player shows them.
     channels: tuple[ChannelConfig, ...]
     player: PlayerConfig
+    # Image values of the groups that have an image and an enabled station.
+    group_images: dict[str, str] = field(default_factory=dict[str, str])
 
 
 @dataclass(frozen=True)
@@ -281,7 +284,7 @@ def state_from_toml(data: dict[str, Any]) -> ConfigState:
     raw_channels: object = data.get("channels", [])
     if not isinstance(raw_channels, list):
         raise ConfigError("channels: expected [[channels]] tables")
-    listed = _group_names(data.get("groups"))
+    listed, group_images = _group_names(data.get("groups"))
     groups: list[str] = [] if listed is None else listed
     rows: list[ChannelRow] = []
     for index, raw in enumerate(cast("list[object]", raw_channels)):
@@ -307,23 +310,32 @@ def state_from_toml(data: dict[str, Any]) -> ConfigState:
         _table(data, "player", "player"),
         tuple(groups),
         tuple(rows),
+        group_images,
     )
 
 
-def _group_names(raw: object) -> list[str] | None:
+def _group_names(raw: object) -> tuple[list[str] | None, dict[str, str]]:
+    """The listed group names (None without a [[groups]] list) and the
+    image of each group that has one."""
     if raw is None:
-        return None
+        return None, {}
     if not isinstance(raw, list):
         raise ConfigError("groups: expected [[groups]] tables")
     names: list[str] = []
+    images: dict[str, str] = {}
     for index, item in enumerate(cast("list[object]", raw)):
         table = cast("dict[str, Any]", item) if isinstance(item, dict) else {}
-        _no_unknown(table, {"name"}, f"groups[{index}]")
+        _no_unknown(table, {"name", "image"}, f"groups[{index}]")
         name: object = table.get("name")
         if not isinstance(name, str):
             raise ConfigError(f"groups[{index}].name: expected a string")
         names.append(name)
-    return names
+        image: object = table.get("image")
+        if image is not None:
+            if not isinstance(image, str):
+                raise ConfigError(f"groups[{index}].image: expected a string")
+            images[name] = image
+    return names, images
 
 
 def state_to_toml(state: ConfigState) -> dict[str, object]:
@@ -343,7 +355,13 @@ def state_to_toml(state: ConfigState) -> dict[str, object]:
     if state.player:
         out["player"] = dict(state.player)
     if state.groups:
-        out["groups"] = [{"name": name} for name in state.groups]
+        out["groups"] = [
+            {
+                "name": name,
+                **({"image": state.group_images[name]} if name in state.group_images else {}),
+            }
+            for name in state.groups
+        ]
     out["channels"] = channels
     return out
 
@@ -354,6 +372,7 @@ def validate_state(state: ConfigState) -> Resolved:
     _text(dict(state.defaults), "defaults")
     _text(state.player, "player")
     _text(list(state.groups), "groups")
+    _text(dict(state.group_images), "group_images")
     for index, row in enumerate(state.channels):
         _text(row.doc, f"channels[{index}]")
         _text(row.group, f"channels[{index}].group")
@@ -377,11 +396,17 @@ def validate_state(state: ConfigState) -> Resolved:
         if not name.strip() or name in listed:
             raise ConfigError(f"groups[{index}]: names must be unique and not empty")
         listed.add(name)
+    for name, value in state.group_images.items():
+        if name not in listed:
+            raise ConfigError(f"group_images.{name}: no group named {name!r}")
+        _image(value, f"group_images.{name}")
     rank = {name: position for position, name in enumerate(state.groups)}
     enabled = [channel for row, channel in seen.values() if row.enabled]
     # sorted() is stable, so channels keep their positions within a group.
     ordered = sorted(enabled, key=lambda c: -1 if c.group is None else rank[c.group])
-    return Resolved(tuple(ordered), _player(dict(state.player), {c.id for c in ordered}))
+    live = {c.group for c in ordered}
+    images = {name: value for name, value in state.group_images.items() if name in live}
+    return Resolved(tuple(ordered), _player(dict(state.player), {c.id for c in ordered}), images)
 
 
 def keeps_a_channel(before: ConfigState, after: ConfigState) -> None:
@@ -389,6 +414,16 @@ def keeps_a_channel(before: ConfigState, after: ConfigState) -> None:
     stored one. A stored state with none enabled can be replaced by any."""
     if any(c.enabled for c in before.channels) and not any(c.enabled for c in after.channels):
         raise ConfigError("channels: at least one enabled channel is required")
+
+
+def _image(value: object, where: str) -> str:
+    """The one rule for a station logo and a group image: an https://
+    address, which tunebox downloads, or an uploaded image."""
+    if not isinstance(value, str) or not (
+        value.startswith("https://") or BLOB_REF.fullmatch(value)
+    ):
+        raise ConfigError(f"{where}: must be an https URL or an uploaded logo")
+    return value
 
 
 def _text(value: object, where: str) -> None:
@@ -426,8 +461,8 @@ def _channel(table: dict[str, Any], where: str, defaults: dict[str, float]) -> C
     if group is not None and not group.strip():
         raise ConfigError(f"{where}.group: must not be empty")
     logo = _optional_str(table, "logo", f"{where}.logo")
-    if logo is not None and not (logo.startswith("https://") or BLOB_REF.fullmatch(logo)):
-        raise ConfigError(f"{where}.logo: must be an https URL or an uploaded logo")
+    if logo is not None:
+        _image(logo, f"{where}.logo")
     return ChannelConfig(
         id=channel_id,
         name=_str(table, "name", f"{where}.name"),

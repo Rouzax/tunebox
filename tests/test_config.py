@@ -15,9 +15,12 @@ from tunebox.config import (
     StreamConfig,
     load,
     parse,
+    state_from_import,
     state_from_toml,
+    state_to_toml,
     validate_state,
 )
+from tunebox.tomlout import dumps
 
 EXAMPLE = Path(__file__).parent.parent / "tunebox.example.toml"
 
@@ -279,6 +282,54 @@ def test_group_names_are_unique_and_not_empty() -> None:
         validate_state(ConfigState(groups=("A", "A")))
     with pytest.raises(ConfigError, match=re.escape("groups[0]")):
         validate_state(ConfigState(groups=(" ",)))
+
+
+def group_row(channel_id: str, group: str, enabled: bool = True) -> ChannelRow:
+    return ChannelRow(
+        channel_id, group, enabled, state_from_toml(minimal()).channels[0].doc | {"id": channel_id}
+    )
+
+
+def test_group_images_validate_and_resolve_live_groups_only() -> None:
+    state = ConfigState(
+        groups=("A", "B", "C"),
+        channels=(group_row("a1", "A"), group_row("b1", "B", enabled=False)),
+        group_images={"A": "https://x.test/a.png", "B": "blob:" + "a" * 64},
+    )
+    # B has no enabled station and C no image: only A is live.
+    assert validate_state(state).group_images == {"A": "https://x.test/a.png"}
+
+
+@pytest.mark.parametrize(
+    ("images", "message"),
+    [
+        ({"Nope": "https://x.test/a.png"}, "group_images.Nope: no group named"),
+        ({"A": "http://x.test/a.png"}, "group_images.A: must be an https URL or an uploaded logo"),
+        ({"A": ""}, "group_images.A: must be an https URL or an uploaded logo"),
+        ({"A": "\ud800"}, "group_images.A: not valid text"),
+    ],
+)
+def test_group_images_refused(images: dict[str, str], message: str) -> None:
+    state = ConfigState(groups=("A",), channels=(group_row("a1", "A"),), group_images=images)
+    with pytest.raises(ConfigError, match=re.escape(message)):
+        validate_state(state)
+
+
+def test_group_images_export_and_import_round_trip() -> None:
+    state = ConfigState(
+        groups=("A", "B"),
+        channels=(group_row("a1", "A"),),
+        group_images={"A": "https://x.test/a.png"},
+    )
+    data = state_to_toml(state)
+    assert data["groups"] == [{"name": "A", "image": "https://x.test/a.png"}, {"name": "B"}]
+    back, _ = state_from_import(dumps(data))
+    assert back.group_images == {"A": "https://x.test/a.png"}
+
+
+def test_import_refuses_a_non_string_group_image() -> None:
+    with pytest.raises(ConfigError, match=r"groups\[0\]\.image: expected a string"):
+        state_from_import('[[groups]]\nname = "A"\nimage = 3\n')
 
 
 def test_admin_is_off_by_default(tmp_path: Path) -> None:
