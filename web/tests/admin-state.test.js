@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
-    addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, exportName, historyLabel, historyTarget, importSummary, logoPreview, moveGroup,
+    addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, exportName, groupImageWaiting, historyLabel, historyTarget, importSummary, invalidText, logoHint, logoPreview, moveGroup,
     matchesStation, groupSummary, moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setGroupImage, setSettings, stationsByGroup, tickets, validId,
 } from '../../web_admin/js/state.js';
 
@@ -169,6 +169,26 @@ test('a logo preview comes from the panel for an upload only', () => {
     assert.deepEqual(logoPreview('https://img.example/x.png'), {kind: 'url', src: null});
     assert.deepEqual(logoPreview(''), {kind: 'none', src: null});
     assert.deepEqual(logoPreview('blob:../x'), {kind: 'none', src: null});
+});
+
+test('a link without a download says when it will be shown', () => {
+    const link = 'https://img.example/g.png';
+    const waiting = 'Shown once a station in the group is on.';
+    assert.equal(logoHint(link, null), 'Shown after saving.');
+    assert.equal(logoHint(link, {value: link, src: null, waiting}), waiting);
+    assert.equal(logoHint('https://img.example/other.png', {value: link, src: null, waiting}), 'Shown after saving.');
+    assert.equal(logoHint(link, {value: link, src: null, waiting: null}), 'Shown after saving.');
+});
+
+test('a group image waits for a station that is on', () => {
+    assert.equal(groupImageWaiting([{enabled: false}, {enabled: false}]), 'Shown once a station in the group is on.');
+    assert.equal(groupImageWaiting([]), 'Shown once a station in the group is on.');
+    assert.equal(groupImageWaiting([{enabled: false}, {enabled: true}]), null);
+});
+
+test('a save from a page older than the stored shape asks for a reload', () => {
+    assert.equal(invalidText('group_images: missing'), 'This page is out of date: reload it, then make the change again.');
+    assert.equal(invalidText('channels[0].id: missing'), 'channels[0].id: missing');
 });
 
 test('the import summary counts the changes and repeats the notes', () => {

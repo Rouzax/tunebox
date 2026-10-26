@@ -336,6 +336,26 @@ export function logoPreview(value) {
     return {kind: 'none', src: null};
 }
 
+// The hint in place of a preview for a link not shown yet. saved is the
+// logo form's stored link ({value, waiting}); its waiting text applies while
+// the field still holds that link.
+export function logoHint(value, saved) {
+    return saved && saved.waiting && value === saved.value ? saved.waiting : 'Shown after saving.';
+}
+
+// A group's image is downloaded only while one of its stations is on, so a
+// saved link of an all-off group waits for that rather than for a save.
+export function groupImageWaiting(rows) {
+    return rows.some((row) => row.enabled) ? null : 'Shown once a station in the group is on.';
+}
+
+// A save's refusal as shown. A page from before group images sends a state
+// without them; the server names the missing key, which says nothing useful
+// to the person at that page.
+export function invalidText(message) {
+    return message === 'group_images: missing' ? 'This page is out of date: reload it, then make the change again.' : message;
+}
+
 // The lines above an import's differences.
 export function importSummary(changes, notes) {
     let first = 'The file matches what is stored now.';
