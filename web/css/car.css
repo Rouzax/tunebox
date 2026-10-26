@@ -134,7 +134,12 @@
     --car-station-h: 2.75rem;
 }
 
+/* Its own layer: the visualizer and the effects canvas are positioned
+   layers in the same container and would paint over a header in the
+   normal flow. */
 .tunebox .car-station {
+    position:        relative;
+    z-index:         10;
     display:         flex;
     flex:            none;
     align-items:     center;
