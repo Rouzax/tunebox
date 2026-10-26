@@ -530,6 +530,112 @@
     background: var(--accent-color, #62a8ea);
 }
 
+/* Channel tiles: one square per group and per station outside a group,
+   two columns in the car's third and more as the window widens. The rows
+   of an open group keep base.css's look. */
+.tunebox .channel-groups.tiled {
+    width: min(100%, 42rem);
+}
+
+.tunebox .channel-tiles {
+    display:               grid;
+    grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+    gap:                   .75rem;
+}
+
+.tunebox .tile {
+    position:       relative;
+    display:        flex;
+    flex-direction: column;
+    gap:            .4rem;
+    min-width:      0;
+    padding:        .5rem;
+    text-align:     center;
+    border:         .1rem solid transparent;
+    border-radius:  .2rem;
+    background:     rgba(72, 99, 114, .3);
+}
+
+/* The square stays when its image fails, so the grid keeps its rows. */
+.tunebox .tile-art {
+    display:       block;
+    overflow:      hidden;
+    width:         100%;
+    aspect-ratio:  1 / 1;
+    border-radius: .2rem;
+}
+
+.tunebox .tile-art:empty {
+    background: rgba(255, 255, 255, .08);
+}
+
+/* A group's own image fills the square; a station logo is shown whole. */
+.tunebox .tile[data-group] .tile-art > img {
+    object-fit: cover;
+}
+
+.tunebox .tile-art > img {
+    display:    block;
+    width:      100%;
+    height:     100%;
+    object-fit: contain;
+}
+
+.tunebox .tile .mosaic {
+    display:               grid;
+    width:                 100%;
+    height:                100%;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows:    1fr 1fr;
+    gap:                   .25rem;
+}
+
+.tunebox .tile .mosaic img {
+    width:      100%;
+    height:     100%;
+    min-height: 0;
+    object-fit: contain;
+}
+
+/* Two lines at most; line height 1.3 for the reason given at the track text
+   below. */
+.tunebox .tile .name {
+    display:            -webkit-box;
+    overflow:           hidden;
+    line-height:        1.3;
+    overflow-wrap:      anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+/* The colours of the active channel row. */
+.tunebox .tile.active {
+    border-color: #1f6fbf;
+    background:   rgba(42, 130, 214, .5);
+}
+
+.tunebox .tile-playing {
+    position:      absolute;
+    top:           .3rem;
+    right:         .3rem;
+    display:       none;
+    box-sizing:    border-box;
+    width:         1.6rem;
+    height:        1.6rem;
+    padding:       .25rem;
+    fill:          #fff;
+    border-radius: 50%;
+    background:    #1f6fbf;
+}
+
+.tunebox .tile.active .tile-playing {
+    display: block;
+}
+
+.tunebox .btn-tiles {
+    margin: 0 0 .5rem;
+}
+
 /* Line heights stay at 1.3 or more: below that, tall Poppins glyphs of a
    cut line's hidden next line show as marks above the cut. */
 .tunebox .onair .car-title-line {
