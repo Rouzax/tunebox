@@ -2,6 +2,7 @@ import base64
 import dataclasses
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -13,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests.fakes import offline_checks
+from tests.fakes import FakeHttp, offline_checks
 from tunebox import blobs as blobs_module
 from tunebox import crypto, usagedb
 from tunebox.accounts import REAUTH_S, AccountError, Accounts, Session, SessionEnded
@@ -21,6 +22,7 @@ from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Reques
 from tunebox.blobs import MAX_BLOB, Blobs
 from tunebox.config import AdminConfig, SourceConfig
 from tunebox.disk import MIN_FREE
+from tunebox.logos import Logos, group_key
 from tunebox.netguard import Probe
 from tunebox.pin import Pin
 from tunebox.rulecheck import MAX_NEW_PATTERNS
@@ -52,6 +54,7 @@ class World:
         origin: str = ORIGIN,
         usage: bool = False,
         checks: StreamChecks | None = None,
+        logos: bool = True,
     ) -> None:
         self.origin = origin
         self.clock = Clock()
@@ -74,6 +77,7 @@ class World:
         self.tmp = tmp_path
         self.free: int | None = None
         self.blobs = Blobs(tmp_path / "blobs", free_space=lambda: self.free)
+        self.logos = Logos(tmp_path / "logos", FakeHttp(lambda _url: b""), self.blobs)
         self.settings = Settings(tmp_path / "t.db")
         self.accounts = Accounts(self.settings, clock=self.clock)
         if account:
@@ -94,6 +98,7 @@ class World:
             settings=self.settings,
             pin=self.pin,
             blobs=self.blobs,
+            logos=self.logos if logos else None,
             free_space=lambda: self.free,
             apply=self.apply,
             samples=self.samples,
@@ -2140,6 +2145,99 @@ def test_a_save_without_group_images_is_refused(world: World) -> None:
         {"error": "invalid", "message": "group_images: missing"},
     )
     assert world.settings.load()[1] == config["version"]
+
+
+def group_file(world: World, small: bool, name: str = "G") -> Path:
+    """Writes a group's downloaded image (or its tile copy) as the logo
+    worker would."""
+    folder = world.tmp / "logos" / "groups"
+    if small:
+        folder = folder / "small"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{group_key(name)}.png"
+    path.write_bytes(PNG)
+    return path
+
+
+def group_saved(world: World, small: bool, name: str = "G") -> str:
+    """Commits a group with an image and writes its file; returns the
+    file's name."""
+    state = state_of(
+        station("a") | {"group": name},
+        groups=[name],
+        group_images={name: "https://x.test/g.png"},
+    )
+    world.settings.commit(state_from_dict(state), 0, "edit")
+    return group_file(world, small, name).name
+
+
+@pytest.mark.parametrize("small", [True, False])
+def test_the_config_names_a_downloaded_group_image(world: World, small: bool) -> None:
+    file = group_saved(world, small)
+    world.login()
+    images = json_of(world.call("GET", "/admin/api/config"))["group_images"]
+    assert list(images) == ["G"]
+    assert images["G"].startswith(f"/admin/api/group-logos/{file}?v=")
+
+
+def test_the_config_prefers_the_tile_copy(world: World) -> None:
+    group_saved(world, small=False)
+    full = world.tmp / "logos" / "groups" / f"{group_key('G')}.png"
+    full.write_bytes(PNG + b"full")
+    os.utime(full, ns=(1, 1))
+    small = group_file(world, small=True)
+    file = small.name
+    world.login()
+    shown = json_of(world.call("GET", "/admin/api/config"))["group_images"]["G"]
+    assert shown == f"/admin/api/group-logos/{file}?v={small.stat().st_mtime_ns:x}"
+    served = world.call("GET", f"/admin/api/group-logos/{file}")
+    assert (served.status, served.body) == (200, PNG)
+
+
+def test_the_config_names_no_group_image_before_its_download(world: World) -> None:
+    state = state_of(
+        station("a") | {"group": "G"}, groups=["G"], group_images={"G": "https://x.test/g.png"}
+    )
+    world.settings.commit(state_from_dict(state), 0, "edit")
+    world.login()
+    config = json_of(world.call("GET", "/admin/api/config"))
+    assert config["group_images"] == {}
+    assert config["state"]["group_images"] == {"G": "https://x.test/g.png"}
+
+
+@pytest.mark.parametrize("small", [True, False])
+def test_a_group_image_is_served_whatever_the_pin(world: World, small: bool) -> None:
+    file = group_saved(world, small)
+    world.pin.change("site", "123456")
+    world.login()
+    shown = world.call("GET", f"/admin/api/group-logos/{file}")
+    assert (shown.status, shown.body, shown.content_type) == (200, PNG, "image/png")
+    assert ("Content-Security-Policy", "sandbox") in shown.headers
+
+
+def test_a_group_image_needs_a_session(world: World) -> None:
+    file = group_saved(world, small=True)
+    assert world.call("GET", f"/admin/api/group-logos/{file}").status == 401
+
+
+@pytest.mark.parametrize(
+    "name", ["../t.db", "g0123456789abcdef.png", "G.png", "x", "g0123%2F.png", "a/b"]
+)
+def test_a_group_image_name_must_be_a_stored_one(world: World, name: str) -> None:
+    group_saved(world, small=True)
+    world.login()
+    assert world.call("GET", f"/admin/api/group-logos/{name}").status == 404
+
+
+def test_without_logos_there_are_no_group_images(tmp_path: Path) -> None:
+    made = World(tmp_path, logos=False)
+    try:
+        file = group_saved(made, small=True)
+        made.login()
+        assert json_of(made.call("GET", "/admin/api/config"))["group_images"] == {}
+        assert made.call("GET", f"/admin/api/group-logos/{file}").status == 404
+    finally:
+        made.close()
 
 
 def test_a_preview_names_an_absent_group_image_blob(world: World) -> None:

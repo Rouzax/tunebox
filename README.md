@@ -363,6 +363,12 @@ seconds), without a restart.
   (`default_channel`) clears that setting; the player then starts on the
   first station, and the message says so.
 - A group can be deleted once it has no stations.
+- A group's pencil opens its form: its name and an image, either a link
+  (tunebox downloads it after you save) or a file you upload there. The
+  image shows beside the group's heading once it is downloaded. In the
+  player, the channel page then opens on group tiles when there are two
+  or more groups. A PNG gives the lightest tiles. Renaming a group keeps
+  its image; clearing the field removes it.
 - From 16 stations on, the list folds by group: tap a group's name to open
   or fold it (a folded group shows how many stations it has and how many
   are off), or use **Open all** and **Fold all**. The browser remembers
@@ -952,6 +958,7 @@ is reported at startup instead of being ignored.
 | Key | Required | Meaning |
 |---|---|---|
 | `name` | yes | A group heading. Without `[[groups]]` the groups are the ones the stations name, in the order they first appear. With it, list every group a station names, in the order to show them; a group may have no stations yet. An export always lists them. |
+| `image` | no | The group's image for its tile in the player: an `https://` address or an upload from the admin panel (`blob:` and 64 characters), as for a station's `logo`. A PNG gives the lightest tiles. |
 
 `[[channels]]`
 

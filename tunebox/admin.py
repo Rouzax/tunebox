@@ -49,7 +49,7 @@ from tunebox.config import (
 from tunebox.disk import has_room
 from tunebox.http_headers import single
 from tunebox.limits import Once, network
-from tunebox.logos import CONTENT_TYPES
+from tunebox.logos import CONTENT_TYPES, Logos, group_key
 from tunebox.logs import event
 from tunebox.paths import inside
 from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, PinStale, read_cookie
@@ -247,6 +247,7 @@ class Admin:
         blobs: Blobs,
         free_space: Callable[[], int | None],
         checks: StreamChecks,
+        logos: Logos | None = None,
         usage: Usage | None = None,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
@@ -254,13 +255,15 @@ class Admin:
     ) -> None:
         """pin is the listening PIN the settings page sets; apply reloads the
         running channels after a change; samples gives recent titles that
-        new title rules are tried on."""
+        new title rules are tried on; logos holds the downloaded group
+        images the Stations page shows."""
         self._accounts = accounts
         self._pin = pin
         self._settings = settings
         self._apply = apply
         self._samples = samples
         self._blobs = blobs
+        self._logos = logos
         self._free = free_space
         self._usage = usage
         self._checks = checks
@@ -298,6 +301,7 @@ class Admin:
             ("POST", "import"): Route(self._import, body=MAX_STATE_BODY, code=True),
             ("POST", "logos"): Route(self._upload, body=MAX_BLOB, types=UPLOAD_TYPES),
             ("GET", "logos/{part}"): Route(self._blob),
+            ("GET", "group-logos/{part}"): Route(self._group_logo),
             ("GET", "account"): Route(self._account),
             ("POST", "account/reauth"): Route(self._reauth),
             ("POST", "account/password"): Route(self._password, code=True),
@@ -670,8 +674,28 @@ class Admin:
             "defaults": DEFAULTS,
         }
         return _json(
-            200, {"version": version, "state": json.loads(state_to_json(state)), "schema": schema}
+            200,
+            {
+                "version": version,
+                "state": json.loads(state_to_json(state)),
+                "schema": schema,
+                "group_images": self._group_images(state),
+            },
         )
+
+    def _group_images(self, state: ConfigState) -> dict[str, str]:
+        """The panel's address of each group image downloaded so far, the
+        tile copy where there is one. The /logos/ addresses answer to the
+        listening PIN, which the panel does not hold."""
+        if self._logos is None:
+            return {}
+        shown: dict[str, str] = {}
+        for name in state.group_images:
+            key = group_key(name)
+            path = self._logos.group_path_for(key, small=True) or self._logos.group_path_for(key)
+            if path is not None:
+                shown[name] = "/admin/api/group-logos/" + path.rsplit("/", 1)[-1]
+        return shown
 
     def _save(self, request: Request, session: Session) -> Response:
         payload = _object(request)
@@ -799,6 +823,24 @@ class Admin:
             return _error(404, "not_found")
         # The blob is the uploader's bytes, an SVG may carry script: sandbox
         # keeps it inert even when opened as a page of its own.
+        return Response(
+            200,
+            found.read_bytes(),
+            CONTENT_TYPES[found.suffix[1:]],
+            (("Content-Security-Policy", "sandbox"),),
+        )
+
+    def _group_logo(self, request: Request, _session: Session) -> Response:
+        name = request.path.rsplit("/", 1)[-1]
+        if self._logos is None:
+            return _error(404, "not_found")
+        # The tile copy and a PNG original share a name; the copy is the
+        # one _group_images hands out.
+        found = self._logos.group_file(name, small=True) or self._logos.group_file(name)
+        if found is None:
+            return _error(404, "not_found")
+        # Downloaded from an address the admin typed; an SVG may carry
+        # script, so it stays inert even when opened as a page of its own.
         return Response(
             200,
             found.read_bytes(),
