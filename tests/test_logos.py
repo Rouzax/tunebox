@@ -619,6 +619,24 @@ def test_a_renamed_group_copies_instead_of_downloading(tmp_path: Path) -> None:
     assert left == [f"{new}.png", f"{new}.png", f"{new}.url"]
 
 
+def test_a_rename_rebuilds_a_tile_older_than_its_image(tmp_path: Path) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: big_png(1000)), blob_store(tmp_path / "b"))
+    old, new = group_key("Old"), group_key("New")
+    logos.request_group(old, GROUP_URL)
+    drain(logos)
+    # A tile left behind by a failed write: older than the image it stands for.
+    image = tmp_path / "groups" / f"{old}.png"
+    stale = tmp_path / "groups" / "small" / f"{old}.png"
+    stale.write_bytes(b"stale tile")
+    when = image.stat().st_mtime_ns - 10**9
+    os.utime(stale, ns=(when, when))
+    logos.request_group(new, GROUP_URL, copy_from=old)
+    drain(logos)
+    tile = logos.group_file(f"{new}.png", small=True)
+    assert tile is not None
+    assert png_size(tile.read_bytes()) == (GROUP_SMALL_PX, GROUP_SMALL_PX)
+
+
 def test_a_rename_downloads_when_there_is_nothing_to_copy(tmp_path: Path) -> None:
     http = FakeHttp(lambda _url: PNG)
     logos = Logos(tmp_path, http, blob_store(tmp_path / "b"))
