@@ -13,7 +13,7 @@ from typing import Any, Literal, cast
 
 from tunebox.http import HttpError, HttpGet
 from tunebox.logs import event
-from tunebox.matching import Candidate, base_title, best_match
+from tunebox.matching import Candidate, base_title, best_match, lead_artist, search_names
 from tunebox.tracks import Track, norm
 
 log = logging.getLogger(__name__)
@@ -128,29 +128,42 @@ class Catalogs:
         return result
 
     def _deezer_song(self, track: Track, failures: list[str]) -> Found | None:
+        names = search_names(track.artists)
         first, base = track.artists[0], base_title(track.title)
         queries = [f'artist:"{first}" track:"{track.title}"']
         if base != track.title:
             queries.append(f'artist:"{first}" track:"{base}"')
-        queries.append(f"{first} {base}")
+        # A duet sent as one name ("AVICII & ALOE BLACC") is searched loosely
+        # by its first-named artist first: on the full name Deezer ranks
+        # songs by the second-named one, covers and tributes highest.
+        lead = lead_artist(first)
+        queries.extend(dict.fromkeys((f"{lead} {base}", f"{first} {base}")))
         for q in queries:
             url = f"{DEEZER}/search?" + urllib.parse.urlencode({"q": q, "limit": 10})
             data = self._json(url, self._deezer, failures)
             candidates = [
                 Candidate(
-                    _text(i, "artist", "name"), _text(i, "title"), _text(i, "album", "cover_xl")
+                    _text(i, "artist", "name"),
+                    _text(i, "title"),
+                    _text(i, "album", "cover_xl"),
+                    _text(i, "album", "title"),
                 )
                 for i in _items(data, "data")
             ]
-            if found := best_match(track.artists, track.title, candidates):
+            if found := best_match(names, track.title, candidates):
                 return Found(found.image, "album", f"deezer: {found.artist} - {found.title}")
         return None
 
     def _itunes_song(self, track: Track, failures: list[str]) -> Found | None:
+        names = search_names(track.artists)
         first, base = track.artists[0], base_title(track.title)
-        terms = [f"{first} {track.title}"]
-        if base != track.title:
-            terms.append(f"{first} {base}")
+        # The first-named artist first, as on Deezer; the full name stays as
+        # the fallback for a band whose name holds "&" ("YEARS & YEARS").
+        terms = [
+            f"{name} {title}"
+            for name in dict.fromkeys((lead_artist(first), first))
+            for title in dict.fromkeys((track.title, base))
+        ]
         for term in terms:
             params = {"term": term, "media": "music", "entity": "song", "limit": 10}
             url = f"{ITUNES}?" + urllib.parse.urlencode(params)
@@ -160,10 +173,11 @@ class Catalogs:
                     _text(i, "artistName"),
                     _text(i, "trackName"),
                     _text(i, "artworkUrl100").replace("100x100bb", "1000x1000bb"),
+                    _text(i, "collectionName"),
                 )
                 for i in _items(data, "results")
             ]
-            if found := best_match(track.artists, track.title, candidates):
+            if found := best_match(names, track.title, candidates):
                 return Found(found.image, "album", f"itunes: {found.artist} - {found.title}")
         return None
 
