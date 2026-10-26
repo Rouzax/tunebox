@@ -1,4 +1,4 @@
-import {groupChannels, mosaicFor, streamLabel, tilesFor} from './channels.js';
+import {groupChannels, mosaicFor, openGroupAfter, streamLabel, tilesFor} from './channels.js';
 import {coverFor, nextCover, timeAgo} from './tracks.js';
 
 export const PAGES = ['main', 'history', 'channels', 'viz'];
@@ -183,10 +183,8 @@ export function bindPages(app) {
     function renderChannels() {
         const tiles = tilesFor(app.channels);
         const listed = groupChannels(app.channels);
-        const open = tiles && listed.find((group) => group.name !== null && group.name === openGroup);
-        if (!open) {
-            openGroup = null;
-        }
+        openGroup = openGroupAfter(app.channels, openGroup);
+        const open = openGroup !== null && listed.find((group) => group.name === openGroup);
         let content;
         if (!tiles) {
             content = listed.map((group) => {
