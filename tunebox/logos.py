@@ -317,19 +317,26 @@ class Logos:
 
     def _copy_group(self, old: str, new: str, value: str) -> None:
         """Copies old's image and tile copy to new. The tile is written after
-        the image, so it is newer and _make_small_for keeps it."""
+        the image, so it is newer and _make_small_for keeps it; a tile older
+        than old's image (an earlier small-copy write failed) would then pass
+        for current, so it is left for _make_small_for to rebuild."""
         saved = _saved_image(self._groups, old, EXTENSIONS)
         if saved is None:
             return
         ext = saved[0]
+        image = self._groups / f"{old}.{ext}"
+        tile = self._groups / "small" / f"{old}.png"
         try:
-            body = (self._groups / f"{old}.{ext}").read_bytes()
+            body = image.read_bytes()
         except OSError as error:
             event(log, logging.WARNING, "logo_failed", group=new, error=str(error))
             return
+        try:
+            tile_current = tile.stat().st_mtime_ns >= image.stat().st_mtime_ns
+        except OSError:
+            tile_current = False
         self._store_for(new, body, ext, value, self._groups)
-        tile = self._groups / "small" / f"{old}.png"
-        if not tile.is_file() or not self._current_for(new, value, self._groups):
+        if not tile_current or not self._current_for(new, value, self._groups):
             return
         partial = self._groups / "small" / f".{new}.tmp"
         try:
