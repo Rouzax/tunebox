@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createEmitter} from '../js/events.js';
-import {createPlayer, pageVolume, resumesAfterPause} from '../js/player.js';
+import {connectionUrl, createPlayer, pageVolume, resumesAfterPause} from '../js/player.js';
 
 function fakeTimers() {
     let now = 0;
@@ -115,7 +115,7 @@ test('play loads, then plays when audio flows', () => {
     const {made, log, player} = harness();
     player.play('https://example.invalid/a.aac');
     assert.equal(made[0].crossOrigin, 'anonymous');
-    assert.equal(made[0].src, 'https://example.invalid/a.aac');
+    assert.match(made[0].src, /^https:\/\/example\.invalid\/a\.aac\?tb=\d+$/);
     made[0].fire('playing');
     assert.deepEqual(log, ['loading', 'audio', 'playing']);
 });
@@ -312,7 +312,7 @@ test('a brief pause from outside resumes at live by itself', () => {
     assert.equal(made[0].src, '');
     timers.advance(2000);
     assert.equal(made[0].plays, 2);
-    assert.equal(made[0].src, 'https://example.invalid/a.aac');
+    assert.match(made[0].src, /^https:\/\/example\.invalid\/a\.aac\?tb=\d+$/);
     made[0].fire('playing');
     assert.equal(player.state(), 'playing');
     assert.ok(!log.includes('interrupted'));
@@ -399,7 +399,7 @@ test('stop pauses the stream instead of dropping it, and play starts again at li
     made[0].currentTime = 30;
     player.stop();
     assert.equal(made[0].paused, true);
-    assert.equal(made[0].src, 'https://example.invalid/a.aac');
+    assert.match(made[0].src, /^https:\/\/example\.invalid\/a\.aac\?tb=\d+$/);
     assert.ok(!log.includes('interrupted'));
     player.play('https://example.invalid/a.aac');
     assert.equal(made.length, 1);
@@ -434,4 +434,19 @@ test('the page level applies only while its slider is shown', () => {
     // the device's own volume is the control there.
     assert.equal(pageVolume(30, false), 1);
     assert.equal(pageVolume(50, false), 1);
+});
+
+test('each connection asks for an address of its own', () => {
+    assert.equal(connectionUrl('https://example.invalid/a.aac', 1234), 'https://example.invalid/a.aac?tb=1234');
+    assert.equal(connectionUrl('https://example.invalid/live?id=7', 5), 'https://example.invalid/live?id=7&tb=5');
+    assert.equal(connectionUrl('https://example.invalid/a.aac#x', 5), 'https://example.invalid/a.aac?tb=5#x');
+    const {timers, made, player} = harness();
+    player.play('https://example.invalid/a.aac');
+    const first = made[0].src;
+    made[0].fire('playing');
+    timers.advance(1000);
+    made[0].fire('error');
+    timers.advance(2000);
+    assert.notEqual(made[0].src, first);
+    assert.match(made[0].src, /^https:\/\/example\.invalid\/a\.aac\?tb=\d+$/);
 });
