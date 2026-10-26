@@ -276,10 +276,14 @@ export function render(root, ctx, id) {
     const NAMED = [['source', 'source'], ['rules', 'rules'], ['stream', 'streams'],
         ['delay', 'timing'], ['poll_interval', 'timing'], ['history_size', 'timing']];
     function reveal(message) {
-        const invalid = form.querySelector(':invalid');
+        // The server names the field it refused, as in
+        // "channels[3] (owr).rules.played_by: ...": the form's own field names.
+        const path = /channels\[\d+\](?: \([^)]*\))?\.([\w.]+)/.exec(message || '');
+        const named = path && form.elements.namedItem(path[1]);
+        const invalid = named instanceof HTMLElement && named.name ? named : form.querySelector(':invalid');
         Object.keys(sections).forEach((key) => {
             const node = sections[key].node;
-            if (node.querySelector(':invalid') || NAMED.some(([word, target]) => target === key && (message || '').indexOf(word) >= 0)) {
+            if (node.contains(invalid) || node.querySelector(':invalid') || NAMED.some(([word, target]) => target === key && (message || '').indexOf(word) >= 0)) {
                 node.open = true;
             }
         });

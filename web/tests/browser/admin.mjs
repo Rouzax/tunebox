@@ -870,6 +870,9 @@ async function run() {
             if (!(await evaluate(`document.querySelector('form.edit [name="rules.played_by"]').closest('details').open`))) {
                 return 'the folded Title rules section stayed shut on the refusal';
             }
+            if ((await evaluate(`document.activeElement && document.activeElement.name`)) !== 'rules.played_by') {
+                return `the refused pattern did not get focus (focus on ${await evaluate(`document.activeElement ? document.activeElement.outerHTML.slice(0, 80) : 'none'`)}; message: ${await evaluate(`document.querySelector('form.edit p.message').textContent`)})`;
+            }
             // The refused pattern is still in the form, unsaved.
             await evaluate(`[...document.querySelectorAll('form.edit .actions button')].find((b) => b.textContent.trim() === 'Cancel').click()`);
             await until(`document.querySelector('form.edit .confirm')`);
