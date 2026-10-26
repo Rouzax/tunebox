@@ -147,12 +147,15 @@ class Blobs:
         return None
 
     def missing(self, state: ConfigState) -> str | None:
-        """The first station logo that names a blob that is not stored, with
-        its field, for a save to refuse."""
+        """The first station or group logo that names a blob that is not
+        stored, with its field, for a save to refuse."""
         for index, row in enumerate(state.channels):
             logo = row.doc.get("logo")
             if isinstance(logo, str) and logo.startswith("blob:") and self.path(logo) is None:
                 return f"channels[{index}].logo: no uploaded logo {logo}"
+        for name, image in sorted(state.group_images.items()):
+            if image.startswith("blob:") and self.path(image) is None:
+                return f"group_images.{name}: no uploaded logo {image}"
         return None
 
     def collect(self, keep: set[str], older_than_s: float) -> int:
