@@ -349,11 +349,12 @@ def test_logos_of_a_station_removed_while_stopped_are_deleted(tmp_path: Path) ->
     (folder / "gone.png").write_bytes(b"x")
     (folder / "gone.url").write_text("https://example.invalid/g.png", encoding="utf-8")
     (folder / "a.png").write_bytes(b"x")
+    (folder / "a.url").write_text("https://example.invalid/a.png", encoding="utf-8")
     harness = Harness(tmp_path)
     real = Logos(folder, FakeHttp(lambda _url: b""), blob_store(tmp_path / "blobs"))
     harness.runtime = Runtime(harness.settings, harness.make, real)
-    harness.commit(rows(doc("a")))
+    harness.commit(rows(doc("a", logo="https://example.invalid/a.png")))
     harness.runtime.apply()
     while real.run_once():
         pass
-    assert sorted(p.name for p in folder.iterdir()) == ["a.png"]
+    assert sorted(p.name for p in folder.iterdir()) == ["a.png", "a.url"]
