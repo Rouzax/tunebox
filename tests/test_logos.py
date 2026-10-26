@@ -502,3 +502,35 @@ def test_forget_all_except_copes_with_a_missing_folder(tmp_path: Path) -> None:
     logos = Logos(tmp_path / "none", FakeHttp(lambda _url: PNG), blob_store(tmp_path / "blobs"))
     logos.forget_all_except(set())
     assert not logos.run_once()
+
+
+def test_a_cleared_logo_leaves_no_files(tmp_path: Path) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: BIG_PNG), blob_store(tmp_path / "blobs"))
+    logos.refresh(channel_config(logo=URL))
+    (tmp_path / ".owr.tmp").write_bytes(b"partial")
+    assert logos.path_for("owr") is not None
+    assert (tmp_path / "small" / "owr.png").exists()
+    before = logos.revision()
+    logos.refresh(channel_config(logo=None))
+    assert logos.path_for("owr") is None
+    assert logos.path_for("owr", small=True) is None
+    left = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*") if p.is_file())
+    assert [name for name in left if "owr" in name] == []
+    assert logos.revision() != before
+
+
+def test_a_cleared_logo_that_cannot_be_removed_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    logos = Logos(tmp_path, FakeHttp(lambda _url: PNG), blob_store(tmp_path / "blobs"))
+    logos.refresh(channel_config(logo=URL))
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    logos.refresh(channel_config(logo=None))
+    failed = [r for r in caplog.records if r.getMessage() == "logo_failed"]
+    assert failed
+    assert "cleared" in {getattr(r, "fields", {}).get("kind") for r in failed}
+    assert all(getattr(r, "fields", {}).get("channel") == "owr" for r in failed)

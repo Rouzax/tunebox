@@ -3,11 +3,14 @@ changes, then served by tunebox, so listeners' browsers never contact the
 logo host. A large PNG also gets a small copy in small/, for the station
 list: logo hosts often offer 512 px for an icon shown at about 40, and on
 mobile data the list would cost megabytes. The original stays for the cover.
-A channel's default_image is downloaded the same way into default/."""
+A channel's default_image is downloaded the same way into default/. Each
+image is one target (a key, its value and a root folder with its own small/);
+a cleared value leaves no files."""
 
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import re
 import secrets
@@ -92,6 +95,44 @@ class _Forget:
     channel_id: str
 
 
+@dataclass(frozen=True)
+class _Target:
+    """One image kept in step with its configured value: key.<ext> and
+    key.url in root, and with small_px a PNG copy at most that size in
+    root/small. A None value means the image is cleared."""
+
+    key: str
+    value: str | None
+    root: Path
+    small_px: int | None
+
+
+def _image_names(key: str) -> tuple[str, ...]:
+    return (*(f"{key}.{ext}" for ext in EXTENSIONS), f"{key}.url")
+
+
+def _target_paths(key: str, root: Path) -> list[Path]:
+    """Every file a target can leave: the image with its recorded source,
+    the small copy, and a partial file a crash left in either folder."""
+    return [
+        *(root / name for name in _image_names(key)),
+        root / "small" / f"{key}.png",
+        *(folder / f".{key}.tmp" for folder in (root, root / "small")),
+    ]
+
+
+def _saved_image(folder: Path, key: str, extensions: Collection[str]) -> tuple[str, int] | None:
+    """The extension and modification time of key's image in folder."""
+    for ext in extensions:
+        try:
+            saved = (folder / f"{key}.{ext}").stat()
+        except OSError:
+            continue
+        if stat.S_ISREG(saved.st_mode):
+            return ext, saved.st_mtime_ns
+    return None
+
+
 class Logos:
     def __init__(self, directory: Path, http_get: HttpGet, blobs: Blobs) -> None:
         self._dir = directory
@@ -123,21 +164,22 @@ class Logos:
             return self._dir / "default"
         return self._dir / "small" if small else self._dir
 
+    def _subject(self, key: str, root: Path) -> dict[str, str]:
+        """The field naming a target in events: station logos and default
+        images are named by their channel."""
+        return {"channel": key}
+
     def path_for(self, channel_id: str, small: bool = False, default: bool = False) -> str | None:
         """The logo's (or, with default, the default image's) address,
         versioned by the file's modification time so it can be cached for
         good: a replaced file gets a new address."""
         folder = self._folder(small, default)
         prefix = "/logos/default" if default else "/logos/small" if small else "/logos"
-        for ext in ("png",) if small else EXTENSIONS:
-            try:
-                saved = (folder / f"{channel_id}.{ext}").stat()
-            except OSError:
-                continue
-            if not stat.S_ISREG(saved.st_mode):
-                continue
-            return f"{prefix}/{channel_id}.{ext}?v={saved.st_mtime_ns:x}"
-        return None
+        saved = _saved_image(folder, channel_id, ("png",) if small else EXTENSIONS)
+        if saved is None:
+            return None
+        ext, mtime_ns = saved
+        return f"{prefix}/{channel_id}.{ext}?v={mtime_ns:x}"
 
     def file(self, name: str, small: bool = False, default: bool = False) -> Path | None:
         if not _NAME.fullmatch(name) or (small and not name.endswith(".png")):
@@ -167,8 +209,8 @@ class Logos:
 
     def refresh(self, channel: ChannelConfig) -> None:
         """Downloads the logo when its address is new, or copies an uploaded
-        one, and keeps the small copy in step; the default image is kept in
-        step the same way."""
+        one, and keeps the small copy in step; a cleared logo leaves no
+        files. The default image is kept in step the same way."""
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
         except OSError as error:
@@ -176,13 +218,26 @@ class Logos:
                 self._unavailable_reported = True
                 event(log, logging.WARNING, "logos_unavailable", error=str(error))
             return
-        if channel.logo and not self._current(channel.id, channel.logo, self._dir, default=False):
-            if BLOB_REF.fullmatch(channel.logo):
-                self._copy_blob(channel.id, channel.logo)
-            else:
-                self._fetch(channel.id, channel.logo, self._dir)
-        self._make_small(channel.id)
+        self._refresh_target(_Target(channel.id, channel.logo, self._dir, SMALL_PX))
         self._refresh_default(channel)
+
+    def _refresh_target(self, target: _Target) -> None:
+        """Brings the target's files in step with its value: none at all for
+        a cleared one, else the image copied or downloaded when its source
+        changed, and the small copy made or dropped to match."""
+        if not target.value:
+            # Most stations have no logo; a refresh of one touches nothing.
+            paths = _target_paths(target.key, target.root)
+            if any(os.path.lexists(path) for path in paths):
+                self._remove_target_files(target.key, target.root, kind="cleared")
+            return
+        if not self._current_for(target.key, target.value, target.root):
+            if BLOB_REF.fullmatch(target.value):
+                self._copy_blob_for(target.key, target.value, target.root)
+            else:
+                self._fetch_for(target.key, target.value, target.root)
+        if target.small_px is not None:
+            self._make_small_for(target.key, target.root, target.small_px)
 
     def _refresh_default(self, channel: ChannelConfig) -> None:
         """Keeps default/<id>.* in step with default_image: downloaded for
@@ -191,15 +246,14 @@ class Logos:
         value = channel.default_image
         folder = self._folder(False, default=True)
         if value is not None and value.startswith("https://"):
-            if not self._current(channel.id, value, folder, default=True):
-                self._fetch(channel.id, value, folder)
+            self._refresh_target(_Target(channel.id, value, folder, None))
             return
         if value is not None and not _is_local_path(value):
             key = (channel.id, value)
             if key not in self._unusable_reported:
                 self._unusable_reported.add(key)
                 event(log, logging.WARNING, "default_image_unusable", channel=channel.id)
-        for name in (*(f"{channel.id}.{ext}" for ext in EXTENSIONS), f"{channel.id}.url"):
+        for name in _image_names(channel.id):
             try:
                 if _unlink(folder / name):
                     self._changed()
@@ -238,17 +292,14 @@ class Logos:
             self.forget(channel_id)
 
     def _remove_files(self, channel_id: str) -> None:
-        """The logo and its small copy, and the default image, each with its
-        recorded source, and a partial file a crash left. A missing file is fine."""
-        names = (*(f"{channel_id}.{ext}" for ext in EXTENSIONS), f"{channel_id}.url")
-        paths = [
-            *(self._dir / name for name in names),
-            self._dir / "small" / f"{channel_id}.png",
-            *(self._folder(False, default=True) / name for name in names),
-            *(folder / f".{channel_id}.tmp" for folder in (self._dir, self._dir / "small")),
-            self._folder(False, default=True) / f".{channel_id}.tmp",
-        ]
-        for path in paths:
+        """The logo and the default image, with everything each leaves."""
+        self._remove_target_files(channel_id, self._dir)
+        self._remove_target_files(channel_id, self._folder(False, default=True))
+
+    def _remove_target_files(self, key: str, root: Path, kind: str = "forget") -> None:
+        """Removes every file the target can leave; a missing file is fine.
+        A file that stays is logged with kind."""
+        for path in _target_paths(key, root):
             try:
                 if _unlink(path):
                     self._changed()
@@ -257,16 +308,17 @@ class Logos:
                     log,
                     logging.WARNING,
                     "logo_failed",
-                    channel=channel_id,
-                    kind="forget",
+                    **self._subject(key, root),
+                    kind=kind,
                     error=str(error),
                 )
 
-    def _make_small(self, channel_id: str) -> None:
-        """Keeps small/<id>.png in step with the logo: made when the logo is
-        a PNG larger than SMALL_PX and newer than the copy, removed otherwise."""
-        original = self._dir / f"{channel_id}.png"
-        copy = self._dir / "small" / f"{channel_id}.png"
+    def _make_small_for(self, key: str, root: Path, px: int) -> None:
+        """Keeps small/<key>.png in step with the image: made when the image
+        is a PNG larger than px and newer than the copy, removed otherwise."""
+        subject = self._subject(key, root)
+        original = root / f"{key}.png"
+        copy = root / "small" / f"{key}.png"
         try:
             if not original.is_file():
                 if _unlink(copy):
@@ -276,12 +328,12 @@ class Logos:
                 return
             body = original.read_bytes()
         except OSError as error:
-            event(log, logging.WARNING, "logo_not_shrunk", channel=channel_id, error=str(error))
+            event(log, logging.WARNING, "logo_not_shrunk", **subject, error=str(error))
             return
         try:
-            small = shrink(body, SMALL_PX)
+            small = shrink(body, px)
         except PngError as error:
-            event(log, logging.WARNING, "logo_not_shrunk", channel=channel_id, error=str(error))
+            event(log, logging.WARNING, "logo_not_shrunk", **subject, error=str(error))
             small = None
         try:
             if small is None:
@@ -289,78 +341,88 @@ class Logos:
                     self._changed()
                 return
             copy.parent.mkdir(exist_ok=True)
-            partial = copy.parent / f".{channel_id}.tmp"
+            partial = copy.parent / f".{key}.tmp"
             partial.write_bytes(small)
             partial.replace(copy)
             self._changed()
         except OSError as error:
-            event(log, logging.WARNING, "logo_not_shrunk", channel=channel_id, error=str(error))
+            event(log, logging.WARNING, "logo_not_shrunk", **subject, error=str(error))
             return
         event(
             log,
             logging.INFO,
             "logo_shrunk",
-            channel=channel_id,
+            **subject,
             bytes=len(body),
             small_bytes=len(small),
         )
 
-    def _current(self, channel_id: str, url: str, folder: Path, default: bool) -> bool:
+    def _current_for(self, key: str, value: str, root: Path) -> bool:
+        """True when root holds key's image and it came from value."""
         try:
-            saved = (folder / f"{channel_id}.url").read_text(encoding="utf-8")
+            saved = (root / f"{key}.url").read_text(encoding="utf-8")
         except OSError:
             return False
-        return saved == url and self.path_for(channel_id, default=default) is not None
+        return saved == value and _saved_image(root, key, EXTENSIONS) is not None
 
-    def _copy_blob(self, channel_id: str, ref: str) -> None:
+    def _copy_blob_for(self, key: str, ref: str, root: Path) -> None:
+        subject = self._subject(key, root)
         source = self._blobs.path(ref)
         if source is None:
-            event(log, logging.WARNING, "logo_missing", channel=channel_id, logo=ref)
+            event(log, logging.WARNING, "logo_missing", **subject, logo=ref)
             return
         try:
             body = source.read_bytes()
         except OSError as error:
-            event(log, logging.WARNING, "logo_failed", channel=channel_id, error=str(error))
+            event(log, logging.WARNING, "logo_failed", **subject, error=str(error))
             return
         kind = source.suffix.removeprefix(".")
         if sniff(body) != kind:
-            event(log, logging.WARNING, "logo_rejected", channel=channel_id, bytes=len(body))
+            event(log, logging.WARNING, "logo_rejected", **subject, bytes=len(body))
             return
-        self._store(channel_id, body, kind, ref, self._dir)
+        self._store_for(key, body, kind, ref, root)
 
-    def _fetch(self, channel_id: str, url: str, folder: Path) -> None:
+    def _fetch_for(self, key: str, url: str, root: Path) -> None:
+        subject = self._subject(key, root)
         try:
             body = self._get(url)
         except HttpError as error:
-            event(log, logging.WARNING, "logo_failed", channel=channel_id, error=str(error))
+            event(log, logging.WARNING, "logo_failed", **subject, error=str(error))
             return
         kind = sniff(body)
         if kind is None:
-            event(log, logging.WARNING, "logo_rejected", channel=channel_id, bytes=len(body))
+            event(log, logging.WARNING, "logo_rejected", **subject, bytes=len(body))
             return
-        self._store(channel_id, body, kind, url, folder)
+        self._store_for(key, body, kind, url, root)
 
-    def _store(self, channel_id: str, body: bytes, kind: str, source: str, folder: Path) -> None:
-        """Makes body the channel's logo (or default image, by folder) and
-        records source (an address or a blob reference) as what it came from."""
+    def _store_for(self, key: str, body: bytes, kind: str, source: str, root: Path) -> None:
+        """Makes body key's image in root and records source (an address or
+        a blob reference) as what it came from."""
         visible = False
         try:
-            folder.mkdir(exist_ok=True)
-            partial = folder / f".{channel_id}.tmp"
+            root.mkdir(exist_ok=True)
+            partial = root / f".{key}.tmp"
             partial.write_bytes(body)
             # From here a served file may disappear or be replaced.
             visible = True
             for other in EXTENSIONS:
                 if other != kind:
-                    (folder / f"{channel_id}.{other}").unlink(missing_ok=True)
-            partial.replace(folder / f"{channel_id}.{kind}")
-            (folder / f"{channel_id}.url").write_text(source, encoding="utf-8")
+                    (root / f"{key}.{other}").unlink(missing_ok=True)
+            partial.replace(root / f"{key}.{kind}")
+            (root / f"{key}.url").write_text(source, encoding="utf-8")
         except OSError as error:
-            event(log, logging.WARNING, "logo_failed", channel=channel_id, error=str(error))
+            event(log, logging.WARNING, "logo_failed", **self._subject(key, root), error=str(error))
             return
         finally:
             # Also after a failure past that point; before it nothing a player
             # can see has changed, so the revision stays.
             if visible:
                 self._changed()
-        event(log, logging.INFO, "logo_saved", channel=channel_id, kind=kind, bytes=len(body))
+        event(
+            log,
+            logging.INFO,
+            "logo_saved",
+            **self._subject(key, root),
+            kind=kind,
+            bytes=len(body),
+        )
