@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
     addGroup, addStation, decodeHashPart, deleteGroup, deleteStation, diffStates, duplicateStation, exportName, historyLabel, historyTarget, importSummary, logoPreview, moveGroup,
-    matchesStation, groupSummary, moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setSettings, stationsByGroup, tickets, validId,
+    matchesStation, groupSummary, moveStation, newStation, renameGroup, replaceStation, saveMessage, setEnabled, setGroupImage, setSettings, stationsByGroup, tickets, validId,
 } from '../../web_admin/js/state.js';
 
 function base() {
@@ -232,4 +232,57 @@ test('a folded group counts its stations and those that are off', () => {
     const off = {...newStation('b', 'B', 'G'), enabled: false};
     assert.equal(groupSummary([on]), '1 station');
     assert.equal(groupSummary([on, off, off]), '3 stations · 2 off');
+});
+
+test('every state builder keeps the group images', () => {
+    const images = {G: 'https://x.test/g.png'};
+    const state = {...base(), group_images: images};
+    for (const next of [
+        setSettings(state, {defaults: {}, latitude: undefined, longitude: undefined, defaultChannel: ''}),
+        addStation(state, newStation('z', 'Z', 'G')),
+        replaceStation(state, 'a', {...state.channels[0], group: null}),
+        duplicateStation(state, 'a').state,
+        deleteStation(state, 'a').state,
+        moveStation(state, 'a', 1),
+        setEnabled(state, 'a', false).state,
+        addGroup(state, 'New'),
+        moveGroup(state, 'G', 1),
+    ]) {
+        assert.deepEqual(next.group_images, images);
+    }
+});
+
+test('renaming a group moves its image; deleting drops it', () => {
+    const state = {...base(), groups: ['G', 'H', 'E'], group_images: {G: 'https://x.test/g.png', E: 'https://x.test/e.png'}};
+    assert.deepEqual(renameGroup(state, 'G', 'Gee').group_images, {Gee: 'https://x.test/g.png', E: 'https://x.test/e.png'});
+    assert.deepEqual(deleteGroup(state, 'E').group_images, {G: 'https://x.test/g.png'});
+});
+
+test('a group that keeps its stations keeps its image', () => {
+    const state = {...base(), group_images: {G: 'https://x.test/g.png'}};
+    assert.deepEqual(deleteGroup(state, 'G').group_images, {G: 'https://x.test/g.png'});
+});
+
+test('an image-only change shows in the diff', () => {
+    const before = {...base(), group_images: {}};
+    const after = setGroupImage(before, 'G', 'https://x.test/g.png');
+    assert.deepEqual(diffStates(before, after).map((c) => c.path), ['group_images.G']);
+    assert.deepEqual(setGroupImage(after, 'G', '').group_images, {});
+    assert.deepEqual(setGroupImage(after, 'G', null).group_images, {});
+    assert.deepEqual(setGroupImage(before, 'G', '  blob:ab  ').group_images, {G: 'blob:ab'});
+    assert.deepEqual(before.group_images, {});
+});
+
+test('a group named __proto__ is a plain key, never the prototype', () => {
+    const state = {...base(), groups: ['G', '__proto__'], group_images: {}};
+    const set = setGroupImage(state, '__proto__', 'https://x.test/p.png');
+    assert.equal(Object.getPrototypeOf(set.group_images), Object.prototype);
+    assert.deepEqual(Object.keys(set.group_images), ['__proto__']);
+    const renamed = renameGroup(set, '__proto__', 'P');
+    assert.deepEqual(renamed.group_images, {P: 'https://x.test/p.png'});
+    const back = renameGroup(renamed, 'P', '__proto__');
+    assert.equal(Object.getPrototypeOf(back.group_images), Object.prototype);
+    assert.deepEqual(Object.keys(back.group_images), ['__proto__']);
+    assert.deepEqual(deleteGroup(back, '__proto__').group_images, {});
+    assert.equal({}.polluted, undefined);
 });

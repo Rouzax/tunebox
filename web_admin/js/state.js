@@ -146,6 +146,20 @@ export function addGroup(state, name) {
     return next;
 }
 
+// The group images with each name passed through rename (null drops it).
+// Built from entries, never by assignment: a group named __proto__ would
+// otherwise set the map's prototype instead of a key.
+function imagesBy(state, rename) {
+    const kept = [];
+    for (const [name, value] of Object.entries(state.group_images || {})) {
+        const to = rename(name);
+        if (to !== null) {
+            kept.push([to, value]);
+        }
+    }
+    return Object.fromEntries(kept);
+}
+
 export function renameGroup(state, old, name) {
     const next = clone(state);
     next.groups = next.groups.map((group) => (group === old ? name : group));
@@ -154,6 +168,7 @@ export function renameGroup(state, old, name) {
             row.group = name;
         }
     });
+    next.group_images = imagesBy(next, (group) => (group === old ? name : group));
     return next;
 }
 
@@ -161,7 +176,17 @@ export function deleteGroup(state, name) {
     const next = clone(state);
     if (!next.channels.some((row) => row.group === name)) {
         next.groups = next.groups.filter((group) => group !== name);
+        next.group_images = imagesBy(next, (group) => (group === name ? null : group));
     }
+    return next;
+}
+
+// An empty value clears the image: the server stores no empty one.
+export function setGroupImage(state, name, value) {
+    const next = clone(state);
+    const image = (value || '').trim();
+    const others = Object.entries(next.group_images || {}).filter(([group]) => group !== name);
+    next.group_images = Object.fromEntries(image ? [...others, [name, image]] : others);
     return next;
 }
 
@@ -189,13 +214,11 @@ function leaves(value, path, out) {
 }
 
 // Stations keyed by id, so a moved station is not reported as changed
-// everywhere; groups and streams compare as whole lists.
+// everywhere; groups and streams compare as whole lists, group images
+// by group name.
 function keyed(state) {
-    const channels = {};
-    for (const row of state.channels) {
-        channels[row.id] = row;
-    }
-    return {defaults: state.defaults, player: state.player, groups: state.groups, channels};
+    const channels = Object.fromEntries(state.channels.map((row) => [row.id, row]));
+    return {defaults: state.defaults, player: state.player, groups: state.groups, channels, group_images: state.group_images || {}};
 }
 
 export function diffStates(before, after) {
@@ -252,7 +275,7 @@ export function setSettings(state, values) {
     if (values.defaultChannel) {
         player.default_channel = values.defaultChannel;
     }
-    return {defaults, player, groups: state.groups, channels: state.channels};
+    return {...state, defaults, player};
 }
 
 // A hash part as text; null when it is not valid percent-encoding, so a

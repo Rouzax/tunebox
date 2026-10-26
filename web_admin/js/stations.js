@@ -1,10 +1,11 @@
 // The station list: one section per group, every change saved at once. A
 // long list folds by group, and the find box narrows it to the stations
 // whose name or id holds the text typed.
-import {button, el} from './dom.js';
+import {button, el, field} from './dom.js';
+import {logoPart} from './logo.js';
 import {
     FOLD_FROM, addGroup, deleteGroup, deleteStation, duplicateStation, groupSummary, matchesStation,
-    moveGroup, moveStation, renameGroup, setEnabled, stationsByGroup,
+    moveGroup, moveStation, renameGroup, setEnabled, setGroupImage, stationsByGroup,
 } from './state.js';
 
 // Which groups are open stays with the browser (per viewer, nothing the
@@ -32,6 +33,12 @@ function storeOpen(open) {
 // The stations without a group are a group of their own here.
 function groupKey(group) {
     return group.name === null ? '' : group.name;
+}
+
+// Own keys only: a group named like an Object property (__proto__,
+// constructor) must not read one from the prototype.
+function own(map, key) {
+    return map && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : null;
 }
 
 function clearedText(id) {
@@ -89,33 +96,73 @@ function stationRow(ctx, row, peers, index, redraw) {
     return item;
 }
 
+// The group's name and image, saved together: the rename goes first, so
+// the image lands on the new name. A refused save draws the list again,
+// as for every change on this page; the browser's own checks catch a
+// malformed link before it is sent.
+function groupForm(ctx, group, redraw) {
+    const nameInput = el('input', {name: 'name', value: group.name, required: true});
+    const imageInput = el('input', {name: 'image', type: 'url', value: own(ctx.config.state.group_images, group.name) || '',
+        placeholder: 'https://', pattern: 'https://.+|blob:[0-9a-f]{64}'});
+    const error = el('p', {class: 'message', role: 'alert', hidden: true});
+    // The save the form asks for: {state, target, done}, or {problem}.
+    function pendingChange() {
+        const name = nameInput.value.trim();
+        const current = ctx.config.state;
+        if (!name) {
+            return {problem: 'The group needs a name.'};
+        }
+        if (current.groups.indexOf(group.name) < 0) {
+            return {problem: `The group ${group.name} was deleted elsewhere in the meantime; nothing was saved.`};
+        }
+        if (name !== group.name && current.groups.indexOf(name) >= 0) {
+            return {problem: `There is already a group named ${name}.`};
+        }
+        const renamed = name === group.name ? current : renameGroup(current, group.name, name);
+        return {state: setGroupImage(renamed, name, imageInput.value), target: name, done: `Saved group ${name}.`};
+    }
+    const logo = logoPart(ctx, imageInput, () => {
+        const change = pendingChange();
+        return change.problem ? null : change;
+    });
+    const form = el('form', {class: 'group-edit', onsubmit: async (event) => {
+        event.preventDefault();
+        const change = pendingChange();
+        error.textContent = change.problem || '';
+        error.hidden = !change.problem;
+        if (!change.problem) {
+            await ctx.save(change.state, change.target, change.done);
+        }
+    }},
+    field('Name', nameInput),
+    field('Image', imageInput, 'Downloaded and served by tunebox, or an image uploaded here. A PNG gives the lightest tiles.'),
+    logo.controls,
+    logo.preview,
+    error,
+    el('div', {class: 'actions'},
+        el('button', {type: 'submit'}, 'Save'),
+        button('close', 'Cancel', () => redraw({}), {class: 'quiet'})));
+    return form;
+}
+
 function groupHeader(ctx, group, position, count, redraw, fold) {
     const state = ctx.config.state;
     if (group.name === null) {
         return el('div', {class: 'group-head'}, fold.toggle('Not in a group'));
     }
-    if (redraw.state.rename === group.name) {
-        const input = el('input', {value: group.name, 'aria-label': 'Group name', required: true});
-        return el('form', {class: 'rename', onsubmit: (event) => {
-            event.preventDefault();
-            const name = input.value.trim();
-            if (name && name !== group.name) {
-                ctx.save(renameGroup(state, group.name, name), name);
-            } else {
-                redraw({});
-            }
-        }}, input,
-        el('button', {type: 'submit'}, 'Rename'),
-        button('close', 'Cancel', () => redraw({}), {class: 'quiet'}));
+    if (redraw.state.group === group.name) {
+        return groupForm(ctx, group, redraw);
     }
+    const image = own(ctx.config.group_images, group.name);
     return el('div', {class: 'group-head'},
+        image ? el('img', {class: 'group-image', src: image, alt: ''}) : null,
         fold.toggle(group.name),
         el('div', {class: 'actions'},
             button('arrow_upward', null, () => ctx.save(moveGroup(state, group.name, -1), group.name),
                 {title: `Move group ${group.name} up`, disabled: position === 0}),
             button('arrow_downward', null, () => ctx.save(moveGroup(state, group.name, 1), group.name),
                 {title: `Move group ${group.name} down`, disabled: position === count - 1}),
-            button('edit', null, () => redraw({rename: group.name}), {title: `Rename group ${group.name}`}),
+            button('edit', null, () => redraw({group: group.name}), {title: `Edit group ${group.name}`}),
             group.rows.length ? null : button('delete', null,
                 () => ctx.save(deleteGroup(state, group.name), group.name),
                 {title: `Delete group ${group.name}`})));
@@ -195,8 +242,8 @@ export function render(root, ctx) {
             shown.forEach((entry) => {
                 const matches = entry.rows.filter((r) => matchesStation(r.row, query));
                 entry.rows.forEach((r) => { r.item.hidden = finding && matches.indexOf(r) < 0; });
-                // A station being renamed, deleted or confirmed keeps its group open.
-                const busy = entry.rows.some((r) => r.row.id === redraw.state.confirm) || redraw.state.rename === entry.group.name;
+                // A group being edited, or a station being deleted, keeps its group open.
+                const busy = entry.rows.some((r) => r.row.id === redraw.state.confirm) || redraw.state.group === entry.group.name;
                 const isOpen = !folding || busy || (finding ? matches.length > 0 : open.has(entry.key));
                 entry.node.hidden = finding && matches.length === 0;
                 entry.body.hidden = !isOpen;

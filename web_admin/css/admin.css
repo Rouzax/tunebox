@@ -244,17 +244,26 @@ select {
     align-items: center;
 }
 
-.add-group,
-.rename {
+.add-group {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
 }
 
-.add-group input,
-.rename input {
+.add-group input {
     flex: 1 1 10rem;
     min-width: 0;
+}
+
+.group-edit {
+    max-width: 36rem;
+}
+
+.group-image {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    object-fit: contain;
 }
 
 .group {

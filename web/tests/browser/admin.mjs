@@ -5,7 +5,7 @@
 // before a PIN change or before showing that station again, confirm account
 // changes with a code, see a listener on the Usage page, rename and delete
 // its device, change the usage settings, export and import the stations,
-// upload a logo, change the password, log out and log in with it,
+// upload a logo, give a group an image, change the password, log out and log in with it,
 // checking after each step
 // that the player's /api/channels follows. Also checks that the pages have no
 // sideways scroll at phone and laptop sizes, and no page or CSP errors.
@@ -2118,6 +2118,62 @@ async function run() {
             }
             await buttonNamed('Discard');
             return (await until(`document.querySelector('#shell .pending').hidden`)) ? null : 'the box stayed after Discard';
+        });
+
+        await step('a group gets an image', async () => {
+            // A group's image is downloaded only while the group has a
+            // station on, so the first station moves into it.
+            if (!(await openPage('#stations', `document.querySelector('form.add-group')`))) {
+                return 'no Add group form';
+            }
+            await evaluate(`document.querySelector('form.add-group input').value = 'Pictured'`);
+            const added = await saveBy('form.add-group button[type=submit]');
+            if (added.indexOf('Saved') < 0) {
+                return `adding the group says: ${added}`;
+            }
+            if (!(await openPage('#edit/first', `document.querySelector('form.edit')`))) {
+                return 'no edit form';
+            }
+            await evaluate(`document.querySelector('form.edit').elements.group.value = 'Pictured'`);
+            await evaluate(`document.querySelector('form.edit').requestSubmit()`);
+            if (!(await until(`location.hash === '#stations' && document.querySelector('button[title="Edit group Pictured"]')`))) {
+                return `the station did not move (message: ${await message()})`;
+            }
+            await click('button[title="Edit group Pictured"]');
+            if (!(await until(`document.querySelector('form.group-edit input[name=logo-file]')`))) {
+                return 'the pencil opened no group form';
+            }
+            await noSideways('group form');
+            await setFile('form.group-edit input[name=logo-file]', join(transfer, 'logo.png'));
+            if (!(await until(`document.querySelector('form.group-edit').elements.image.value.startsWith('blob:')`))) {
+                return `the Image field holds ${await evaluate(`document.querySelector('form.group-edit').elements.image.value`)} (message: ${await message()})`;
+            }
+            if (!(await until(`(() => { const img = document.querySelector('form.group-edit .logo-preview img'); return img && img.naturalWidth > 0; })()`))) {
+                return 'the form shows no preview of the upload';
+            }
+            const saved = await saveBy('form.group-edit button[type=submit]');
+            if (saved !== 'Saved group Pictured.') {
+                return `saving the group says: ${saved}`;
+            }
+            // A background worker copies the image; the panel lists it once
+            // the file is there.
+            let listed = false;
+            for (let i = 0; i < 50 && !listed; i++) {
+                listed = await evaluate(`fetch('/admin/api/config').then((r) => r.json()).then((c) => Boolean(c.group_images.Pictured))`);
+                if (!listed) {
+                    await sleep(100);
+                }
+            }
+            if (!listed) {
+                return 'the panel\'s config lists no image for Pictured';
+            }
+            await evaluate(`document.body.dataset.beforeReload = '1'`);
+            await send('Page.reload', {});
+            const shown = `(() => {
+                const img = !document.body.dataset.beforeReload && document.querySelector('.group-head img.group-image');
+                return Boolean(img && img.naturalWidth > 0 && img.alt === '');
+            })()`;
+            return (await until(shown)) ? null : 'the Stations heading shows no image for Pictured';
         });
 
         rmSync(transfer, {recursive: true, force: true});

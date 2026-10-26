@@ -158,6 +158,7 @@ def main() -> int:
             settings=settings,
             pin=pin,
             blobs=blobs,
+            logos=logos,
             free_space=free_space,
             usage=usage,
             apply=runtime.apply,
