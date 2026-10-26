@@ -26,7 +26,7 @@ from tunebox.config import ChannelConfig, ConfigError, ConfigState, load
 from tunebox.coverfiles import MAX_COVER, CoverFiles
 from tunebox.covers import CoverService
 from tunebox.disk import free_bytes
-from tunebox.logos import Logos
+from tunebox.logos import Logos, group_key
 from tunebox.logs import add_file, configure, event
 from tunebox.netguard import Guard
 from tunebox.pin import Pin
@@ -96,10 +96,12 @@ def main() -> int:
             logo = row.doc.get("logo")
             if isinstance(logo, str) and logo.startswith("blob:") and blobs.path(logo) is None:
                 event(log, logging.WARNING, "logo_blob_missing", channel=row.id)
-        # No group name in the event: it is free text an admin typed.
-        for image in stored.group_images.values():
+        # The group's key, never its name: a name is free text an admin typed.
+        for name, image in stored.group_images.items():
             if image.startswith("blob:") and blobs.path(image) is None:
-                event(log, logging.WARNING, "logo_blob_missing", kind="group")
+                event(
+                    log, logging.WARNING, "logo_blob_missing", kind="group", group=group_key(name)
+                )
         removed = blobs.tidy(settings.oldest_change(), settings.referenced_blobs)
         if removed is None:
             event(log, logging.DEBUG, "logo_blobs_kept", reason="database_young")
