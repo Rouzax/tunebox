@@ -608,18 +608,61 @@ async function checkTiles(send, evaluate) {
         console.log('no station outside a group with several streams: its choices on the tiles not checked');
         return problems;
     }
+    // Picking it keeps the page open on its choices; picking it again goes
+    // to now playing.
     await evaluate(`document.querySelector('.open-channels').click()`);
     await sleep(700);
-    await evaluate(`document.querySelector('.tile[data-id=${JSON.stringify(single.id)}]').click()`);
+    const tile = `document.querySelector('.tile[data-id=${JSON.stringify(single.id)}]')`;
+    if (await evaluate(`${tile}.classList.contains('active')`)) {
+        // Another station first, from inside a group: with several streams
+        // it stays on the group's rows too.
+        await evaluate(`document.querySelector('.tile[data-group]').click()`);
+        await sleep(300);
+        const other = await evaluate(`(() => {
+            const row = document.querySelector('.channel');
+            row.click();
+            return {id: row.dataset.id, page: document.querySelector('.tunebox').dataset.page};
+        })()`);
+        await sleep(300);
+        const rowChoices = await evaluate(`document.querySelectorAll('.channel.active + .streams button').length`);
+        if (other.page !== 'channels' || !rowChoices) {
+            problems.push(`picking ${other.id} in its group does not stay on its choices (${JSON.stringify(other)}, ${rowChoices} choices)`);
+        }
+        await evaluate(`document.querySelector('.btn-tiles').click()`);
+        await sleep(300);
+    }
+    await evaluate(`${tile}.click()`);
     await sleep(500);
+    const picked = await evaluate(`(() => {
+        const next = document.querySelector('.tile.active[data-id] + .streams');
+        return {page: document.querySelector('.tunebox').dataset.page, choices: next ? next.querySelectorAll('button').length : 0};
+    })()`);
+    if (picked.page !== 'channels' || picked.choices !== single.streams.length) {
+        problems.push(`picking ${single.id} with ${single.streams.length} streams does not stay on its choices (${JSON.stringify(picked)})`);
+    }
+    await evaluate(`${tile}.click()`);
+    await sleep(500);
+    if ((await evaluate(`document.querySelector('.tunebox').dataset.page`)) !== 'main') {
+        problems.push(`picking the playing ${single.id} again does not go to now playing`);
+    }
+    // A station with one stream has nothing to choose: picking it goes to
+    // now playing at once.
+    const lone = await evaluate(`fetch('/api/channels').then((r) => r.json())
+        .then((list) => list.find((c) => c.streams.length === 1) || null)`);
+    if (!lone) {
+        console.log('no station with one stream: picking one not checked');
+        return problems;
+    }
     await evaluate(`document.querySelector('.open-channels').click()`);
     await sleep(700);
-    const choices = await evaluate(`(() => {
-        const next = document.querySelector('.tile.active[data-id] + .streams');
-        return next ? next.querySelectorAll('button').length : 0;
-    })()`);
-    if (choices !== single.streams.length) {
-        problems.push(`${single.id} on the tiles shows ${choices} of its ${single.streams.length} stream choices`);
+    if (lone.group) {
+        await evaluate(`[...document.querySelectorAll('.tile[data-group]')].find((t) => t.dataset.group === ${JSON.stringify(lone.group)}).click()`);
+        await sleep(300);
+    }
+    await evaluate(`document.querySelector('[data-id=${JSON.stringify(lone.id)}]').click()`);
+    await sleep(500);
+    if ((await evaluate(`document.querySelector('.tunebox').dataset.page`)) !== 'main') {
+        problems.push(`picking ${lone.id} with one stream does not go to now playing`);
     }
     return problems;
 }

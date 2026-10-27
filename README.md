@@ -165,8 +165,10 @@ it). What the buttons do:
 - **Play / stop** (middle). Play always starts at what is on air now, not
   where you stopped.
 - **Recently played** (clock, bottom left) and **Stations** (radio). On the
-  stations page, tap a station to switch; under the playing station you can
-  pick its quality, for example "Data saver (AAC 96)" for 4G.
+  stations page, tap a station to switch. A station with more than one
+  quality stays on the page with its choices open under it, for example
+  "Data saver (AAC 96)" for 4G; tap it again, or Back, for now playing. A
+  station with one quality goes to now playing at once.
 - **Volume and mute.** Narrow windows (the car's third, phones) and phones
   that do not let a web page set the volume (iPhones) show only mute; use
   the device's own volume control there. The radio then plays at full

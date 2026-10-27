@@ -340,10 +340,15 @@ export function bindPages(app) {
         if (!button) {
             return;
         }
-        if (!app.channel || button.dataset.id !== app.channel.id) {
+        // A newly picked station with a choice of streams keeps the page
+        // open on its choices; tapping it again goes to now playing.
+        const switched = !app.channel || button.dataset.id !== app.channel.id;
+        if (switched) {
             app.selectChannel(button.dataset.id);
         }
-        app.showPage('main');
+        if (!switched || !app.channel || app.channel.streams.length < 2) {
+            app.showPage('main');
+        }
     });
     toTiles.addEventListener('click', () => showGroup(null));
     events.on('channel', markActive);
