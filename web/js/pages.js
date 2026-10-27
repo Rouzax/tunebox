@@ -170,9 +170,10 @@ export function bindPages(app) {
         playing.setAttribute('class', 'tile-playing');
         playing.setAttribute('viewBox', '0 0 24 24');
         playing.setAttribute('aria-hidden', 'true');
-        const bars = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        bars.setAttribute('d', 'M7 18h2V6H7v12zm4 4h2V2h-2v20zm-8-8h2v-4H3v4zm12 4h2V6h-2v12zm4-8v4h2v-4h-2z');
-        playing.append(bars);
+        // A play triangle: the sound bars are the visualizer button's icon.
+        const mark = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        mark.setAttribute('d', 'M8 5v14l11-7z');
+        playing.append(mark);
         button.append(art, playing, element('span', 'name', tile.name));
         return button;
     }
