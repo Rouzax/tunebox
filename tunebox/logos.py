@@ -175,8 +175,8 @@ class Logos:
 
     def revision(self) -> str:
         """Changes whenever a logo, small logo, default image or group image
-        is saved or removed, and differs between runs; the player compares it to know its
-        station list names stale image addresses."""
+        is saved or removed, and differs between runs; the player compares
+        it to know its station list names stale image addresses."""
         with self._changes_lock:
             return f"{self._boot}.{self._changes}"
 

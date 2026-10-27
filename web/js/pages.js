@@ -66,7 +66,7 @@ export function bindPages(app) {
         back.addEventListener('click', () => app.showPage('main'));
     }
     document.addEventListener('keydown', (event) => {
-        if (event.key !== 'Escape') {
+        if (event.key !== 'Escape' || event.defaultPrevented) {
             return;
         }
         if (page === 'channels' && openGroup !== null) {
@@ -214,9 +214,9 @@ export function bindPages(app) {
         replaceContent(groups, content);
     }
 
-    // Opens a group's stations, or the tiles again with null. Keyboard focus
-    // follows to the control that replaced the pressed one, which the
-    // re-render removed.
+    // Opens a group's stations, or the tiles again with null. Back on the
+    // tiles, the group just left is centred and, when focus was on the
+    // page, focused: the re-render removed the pressed control.
     function showGroup(name) {
         const left = openGroup;
         const hadFocus = root.contains(document.activeElement) && document.activeElement !== document.body;
@@ -226,14 +226,13 @@ export function bindPages(app) {
         markActive();
         const pageBox = groups.closest('.page');
         pageBox.scrollTop = 0;
-        centreActive();
-        if (hadFocus) {
-            const target = openGroup !== null
-                ? toTiles
-                : [...groups.querySelectorAll('.tile[data-group]')].find((tile) => tile.dataset.group === left);
-            if (target) {
-                target.focus({preventScroll: true});
-            }
+        const leftTile = openGroup === null
+            ? [...groups.querySelectorAll('.tile[data-group]')].find((tile) => tile.dataset.group === left)
+            : null;
+        centreActive(leftTile);
+        const target = openGroup !== null ? toTiles : leftTile;
+        if (hadFocus && target) {
+            target.focus({preventScroll: true});
         }
     }
 
@@ -270,9 +269,10 @@ export function bindPages(app) {
 
     // Scrolls the channel page only. scrollIntoView() would also scroll the
     // page container sideways, which is overflow: hidden but still scrollable,
-    // and leave every page shifted.
-    function centreActive() {
-        const active = groups.querySelector('.channel.active, .tile.active');
+    // and leave every page shifted. target: centred in place of the active
+    // row or tile.
+    function centreActive(target) {
+        const active = target || groups.querySelector('.channel.active, .tile.active');
         const pageBox = groups.closest('.page');
         if (!active || !pageBox) {
             return;

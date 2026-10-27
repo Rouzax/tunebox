@@ -187,6 +187,19 @@ def _error(status: int, name: str) -> Response:
     return _json(status, {"error": name})
 
 
+def _image(found: Path) -> Response:
+    """An uploaded or downloaded logo. Either may be an SVG carrying script,
+    so sandbox keeps it inert even when opened as a page of its own. A file
+    removed since its lookup (a group image cleared meanwhile) is missing."""
+    try:
+        body = found.read_bytes()
+    except OSError:
+        return _error(404, "not_found")
+    return Response(
+        200, body, CONTENT_TYPES[found.suffix[1:]], (("Content-Security-Policy", "sandbox"),)
+    )
+
+
 def _exposed(stored: ConfigState, state: ConfigState) -> list[str]:
     """The stations the PIN hides now that stay in state without needs_pin:
     importing a tunebox.toml that never set it would show them to every
@@ -821,14 +834,7 @@ class Admin:
         found = self._blobs.path(f"blob:{request.path.rsplit('/', 1)[-1]}")
         if found is None:
             return _error(404, "not_found")
-        # The blob is the uploader's bytes, an SVG may carry script: sandbox
-        # keeps it inert even when opened as a page of its own.
-        return Response(
-            200,
-            found.read_bytes(),
-            CONTENT_TYPES[found.suffix[1:]],
-            (("Content-Security-Policy", "sandbox"),),
-        )
+        return _image(found)
 
     def _group_logo(self, request: Request, _session: Session) -> Response:
         name = request.path.rsplit("/", 1)[-1]
@@ -839,14 +845,7 @@ class Admin:
         found = self._logos.group_file(name, small=True) or self._logos.group_file(name)
         if found is None:
             return _error(404, "not_found")
-        # Downloaded from an address the admin typed; an SVG may carry
-        # script, so it stays inert even when opened as a page of its own.
-        return Response(
-            200,
-            found.read_bytes(),
-            CONTENT_TYPES[found.suffix[1:]],
-            (("Content-Security-Policy", "sandbox"),),
-        )
+        return _image(found)
 
     def _history(self, request: Request, _session: Session) -> Response:
         raw = urllib.parse.parse_qs(request.query).get("before", [""])[0]

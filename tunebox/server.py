@@ -639,16 +639,23 @@ class Handler(BaseHTTPRequestHandler):
             target = covers.file(urllib.parse.unquote(parts[1]))
         if target is None:
             return self._send_json(404, {"error": "not_found"}, head)
+        self._image(target, COVER_TYPES[target.suffix.removeprefix(".")], head)
+
+    def _image(self, target: Path, content_type: str, head: bool) -> None:
+        """Covers and logos. A file removed between its lookup and this read
+        (a housekeeping sweep, a cleared logo) is as missing as one never
+        there."""
         try:
             body = target.read_bytes()
         except OSError:
             return self._send_json(404, {"error": "not_found"}, head)
         headers = {
             "Cache-Control": "max-age=31536000, immutable",
-            # An image opened directly cannot run anything on this origin.
+            # An image opened directly cannot run anything on this origin,
+            # whatever its kind claims to be.
             "Content-Security-Policy": "sandbox",
         }
-        self._send(200, body, COVER_TYPES[target.suffix.removeprefix(".")], head, headers)
+        self._send(200, body, content_type, head, headers)
 
     def _group_logo(self, parts: list[str], head: bool, shown: set[str]) -> None:
         """A group's image is public to whoever sees one of its stations. Any
@@ -662,13 +669,7 @@ class Handler(BaseHTTPRequestHandler):
             target = logos.group_file(name, small=small)
         if target is None:
             return self._send_json(404, {"error": "not_found"}, head)
-        headers = {
-            "Cache-Control": "max-age=31536000, immutable",
-            "Content-Security-Policy": "sandbox",
-        }
-        self._send(
-            200, target.read_bytes(), LOGO_TYPES[target.suffix.removeprefix(".")], head, headers
-        )
+        self._image(target, LOGO_TYPES[target.suffix.removeprefix(".")], head)
 
     def _logo(self, parts: list[str], head: bool, hidden: set[str]) -> None:
         if urllib.parse.unquote(parts[-1]).split(".")[0] in hidden:
@@ -682,14 +683,7 @@ class Handler(BaseHTTPRequestHandler):
             target = logos.file(urllib.parse.unquote(parts[-1]), small=small, default=default)
         if target is None:
             return self._send_json(404, {"error": "not_found"}, head)
-        kind = target.suffix.removeprefix(".")
-        headers = {
-            "Cache-Control": "max-age=31536000, immutable",
-            # An image opened directly cannot run anything on this origin,
-            # whatever its kind claims to be.
-            "Content-Security-Policy": "sandbox",
-        }
-        self._send(200, target.read_bytes(), LOGO_TYPES[kind], head, headers)
+        self._image(target, LOGO_TYPES[target.suffix.removeprefix(".")], head)
 
     def _static(self, path: str, head: bool, access: Access, locked: bool = False) -> None:
         """locked: the PIN page in place of a page the PIN keeps; never

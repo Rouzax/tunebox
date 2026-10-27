@@ -250,8 +250,13 @@ export function bindPinScreen(root, api, options) {
             submit();
         } else if (event.key === 'Backspace') {
             key('back');
-        } else if (event.key === 'Escape' && !cancel.hidden) {
-            finish(false);
+        } else if (event.key === 'Escape') {
+            // The keypad owns Escape: the page behind must not also close a
+            // group or slide back to now playing.
+            event.preventDefault();
+            if (!cancel.hidden) {
+                finish(false);
+            }
         } else {
             key(event.key);
         }

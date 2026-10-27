@@ -1942,3 +1942,34 @@ def test_a_grant_shows_the_hidden_groups_image(grouped: PinWorld) -> None:
     key = GROUP_KEYS["Hidden"]
     status, _, _ = request(grouped.httpd, f"/logos/groups/{key}.png", headers={"Cookie": grant})
     assert status == 200
+
+
+def test_group_images_without_a_pin_may_be_cached_by_anyone(tmp_path: Path) -> None:
+    made = group_world(tmp_path, "off")
+    try:
+        path = f"/logos/groups/{GROUP_KEYS['Hidden']}.png?v=1"
+        status, headers, _ = request(made.httpd, path)
+        assert (status, headers["cache-control"]) == (200, "max-age=31536000, immutable")
+    finally:
+        made.close()
+
+
+@pytest.mark.parametrize(
+    ("lookup", "path"),
+    [
+        ("file", "/logos/owr.png"),
+        ("group_file", f"/logos/groups/{GROUP_KEYS['Open']}.png"),
+    ],
+)
+def test_a_logo_removed_after_its_lookup_is_not_found(
+    grouped: PinWorld, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lookup: str, path: str
+) -> None:
+    logos = grouped.httpd.logos
+    assert logos is not None
+
+    def swept(*_args: object, **_kwargs: object) -> Path:
+        return tmp_path / "swept.png"
+
+    monkeypatch.setattr(logos, lookup, swept)
+    status, _, body = request(grouped.httpd, path)
+    assert (status, json.loads(body)) == (404, {"error": "not_found"})
