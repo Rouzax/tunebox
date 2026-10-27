@@ -601,6 +601,26 @@ async function checkTiles(send, evaluate) {
     if ((await state()).page !== 'main') {
         problems.push('Escape on the tile page does not go back to now playing');
     }
+    // A station outside the groups keeps its stream choices on the tiles.
+    const single = await evaluate(`fetch('/api/channels').then((r) => r.json())
+        .then((list) => list.find((c) => !c.group && c.streams.length > 1) || null)`);
+    if (!single) {
+        console.log('no station outside a group with several streams: its choices on the tiles not checked');
+        return problems;
+    }
+    await evaluate(`document.querySelector('.open-channels').click()`);
+    await sleep(700);
+    await evaluate(`document.querySelector('.tile[data-id=${JSON.stringify(single.id)}]').click()`);
+    await sleep(500);
+    await evaluate(`document.querySelector('.open-channels').click()`);
+    await sleep(700);
+    const choices = await evaluate(`(() => {
+        const next = document.querySelector('.tile.active[data-id] + .streams');
+        return next ? next.querySelectorAll('button').length : 0;
+    })()`);
+    if (choices !== single.streams.length) {
+        problems.push(`${single.id} on the tiles shows ${choices} of its ${single.streams.length} stream choices`);
+    }
     return problems;
 }
 

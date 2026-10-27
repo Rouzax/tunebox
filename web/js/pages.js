@@ -290,24 +290,35 @@ export function bindPages(app) {
         for (const button of groups.querySelectorAll('.channel')) {
             const active = app.channel && button.dataset.id === app.channel.id;
             button.classList.toggle('active', active);
-            if (active && app.channel.streams.length > 1) {
-                const streams = element('div', 'streams');
-                for (const stream of app.channel.streams) {
-                    const choice = element('button', stream === app.stream ? 'active' : '', streamLabel(stream));
-                    choice.type = 'button';
-                    choice.dataset.stream = stream.name;
-                    streams.append(choice);
-                }
-                button.after(streams);
+            if (active) {
+                addStreams(button);
             }
         }
-        // The tile of the playing station, or of the group holding it.
+        // The tile of the playing station, or of the group holding it. A
+        // station's own tile gets its choices under it, across the grid.
         for (const tile of groups.querySelectorAll('.tile')) {
             const active = Boolean(app.channel) && (tile.dataset.group !== undefined
                 ? tile.dataset.group === app.channel.group
                 : tile.dataset.id === app.channel.id);
             tile.classList.toggle('active', active);
+            if (active && tile.dataset.id !== undefined) {
+                addStreams(tile);
+            }
         }
+    }
+
+    function addStreams(after) {
+        if (app.channel.streams.length < 2) {
+            return;
+        }
+        const streams = element('div', 'streams');
+        for (const stream of app.channel.streams) {
+            const choice = element('button', stream === app.stream ? 'active' : '', streamLabel(stream));
+            choice.type = 'button';
+            choice.dataset.stream = stream.name;
+            streams.append(choice);
+        }
+        after.after(streams);
     }
 
     groups.addEventListener('click', (event) => {
