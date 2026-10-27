@@ -372,3 +372,12 @@ def test_an_address_tunebox_cannot_reach_is_marked_unreachable(
     with pytest.raises(HttpError) as missing:
         guard().get(f"http://ok.test:{port}/missing")
     assert not missing.value.unreachable
+
+
+def test_get_holds_its_deadline_when_the_body_stalls(port: int) -> None:
+    # One byte comes, then nothing: the wait for the next is cut at the
+    # deadline, not a socket timeout later.
+    started = time.monotonic()
+    with pytest.raises(HttpError):
+        guard().get(f"http://ok.test:{port}/stall-after-start", deadline_s=1.0)
+    assert time.monotonic() - started < 1.4

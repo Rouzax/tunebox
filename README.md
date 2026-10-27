@@ -403,9 +403,9 @@ back, both ask for a code from your authenticator app first (or a recovery
 code), unless you typed one in the last 5 minutes. When another check is
 still running or the minute's checks are used up, the form says how many
 seconds to wait. The log records each check as `stream_checked` or
-`feed_checked`. Empty fields use the defaults, shown greyed out. Nothing in the form is stored until you press
-Save; leaving it with changes (Cancel, the menu, the back button or a
-reload) asks first. Unticking **Needs the PIN** on a station that has it
+`feed_checked`. Empty fields use the defaults, shown greyed out. Nothing
+in the form is stored until you press Save; leaving it with changes
+(Cancel, the menu, the back button or a reload) asks first. Unticking **Needs the PIN** on a station that has it
 asks for a code from your authenticator app before the save goes through
 (see [Settings and the listening PIN](#settings-and-the-listening-pin)).
 Title rules are regular expressions and run on
@@ -919,6 +919,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | `docker compose up` complains the port is already allocated | Another program on the machine uses that port. | Choose a free port as in [Install](#install) step 3. |
 | `store_unavailable` in the log | tunebox could open its database but the cover store could not, or a later write failed (a full disk, for example). | Check free disk space and that `data` is owned by user id 1000, then restart. Until then tunebox plays, but forgets covers and recent titles on restart. |
 | Check stream says "tunebox cannot check this address: its name is unknown, or it is not a public address" | The name does not resolve, or it points into your own network (a private address). tunebox only connects to public addresses for these checks, and answers both cases alike so that a check cannot be used to find out which names exist on your network. | Look for a typo in the address. A stream on your own network cannot be checked this way; the player itself is not affected by this rule. |
+| Check feed says "refused, ... has a non-public address" (for example for `np.tritondigital.com`) | The feed's name resolves to a private address on the tunebox host, which is what a DNS blocker (Pi-hole, AdGuard Home) answers for a name on its block list. Feed hosts are fixed per source type, so this is about the host's DNS, not the settings in the form. | Allow the feed's host in the DNS blocker that tunebox uses. The player's own titles come from the same feed, so they are missing too until it is allowed. |
 | The status page shows no covers for some songs | The song is in neither Deezer nor iTunes (common for unreleased tracks), or the catalogues could not be reached. | Nothing to do for unreleased tracks. A failed lookup is retried after 10 minutes, a song that was not found after 3 days. Look for `search_failed` in the log. |
 | A station's name on the status page says "(feed unreachable)" | The station's now-playing feed does not answer. | Nothing to do: tunebox keeps showing the last known songs and keeps trying, at most every 2 minutes. |
 | The title changes too early or too late | The delay does not fit this station or player. Stations other than the Tomorrowland channels start at the default and often need their own value. | See [Fine-tune when titles change](#fine-tune-when-titles-change). |

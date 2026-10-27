@@ -56,7 +56,8 @@ function streamsTo(doc, streams, hadUrl) {
 }
 
 // hooks.address(url) hears a stream address once it is typed in;
-// hooks.check(url) asks tunebox what it plays.
+// hooks.check(url, area) asks tunebox what it plays; area shows the
+// progress and, when tunebox wants one, the code prompt.
 function streamEditor(schema, streams, hooks) {
     const box = el('div', {class: 'streams'});
     const codecs = [['', 'unknown'], ...schema.codecs.map((codec) => [codec, codec])];
@@ -84,7 +85,6 @@ function streamEditor(schema, streams, hooks) {
         async function check() {
             const asked = stream.url;
             checkButton.disabled = true;
-            result.textContent = 'Checking the stream...';
             const answer = await hooks.check(asked, result);
             checkButton.disabled = false;
             if (!answer || stream.url !== asked || !result.isConnected) {
@@ -228,12 +228,16 @@ export function render(root, ctx, id) {
     // A check's answer, or null when there is nothing to show: the session
     // ended (the login form took over) or the page changed meanwhile.
     const current = ctx.stillOpen;
-    // A check needs a fresh code: the prompt shows in area, and a cancelled
-    // prompt shows nothing.
-    async function checked(path, body, area) {
+    // A check needs a fresh code: the prompt shows in area, which shows
+    // progress before each try, and a cancelled prompt shows nothing.
+    async function checked(path, body, area, progress) {
+        const send = () => {
+            area.replaceChildren(el('p', {class: 'hint'}, progress));
+            return ctx.request('POST', path, body);
+        };
         let answer;
         try {
-            answer = await confirmed(ctx, area, () => ctx.request('POST', path, body));
+            answer = await confirmed(ctx, area, send);
         } catch (error) {
             return {ok: false, reason: 'tunebox could not be reached.'};
         }
@@ -241,10 +245,16 @@ export function render(root, ctx, id) {
             return null;
         }
         if (answer.status === 429) {
-            const wait = `try again in ${answer.data.retry_s} s.`;
-            return {ok: false, reason: answer.data.error === 'check_running'
-                ? `Another check is still running; ${wait}`
-                : `The checks for this minute are used up; ${wait}`};
+            // A 429 from the proxy in front of tunebox has no retry_s.
+            const data = answer.data || {};
+            const wait = typeof data.retry_s === 'number' ? `try again in ${data.retry_s} s.` : 'try again shortly.';
+            if (data.error === 'check_running') {
+                return {ok: false, reason: `Another check is still running; ${wait}`};
+            }
+            if (data.error === 'too_many_checks') {
+                return {ok: false, reason: `The checks for this minute are used up; ${wait}`};
+            }
+            return {ok: false, reason: `Too many requests just now; ${wait}`};
         }
         if (!answer.ok) {
             return {ok: false, reason: (answer.data && answer.data.message) || 'tunebox refused the check.'};
@@ -288,7 +298,7 @@ export function render(root, ctx, id) {
         field('Default image URL', text('default_image', doc.default_image, {type: 'url'}), 'Shown when no cover is found.', HELP.default_image));
     sections.streams.body.append(
         withHelp(el('p', {class: 'hint'}, 'The quality choices listeners see; the first is the default.'), HELP.streams, 'streams'),
-        streamEditor(schema, streams, {address: fillSource, check: (url, area) => checked('stream/check', {url}, area)}),
+        streamEditor(schema, streams, {address: fillSource, check: (url, area) => checked('stream/check', {url}, area, 'Checking the stream...')}),
         filledNote);
     const feedResult = el('div', {class: 'check-result', role: 'status'});
     // Only the newest check may speak, and only for the settings it asked
@@ -299,8 +309,7 @@ export function render(root, ctx, id) {
             feedAsked += 1;
             const mine = feedAsked;
             const asked = JSON.stringify(source.value());
-            feedResult.replaceChildren(el('p', {class: 'hint'}, 'Asking the feed...'));
-            const answer = await checked('source/check', {source: source.value()}, feedResult);
+            const answer = await checked('source/check', {source: source.value()}, feedResult, 'Asking the feed...');
             if (mine !== feedAsked) {
                 return;
             }
