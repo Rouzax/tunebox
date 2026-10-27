@@ -1,4 +1,5 @@
 import ipaddress
+import socket
 import threading
 import time
 from collections.abc import Generator
@@ -68,6 +69,22 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b"\xff\xfb\x90\x64")
                 self.wfile.flush()
                 time.sleep(10)
+            except OSError:
+                pass  # the reader hung up, as it should
+        elif self.path == "/chunk-drip":
+            # A chunked answer whose next size line never ends: each byte
+            # comes well within a socket timeout.
+            self.protocol_version = "HTTP/1.1"
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            try:
+                self.wfile.write(b"5\r\nhello\r\n")
+                self.wfile.flush()
+                for _ in range(50):
+                    self.wfile.write(b"0")
+                    self.wfile.flush()
+                    time.sleep(0.2)
             except OSError:
                 pass  # the reader hung up, as it should
         elif self.path == "/drip":
@@ -212,7 +229,12 @@ def test_a_hanging_name_lookup_times_out(monkeypatch: pytest.MonkeyPatch) -> Non
         netguard.resolve("slow.test", 443)
 
 
-def test_a_failed_name_lookup_is_an_error() -> None:
+def no_such_name(*_args: object, **_kwargs: object) -> list[Any]:
+    raise socket.gaierror(socket.EAI_NONAME, "unknown")
+
+
+def test_a_failed_name_lookup_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(netguard.socket, "getaddrinfo", no_such_name)
     with pytest.raises(HttpError, match="lookup failed"):
         netguard.resolve("name.invalid", 443)
 
@@ -355,8 +377,10 @@ def test_an_address_tunebox_cannot_reach_is_marked_unreachable(
 ) -> None:
     # A name that does not resolve and a name inside the home network must
     # read the same to the panel, so the errors carry one mark for both.
-    with pytest.raises(HttpError) as lookup:
-        netguard.resolve("name.invalid", 443)
+    with monkeypatch.context() as offline:
+        offline.setattr(netguard.socket, "getaddrinfo", no_such_name)
+        with pytest.raises(HttpError) as lookup:
+            netguard.resolve("name.invalid", 443)
     with pytest.raises(HttpError) as inside:
         guard().get(f"http://ok.test:{port}/redirect-inside")
     monkeypatch.setattr(netguard, "RESOLVE_S", 0.1)
@@ -381,3 +405,44 @@ def test_get_holds_its_deadline_when_the_body_stalls(port: int) -> None:
     with pytest.raises(HttpError):
         guard().get(f"http://ok.test:{port}/stall-after-start", deadline_s=1.0)
     assert time.monotonic() - started < 1.4
+
+
+def test_get_holds_its_deadline_on_a_dripped_chunked_answer(port: int) -> None:
+    started = time.monotonic()
+    with pytest.raises(HttpError, match="longer than"):
+        guard().get(f"http://ok.test:{port}/chunk-drip", deadline_s=1.0)
+    assert time.monotonic() - started < 1.5
+
+
+def test_probe_holds_its_deadline_on_a_dripped_chunked_answer(port: int) -> None:
+    started = time.monotonic()
+    probe = guard().probe(f"http://ok.test:{port}/chunk-drip", 1.0, 65536)
+    assert probe.head.startswith(b"hello")
+    assert time.monotonic() - started < 1.5
+
+
+def test_the_deadline_holds_when_the_connection_opens_late(
+    port: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = netguard.socket.create_connection
+
+    def late(*args: Any, **kwargs: Any) -> socket.socket:
+        time.sleep(1.2)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(netguard.socket, "create_connection", late)
+    started = time.monotonic()
+    with pytest.raises(HttpError, match="took too long"):
+        guard().get(f"http://ok.test:{port}/slow-headers", deadline_s=1.0)
+    assert time.monotonic() - started < 2.0
+
+
+def test_a_name_the_codec_refuses_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A label over 63 characters fails in the IDNA codec before any lookup;
+    # it must not end the lookup thread with a traceback outside the log.
+    seen: list[object] = []
+    monkeypatch.setattr(threading, "excepthook", seen.append)
+    with pytest.raises(HttpError, match="lookup failed") as refused:
+        netguard.resolve("a" * 64 + ".example", 443)
+    assert refused.value.unreachable
+    assert seen == []

@@ -97,13 +97,15 @@ def resolve(host: str, port: int) -> list[str]:
     """Looks the name up in a helper thread, so a hanging resolver costs
     that thread rather than the caller."""
     found: list[str] = []
-    failed: list[OSError] = []
+    failed: list[Exception] = []
 
     def look_up() -> None:
         try:
             infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
             found.extend(str(info[4][0]) for info in infos)
-        except OSError as error:
+        # UnicodeError: a name the IDNA codec refuses (a label over 63
+        # characters) fails before any lookup.
+        except (OSError, UnicodeError) as error:
             failed.append(error)
 
     worker = threading.Thread(target=look_up, name="resolve", daemon=True)
@@ -183,10 +185,13 @@ class _Pinned(http.client.HTTPConnection):
     """Connects to the address that was checked, not to whatever the name
     resolves to by the time the socket opens; TLS still verifies the name."""
 
-    def __init__(self, host: str, port: int, address: str, tls: bool, timeout: float) -> None:
+    def __init__(
+        self, host: str, port: int, address: str, tls: bool, timeout: float, cut: threading.Event
+    ) -> None:
         super().__init__(host, port, timeout=timeout)
         self._address = address
         self._tls = tls
+        self._cut = cut
         # Keeps the Host header free of :443 on TLS.
         self.default_port = 443 if tls else 80
         # The socket the answer is read from. http.client drops self.sock
@@ -196,20 +201,48 @@ class _Pinned(http.client.HTTPConnection):
         self.opened: socket.socket | None = None
 
     def connect(self) -> None:
+        # Each socket is made visible to _cut before it is used, and the cut
+        # checked after: either the cut sees the socket, or this sees the
+        # cut. The TLS socket replaces the raw one before its handshake,
+        # which a slow server could otherwise stretch past the deadline.
         sock = socket.create_connection((self._address, self.port), self.timeout)
-        if self._tls:
-            sock = _TLS.wrap_socket(sock, server_hostname=self.host)
-        self.sock = sock
         self.opened = sock
+        if self._cut.is_set():
+            raise TimeoutError
+        if self._tls:
+            sock = _TLS.wrap_socket(sock, server_hostname=self.host, do_handshake_on_connect=False)
+            self.opened = sock
+            if self._cut.is_set():
+                raise TimeoutError
+            sock.do_handshake()
+        self.sock = sock
 
 
-def _cut(connection: http.client.HTTPConnection, cut: threading.Event) -> None:
+def _cut(connection: _Pinned, cut: threading.Event) -> None:
     cut.set()
-    sock = connection.sock
+    sock = connection.opened
     if sock is not None:
         # Already closed means the request ended on its own.
         with contextlib.suppress(OSError):
             sock.shutdown(socket.SHUT_RDWR)
+
+
+@dataclass
+class _Exchange:
+    """An answer being read. watchdog, when set, cuts the connection at the
+    deadline: the socket timeout bounds one recv, and http.client makes many
+    recvs inside one read (a chunk-size line, a header line), so only the
+    cut bounds the whole exchange."""
+
+    response: http.client.HTTPResponse
+    connection: _Pinned
+    cut: threading.Event
+    watchdog: threading.Timer | None
+
+    def close(self) -> None:
+        if self.watchdog is not None:
+            self.watchdog.cancel()
+        self.connection.close()
 
 
 class Guard:
@@ -227,84 +260,79 @@ class Guard:
 
     def get(self, url: str, deadline_s: float = 15.0, max_bytes: int = MAX_BYTES) -> bytes:
         ends = time.monotonic() + deadline_s
-        response, connection = self._open(url, ends, self._get_schemes)
+        opened = self._open(url, ends, self._get_schemes)
         late = HttpError(f"{_short(url)}: took longer than {deadline_s:g} s")
         try:
             body = bytearray()
-            while True:
-                # Each read waits no longer than the time left, as in probe.
-                if (left := ends - time.monotonic()) <= 0:
-                    raise late
-                if connection.opened is not None:
-                    with contextlib.suppress(OSError):
-                        connection.opened.settimeout(left)
-                if not (chunk := response.read1(STREAM_CHUNK)):
-                    break
+            while chunk := opened.response.read1(STREAM_CHUNK):
                 body += chunk
                 if len(body) > max_bytes:
                     raise HttpError(
                         f"{_short(url)}: response larger than {max_bytes} bytes", too_large=True
                     )
+            # A cut connection reads as a short, complete answer.
+            if opened.cut.is_set():
+                raise late
             return bytes(body)
-        except TimeoutError as error:
-            raise late from error
         except (http.client.HTTPException, OSError) as error:
+            if opened.cut.is_set() or isinstance(error, TimeoutError):
+                raise late from error
             raise HttpError(f"{_short(url)}: {error}") from error
         finally:
-            connection.close()
+            opened.close()
 
     def stream(self, url: str) -> Generator[bytes]:
         """An endless answer such as an audio stream; http is allowed, as
         for a stream_url. The caller bounds how long it reads."""
         ends = time.monotonic() + self._timeout
-        response, connection = self._open(url, ends, ("https", "http"))
+        opened = self._open(url, ends, ("https", "http"), hold=False)
         try:
-            while chunk := response.read1(STREAM_CHUNK):
+            while chunk := opened.response.read1(STREAM_CHUNK):
                 yield chunk
         except (http.client.HTTPException, OSError) as error:
             raise HttpError(f"{_short(url)}: {error}") from error
         finally:
-            connection.close()
+            opened.close()
 
     def probe(self, url: str, deadline_s: float, max_bytes: int) -> Probe:
         """The headers and first bytes of an answer, for a stream the panel
         checks: http is allowed, as for a stream_url, and reading stops at
-        max_bytes or the deadline, whichever comes first."""
+        max_bytes or the deadline, whichever comes first. A stream that
+        stalls after its first bytes ends the probe with what came."""
         ends = time.monotonic() + deadline_s
-        response, connection = self._open(url, ends, ("https", "http"))
+        opened = self._open(url, ends, ("https", "http"))
         try:
             head = bytearray()
-            while len(head) < max_bytes and (left := ends - time.monotonic()) > 0:
-                # Each read waits no longer than the time left: a stream that
-                # stalls after its first bytes ends the probe with what came.
-                # A socket http.client has already closed holds nothing more
-                # to wait for; what it read stays in the response's buffer.
-                if connection.opened is not None:
-                    with contextlib.suppress(OSError):
-                        connection.opened.settimeout(left)
-                try:
-                    chunk = response.read1(min(STREAM_CHUNK, max_bytes - len(head)))
-                except TimeoutError:
-                    if head:
+            try:
+                while len(head) < max_bytes and time.monotonic() < ends:
+                    chunk = opened.response.read1(min(STREAM_CHUNK, max_bytes - len(head)))
+                    if not chunk:
                         break
+                    head += chunk
+            except (http.client.HTTPException, OSError) as error:
+                stopped = opened.cut.is_set() or isinstance(error, TimeoutError)
+                if not stopped:
                     raise
-                if not chunk:
-                    break
-                head += chunk
+                if not head:
+                    raise HttpError(f"{_short(url)}: took too long") from error
+            if opened.cut.is_set() and not head:
+                raise HttpError(f"{_short(url)}: took too long")
             icy = {
                 name.lower(): value
-                for name, value in response.getheaders()
+                for name, value in opened.response.getheaders()
                 if name.lower().startswith(("icy-", "ice-"))
             }
-            return Probe(response.getheader("Content-Type") or "", icy, bytes(head))
+            return Probe(opened.response.getheader("Content-Type") or "", icy, bytes(head))
         except (http.client.HTTPException, OSError) as error:
             raise HttpError(f"{_short(url)}: {error}") from error
         finally:
-            connection.close()
+            opened.close()
 
     def _open(
-        self, url: str, ends: float, schemes: tuple[str, ...]
-    ) -> tuple[http.client.HTTPResponse, _Pinned]:
+        self, url: str, ends: float, schemes: tuple[str, ...], hold: bool = True
+    ) -> _Exchange:
+        """hold: the deadline keeps cutting the connection while the caller
+        reads the body; stream() reads without end and bounds itself."""
         for _ in range(MAX_REDIRECTS + 1):
             try:
                 parts = urllib.parse.urlsplit(url)
@@ -324,38 +352,41 @@ class Guard:
                 raise HttpError(f"{_short(url)}: took too long")
             tls = parts.scheme == "https"
             timeout = min(self._timeout, remaining)
-            connection = _Pinned(parts.hostname, port, addresses[0], tls, timeout)
+            cut = threading.Event()
+            connection = _Pinned(parts.hostname, port, addresses[0], tls, timeout, cut)
             path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
             path = urllib.parse.quote(path, safe=_PATH_SAFE)
-            # The socket timeout bounds each read only: a server sending its
+            # The socket timeout bounds each recv only: a server sending its
             # headers a byte at a time would hold the request far past the
-            # deadline, so the deadline also cuts the connection.
-            # A cut connection can also read as a short, complete answer,
-            # so the cut itself is what fails the request.
-            cut = threading.Event()
+            # deadline, so the deadline also cuts the connection. A cut
+            # connection can also read as a short, complete answer, so the
+            # cut itself is what fails the request.
             watchdog = threading.Timer(max(0.0, ends - time.monotonic()), _cut, (connection, cut))
             watchdog.start()
             try:
                 connection.request("GET", path, headers={"User-Agent": USER_AGENT})
                 response = connection.getresponse()
             except (http.client.HTTPException, OSError, UnicodeError) as error:
+                watchdog.cancel()
                 connection.close()
                 late = cut.is_set() or time.monotonic() >= ends
                 raise HttpError(f"{_short(url)}: {'took too long' if late else error}") from error
-            finally:
-                watchdog.cancel()
+            opened = _Exchange(response, connection, cut, watchdog)
             if cut.is_set():
-                connection.close()
+                opened.close()
                 raise HttpError(f"{_short(url)}: took too long")
             if response.status in _REDIRECTS:
                 location = response.getheader("Location")
-                connection.close()
+                opened.close()
                 if not location:
                     raise HttpError(f"{_short(url)}: redirect without a location")
                 url = urllib.parse.urljoin(url, location)
                 continue
             if response.status != 200:
-                connection.close()
+                opened.close()
                 raise HttpError(f"{_short(url)}: HTTP {response.status}", response.status)
-            return response, connection
+            if not hold:
+                watchdog.cancel()
+                opened.watchdog = None
+            return opened
         raise HttpError(f"{_short(url)}: too many redirects")
