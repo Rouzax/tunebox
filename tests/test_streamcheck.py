@@ -354,3 +354,62 @@ def test_the_feed_is_asked_through_the_guard() -> None:
     assert url.startswith("https://np.tritondigital.com/public/nowplaying?")
     assert f"numberToFetch={FEED_FETCH}" in url
     assert (deadline_s, max_bytes) == (FEED_DEADLINE_S, FEED_MAX_BYTES)
+
+
+class RacingClock:
+    """Once armed, starts a second check at the moment a check reads the
+    clock while taking the slot, and keeps the second's Busy answer."""
+
+    def __init__(self) -> None:
+        self.checks: StreamChecks | None = None
+        self.armed = False
+        self.refused: list[Busy] = []
+        self.second: threading.Thread | None = None
+
+    def __call__(self) -> float:
+        if self.armed and self.second is None:
+            self.second = threading.Thread(target=self._check)
+            self.second.start()
+            self.second.join(0.2)
+        return 100.0
+
+    def _check(self) -> None:
+        assert self.checks is not None
+        try:
+            self.checks.stream("https://x.test/second")
+        except Busy as busy:
+            self.refused.append(busy)
+
+
+def test_a_check_refused_as_another_starts_is_told_its_whole_wait() -> None:
+    release = threading.Event()
+
+    def slow(_url: str) -> Probe:
+        release.wait(5)
+        return Probe("audio/mpeg", {}, MP3)
+
+    clock = RacingClock()
+    clock.checks = StreamChecks(slow, lambda _source: [], clock=clock)
+    clock.armed = True
+    first = threading.Thread(target=clock.checks.stream, args=("https://x.test/first",))
+    first.start()
+    deadline = time.monotonic() + 5
+    while (clock.second is None or clock.second.is_alive()) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    release.set()
+    first.join(5)
+    assert [(b.running, b.retry_s) for b in clock.refused] == [(True, math.ceil(STREAM_BOUND_S))]
+
+
+def test_a_check_refused_with_the_minute_full_is_not_told_one_runs() -> None:
+    clock = RacingClock()
+    clock.checks = StreamChecks(lambda _url: PLAYING, lambda _source: [], clock=clock)
+    for _ in range(PER_MINUTE):
+        clock.checks.stream("https://x.test/a")
+    clock.armed = True
+    with pytest.raises(Busy) as first:
+        clock.checks.stream("https://x.test/a")
+    assert clock.second is not None
+    clock.second.join(5)
+    assert first.value.running is False
+    assert [b.running for b in clock.refused] == [False]

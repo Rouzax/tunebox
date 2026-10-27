@@ -329,8 +329,10 @@ class Admin:
             ("POST", "account/sessions/{part}/end"): Route(self._end_session),
             ("GET", "pin"): Route(self._pin_status),
             ("POST", "pin"): Route(self._pin_change, code=True),
-            # A check fetches an address on the owner's say and shows what
-            # came back, so a session alone is not enough.
+            # A check fetches on the owner's say and shows what came back:
+            # from an address the owner chose (stream), or from a provider's
+            # feed that may redirect anywhere (source). A session alone is
+            # not enough.
             ("POST", "stream/check"): Route(self._stream_check, code=True),
             ("POST", "source/check"): Route(self._source_check, code=True),
             ("GET", "usage/live"): Route(self._using(self._usage_live)),
