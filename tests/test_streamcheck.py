@@ -9,11 +9,17 @@ from tunebox.http import HttpError
 from tunebox.netguard import Probe
 from tunebox.sources.base import SourceError
 from tunebox.streamcheck import (
+    FEED_DEADLINE_S,
+    FEED_FETCH,
+    FEED_MAX_BYTES,
     PER_MINUTE,
+    RUNNING_RETRY_S,
+    UNREACHABLE,
     Busy,
     StreamChecks,
     codec_of,
     describe,
+    guarded_feed,
     kbps_of,
     name_of,
 )
@@ -97,11 +103,26 @@ def checks(
 
 
 def test_a_failed_fetch_is_an_answer_not_an_error() -> None:
-    answer = checks(HttpError("example.test: refused, example.test has a non-public address"))
+    answer = checks(HttpError("example.test: HTTP 404", 404))
     assert answer.stream("http://example.test/") == {
         "ok": False,
-        "reason": "example.test: refused, example.test has a non-public address",
+        "reason": "example.test: HTTP 404",
     }
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        HttpError("printer.lan: name lookup failed", unreachable=True),
+        HttpError("printer.lan: name lookup timed out", unreachable=True),
+        HttpError("http://nas.lan/: refused, nas.lan has a non-public address", unreachable=True),
+    ],
+)
+def test_an_unknown_name_and_a_home_address_read_the_same(error: HttpError) -> None:
+    # Two different texts would tell which names exist inside the network.
+    answer = checks(error).stream("http://nas.lan/")
+    assert answer == {"ok": False, "reason": UNREACHABLE}
+    assert "lan" not in UNREACHABLE
 
 
 def test_checks_are_paced_per_minute() -> None:
@@ -109,9 +130,12 @@ def test_checks_are_paced_per_minute() -> None:
     paced = checks(now=now)
     for _ in range(PER_MINUTE):
         assert paced.stream("https://example.test/a.mp3")["ok"]
-    with pytest.raises(Busy):
+        now[0] += 1
+    with pytest.raises(Busy) as used_up:
         paced.stream("https://example.test/a.mp3")
-    now[0] += 60
+    # Room again once the oldest check of the minute leaves its window.
+    assert (used_up.value.running, used_up.value.retry_s) == (False, 60 - PER_MINUTE)
+    now[0] += 60 - PER_MINUTE
     assert paced.stream("https://example.test/a.mp3")["ok"]
 
 
@@ -128,8 +152,9 @@ def test_one_check_at_a_time() -> None:
     first = threading.Thread(target=paced.stream, args=("https://example.test/a",))
     first.start()
     assert entered.wait(5)
-    with pytest.raises(Busy):
+    with pytest.raises(Busy) as running:
         paced.feed(TRITON)
+    assert (running.value.running, running.value.retry_s) == (True, RUNNING_RETRY_S)
     release.set()
     first.join(5)
     # The slot is free again afterwards, also after a refused check.
@@ -295,3 +320,27 @@ def test_feed_leaves_out_station_ids_and_jingles() -> None:
     assert [song["title"] for song in answer["songs"]] == ["Stay", "Turn Off The Lights"]
     only_ids = checks(entries=[RawEntry("", "A1630 26 Oct 2026 M05 VO", 1)]).feed(TRITON)
     assert not only_ids["ok"] and "no songs" in only_ids["reason"]
+
+
+def test_a_feed_answer_the_parser_trips_on_is_a_reason(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.INFO):
+        answer = checks(entries=ValueError("\u00b2 is no digit")).feed(TRITON)
+    assert answer == {"ok": False, "reason": "The feed answered something tunebox cannot read."}
+    (record,) = [r for r in caplog.records if r.getMessage() == "feed_checked"]
+    assert record.__dict__["fields"]["outcome"] == "error"
+    assert record.__dict__["fields"]["error"] == "ValueError"
+
+
+def test_the_feed_is_asked_through_the_guard() -> None:
+    asked: list[tuple[str, float, int]] = []
+
+    class Guarded:
+        def get(self, url: str, deadline_s: float, max_bytes: int) -> bytes:
+            asked.append((url, deadline_s, max_bytes))
+            return b"<nowplaying-info-list/>"
+
+    assert guarded_feed(Guarded())(TRITON) == []
+    ((url, deadline_s, max_bytes),) = asked
+    assert url.startswith("https://np.tritondigital.com/public/nowplaying?")
+    assert f"numberToFetch={FEED_FETCH}" in url
+    assert (deadline_s, max_bytes) == (FEED_DEADLINE_S, FEED_MAX_BYTES)

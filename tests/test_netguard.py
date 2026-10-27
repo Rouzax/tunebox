@@ -348,3 +348,27 @@ def test_probe_holds_its_deadline_while_the_audio_stalls(port: int) -> None:
     )
     assert time.monotonic() - started < 1.6
     assert probe.head == b"\xff\xfb\x90\x64"
+
+
+def test_an_address_tunebox_cannot_reach_is_marked_unreachable(
+    port: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A name that does not resolve and a name inside the home network must
+    # read the same to the panel, so the errors carry one mark for both.
+    with pytest.raises(HttpError) as lookup:
+        netguard.resolve("name.invalid", 443)
+    with pytest.raises(HttpError) as inside:
+        guard().get(f"http://ok.test:{port}/redirect-inside")
+    monkeypatch.setattr(netguard, "RESOLVE_S", 0.1)
+
+    def hang(*_args: object, **_kwargs: object) -> list[Any]:
+        time.sleep(2)
+        return []
+
+    monkeypatch.setattr(netguard.socket, "getaddrinfo", hang)
+    with pytest.raises(HttpError) as slow:
+        netguard.resolve("slow.test", 443)
+    assert lookup.value.unreachable and inside.value.unreachable and slow.value.unreachable
+    with pytest.raises(HttpError) as missing:
+        guard().get(f"http://ok.test:{port}/missing")
+    assert not missing.value.unreachable

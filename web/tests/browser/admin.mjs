@@ -860,8 +860,13 @@ async function run() {
             if (codecBefore !== '') {
                 return `a new stream starts with codec ${codecBefore}, so a check cannot fill it`;
             }
-            // Check feed with nothing filled in yet: the server names the missing setting.
+            // Check feed with nothing filled in yet: a check asks for a fresh
+            // code first, then the server names the missing setting.
             await evaluate(`[...document.querySelectorAll('form.edit button')].find((b) => b.textContent.trim() === 'Check feed').click()`);
+            if (!(await until(`document.querySelector('form.edit details.section:nth-of-type(3) .check-result form.confirm-code')`))) {
+                return `Check feed asked for no code (it said: ${await evaluate(`document.querySelector('form.edit details.section:nth-of-type(3) .check-result').textContent`)})`;
+            }
+            await typeCode();
             if (!(await until(`(document.querySelector('form.edit details.section:nth-of-type(3) .check-result') || {}).textContent.indexOf('source.mount') >= 0`))) {
                 return `Check feed with no mount said: ${await evaluate(`document.querySelector('form.edit details.section:nth-of-type(3) .check-result').textContent`)}`;
             }
@@ -886,13 +891,27 @@ async function run() {
                 [...document.querySelectorAll('form.edit fieldset.stream button')].find((b) => b.textContent.trim() === 'Check stream').click();
             })()`);
             const said = `(document.querySelector('form.edit fieldset.stream .check-result') || {}).textContent || ''`;
-            if (!(await until(`${said}.indexOf('non-public') >= 0`, 8000))) {
+            if (!(await until(`${said}.indexOf('not a public address') >= 0`, 8000))) {
                 return `Check stream on a local address said: ${await evaluate(said)}`;
+            }
+            // With the minute's checks used up, the form says when to try again.
+            let status = 0;
+            for (let i = 0; i < 20 && status !== 429; i++) {
+                status = await adminCall('POST', 'stream/check', {url: stream.url});
+            }
+            await evaluate(`[...document.querySelectorAll('form.edit fieldset.stream button')].find((b) => b.textContent.trim() === 'Check stream').click()`);
+            if (!(await until(`/used up; try again in [0-9]+ s/.test(${said})`, 8000))) {
+                return `Check stream past the minute's checks said: ${await evaluate(said)}`;
             }
             await evaluate(`window.location.hash = '#stations'`);
             await until(`document.querySelector('form.edit .confirm')`);
             await answer('Leave without saving');
-            return (await until(`location.hash === '#stations' && document.querySelector('.station[data-id="first"]')`)) ? null : 'could not leave the form';
+            if (!(await until(`location.hash === '#stations' && document.querySelector('.station[data-id="first"]')`))) {
+                return 'could not leave the form';
+            }
+            // The code typed for the checks would stay fresh into the steps
+            // that expect to be asked for one.
+            return newLogin(PASSWORD);
         });
 
         await step('a dangerous title rule is refused', async () => {

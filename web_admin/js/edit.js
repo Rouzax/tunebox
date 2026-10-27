@@ -1,5 +1,5 @@
 // The station form, for a new station and for an existing one.
-import {button, el, field, section, withHelp} from './dom.js';
+import {button, confirmed, el, field, section, withHelp} from './dom.js';
 import {sourceFromStream} from './deduce.js';
 import {HELP} from './help.js';
 import {logoPart} from './logo.js';
@@ -85,7 +85,7 @@ function streamEditor(schema, streams, hooks) {
             const asked = stream.url;
             checkButton.disabled = true;
             result.textContent = 'Checking the stream...';
-            const answer = await hooks.check(asked);
+            const answer = await hooks.check(asked, result);
             checkButton.disabled = false;
             if (!answer || stream.url !== asked || !result.isConnected) {
                 result.textContent = '';
@@ -228,18 +228,23 @@ export function render(root, ctx, id) {
     // A check's answer, or null when there is nothing to show: the session
     // ended (the login form took over) or the page changed meanwhile.
     const current = ctx.stillOpen;
-    async function checked(path, body) {
+    // A check needs a fresh code: the prompt shows in area, and a cancelled
+    // prompt shows nothing.
+    async function checked(path, body, area) {
         let answer;
         try {
-            answer = await ctx.request('POST', path, body);
+            answer = await confirmed(ctx, area, () => ctx.request('POST', path, body));
         } catch (error) {
             return {ok: false, reason: 'tunebox could not be reached.'};
         }
-        if (!current() || answer.status === 401) {
+        if (!current() || answer.status === 401 || answer.status === 0) {
             return null;
         }
         if (answer.status === 429) {
-            return {ok: false, reason: 'Too many checks just now; wait a minute and try again.'};
+            const wait = `try again in ${answer.data.retry_s} s.`;
+            return {ok: false, reason: answer.data.error === 'check_running'
+                ? `Another check is still running; ${wait}`
+                : `The checks for this minute are used up; ${wait}`};
         }
         if (!answer.ok) {
             return {ok: false, reason: (answer.data && answer.data.message) || 'tunebox refused the check.'};
@@ -283,7 +288,7 @@ export function render(root, ctx, id) {
         field('Default image URL', text('default_image', doc.default_image, {type: 'url'}), 'Shown when no cover is found.', HELP.default_image));
     sections.streams.body.append(
         withHelp(el('p', {class: 'hint'}, 'The quality choices listeners see; the first is the default.'), HELP.streams, 'streams'),
-        streamEditor(schema, streams, {address: fillSource, check: (url) => checked('stream/check', {url})}),
+        streamEditor(schema, streams, {address: fillSource, check: (url, area) => checked('stream/check', {url}, area)}),
         filledNote);
     const feedResult = el('div', {class: 'check-result', role: 'status'});
     // Only the newest check may speak, and only for the settings it asked
@@ -295,7 +300,7 @@ export function render(root, ctx, id) {
             const mine = feedAsked;
             const asked = JSON.stringify(source.value());
             feedResult.replaceChildren(el('p', {class: 'hint'}, 'Asking the feed...'));
-            const answer = await checked('source/check', {source: source.value()});
+            const answer = await checked('source/check', {source: source.value()}, feedResult);
             if (mine !== feedAsked) {
                 return;
             }

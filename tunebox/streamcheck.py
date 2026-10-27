@@ -4,26 +4,35 @@ what a now-playing source reports, before a station is saved."""
 from __future__ import annotations
 
 import logging
+import math
 import re
 import threading
 import time
 from collections import deque
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Protocol
 
 from tunebox.config import SourceConfig
 from tunebox.http import HttpError
 from tunebox.logs import event
 from tunebox.netguard import Probe
+from tunebox.sources import build_source
 from tunebox.sources.base import SourceError
 from tunebox.tracks import RawEntry
 
 log = logging.getLogger(__name__)
 
-# Long enough for a station's redirect and its first audio; a check holds a
-# request thread for at most this long.
+# Long enough for a station's redirect and its first audio; a stream check
+# holds a request thread for at most this long.
 PROBE_DEADLINE_S = 6.0
+# A feed answers in kilobytes; the cap and deadline keep a feed host that
+# misbehaves from holding the check slot or memory.
+FEED_DEADLINE_S = 8.0
+FEED_MAX_BYTES = 262_144
+# How long to wait when another check holds the slot: the longest a check
+# can run.
+RUNNING_RETRY_S = math.ceil(max(PROBE_DEADLINE_S, FEED_DEADLINE_S))
 # A few seconds of audio: enough to see that it flows and to sniff it.
 PROBE_BYTES = 65_536
 # Checks per minute, all sessions together: each one opens a connection
@@ -37,6 +46,10 @@ FEED_ENTRIES = 5
 FEED_FETCH = 10
 NAME_MAX = 60
 REASON_MAX = 120
+UNREADABLE = "The feed answered something tunebox cannot read."
+UNREACHABLE = (
+    "tunebox cannot check this address: its name is unknown, or it is not a public address."
+)
 
 _CODECS = {
     "audio/aac": "aac",
@@ -73,7 +86,28 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class Busy(Exception):
-    """Another check is running, or the minute's checks are used up."""
+    """Another check is running (running), or the minute's checks are used
+    up; retry_s is when a check can run again."""
+
+    def __init__(self, running: bool, retry_s: int) -> None:
+        super().__init__("check_running" if running else "too_many_checks")
+        self.running = running
+        self.retry_s = retry_s
+
+
+class GuardedGet(Protocol):
+    def get(self, url: str, deadline_s: float, max_bytes: int) -> bytes: ...
+
+
+def guarded_feed(guard: GuardedGet) -> Callable[[SourceConfig], list[RawEntry]]:
+    """The feed check's fetch. The pollers ask fixed feed hosts with the
+    plain client; a check runs on the owner's say, so it goes through the
+    guard: public addresses on every redirect, bounded in time and bytes."""
+
+    def get(url: str) -> bytes:
+        return guard.get(url, FEED_DEADLINE_S, FEED_MAX_BYTES)
+
+    return lambda source: build_source(source, get).fetch(FEED_FETCH)
 
 
 def codec_of(content_type: str, head: bytes) -> str | None:
@@ -164,6 +198,8 @@ def describe(probe: Probe, url: str) -> dict[str, Any]:
 
 
 def _reason(error: HttpError) -> str:
+    if error.unreachable:
+        return UNREACHABLE
     # An old SHOUTcast server opens its answer with "ICY 200 OK", which is
     # no HTTP; the parser's complaint about the status line says nothing.
     if "ICY 200" in str(error):
@@ -213,6 +249,10 @@ class StreamChecks:
                     entries = self._feed(source)
                 except SourceError as error:
                     answer: dict[str, Any] = {"ok": False, "reason": _tidy(str(error))}
+                except Exception as error:  # noqa: BLE001 - a parser tripping on an odd answer
+                    # Its text says nothing the panel can use.
+                    logged["error"] = type(error).__name__
+                    return {"ok": False, "reason": UNREADABLE}
                 else:
                     songs_only = [entry for entry in entries if entry.artist.strip()]
                     newest = sorted(songs_only, key=lambda e: e.started_at_ms or 0, reverse=True)
@@ -251,13 +291,13 @@ class StreamChecks:
     @contextmanager
     def _slot(self) -> Generator[None]:
         if not self._running.acquire(blocking=False):
-            raise Busy
+            raise Busy(running=True, retry_s=RUNNING_RETRY_S)
         try:
             now = self._clock()
             while self._times and now - self._times[0] >= 60:
                 self._times.popleft()
             if len(self._times) >= PER_MINUTE:
-                raise Busy
+                raise Busy(running=False, retry_s=max(1, math.ceil(60 - (now - self._times[0]))))
             self._times.append(now)
             yield
         finally:
