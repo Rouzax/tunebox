@@ -1,9 +1,10 @@
 """Outbound fetches of addresses that come from configuration (logos,
-stream measurements). Only public addresses are reached, checked again on
+stream measurements) or from the panel's checks (Check stream, and Check
+feed's provider host). Only public addresses are reached, checked again on
 every redirect and connected to as checked, and every fetch ends by a
-deadline, so a saved URL can neither reach the home network nor hold a
-thread. Catalogue and title feeds go to fixed provider hosts and use
-tunebox.http directly.
+deadline, so a saved or typed URL can neither reach the home network nor
+hold a thread. Catalogue searches and the pollers' title feeds go to fixed
+provider hosts and use tunebox.http directly.
 
 client_address() and nearby() are the inbound side: which address a
 request comes from, believing X-Forwarded-For only from trusted proxies,
@@ -227,17 +228,26 @@ class Guard:
     def get(self, url: str, deadline_s: float = 15.0, max_bytes: int = MAX_BYTES) -> bytes:
         ends = time.monotonic() + deadline_s
         response, connection = self._open(url, ends, self._get_schemes)
+        late = HttpError(f"{_short(url)}: took longer than {deadline_s:g} s")
         try:
             body = bytearray()
-            while chunk := response.read1(STREAM_CHUNK):
+            while True:
+                # Each read waits no longer than the time left, as in probe.
+                if (left := ends - time.monotonic()) <= 0:
+                    raise late
+                if connection.opened is not None:
+                    with contextlib.suppress(OSError):
+                        connection.opened.settimeout(left)
+                if not (chunk := response.read1(STREAM_CHUNK)):
+                    break
                 body += chunk
                 if len(body) > max_bytes:
                     raise HttpError(
                         f"{_short(url)}: response larger than {max_bytes} bytes", too_large=True
                     )
-                if time.monotonic() > ends:
-                    raise HttpError(f"{_short(url)}: took longer than {deadline_s:g} s")
             return bytes(body)
+        except TimeoutError as error:
+            raise late from error
         except (http.client.HTTPException, OSError) as error:
             raise HttpError(f"{_short(url)}: {error}") from error
         finally:

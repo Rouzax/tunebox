@@ -1,4 +1,5 @@
 import logging
+import math
 import threading
 import time
 
@@ -13,7 +14,7 @@ from tunebox.streamcheck import (
     FEED_FETCH,
     FEED_MAX_BYTES,
     PER_MINUTE,
-    RUNNING_RETRY_S,
+    STREAM_BOUND_S,
     UNREACHABLE,
     Busy,
     StreamChecks,
@@ -142,19 +143,25 @@ def test_checks_are_paced_per_minute() -> None:
 def test_one_check_at_a_time() -> None:
     entered = threading.Event()
     release = threading.Event()
+    now = [100.0]
 
     def slow(_url: str) -> Probe:
         entered.set()
         release.wait(5)
         return Probe("audio/mpeg", {}, MP3)
 
-    paced = StreamChecks(slow, lambda _source: [])
+    paced = StreamChecks(slow, lambda _source: [], clock=lambda: now[0])
     first = threading.Thread(target=paced.stream, args=("https://example.test/a",))
     first.start()
     assert entered.wait(5)
+    now[0] += 3.5
     with pytest.raises(Busy) as running:
         paced.feed(TRITON)
-    assert (running.value.running, running.value.retry_s) == (True, RUNNING_RETRY_S)
+    # The wait is what is left of the running check's longest run.
+    assert (running.value.running, running.value.retry_s) == (
+        True,
+        math.ceil(STREAM_BOUND_S - 3.5),
+    )
     release.set()
     first.join(5)
     # The slot is free again afterwards, also after a refused check.
@@ -329,6 +336,9 @@ def test_a_feed_answer_the_parser_trips_on_is_a_reason(caplog: pytest.LogCapture
     (record,) = [r for r in caplog.records if r.getMessage() == "feed_checked"]
     assert record.__dict__["fields"]["outcome"] == "error"
     assert record.__dict__["fields"]["error"] == "ValueError"
+    # A parser is meant to raise SourceError: anything else is a bug to see.
+    (crash,) = [r for r in caplog.records if r.getMessage() == "feed_check_crashed"]
+    assert crash.levelno == logging.WARNING and crash.exc_info is not None
 
 
 def test_the_feed_is_asked_through_the_guard() -> None:

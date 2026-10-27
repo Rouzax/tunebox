@@ -27,7 +27,7 @@ from tunebox.netguard import Probe
 from tunebox.pin import Pin
 from tunebox.rulecheck import MAX_NEW_PATTERNS
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError, state_from_dict
-from tunebox.streamcheck import PER_MINUTE, RUNNING_RETRY_S, StreamChecks
+from tunebox.streamcheck import PER_MINUTE, StreamChecks
 from tunebox.tracks import RawEntry
 from tunebox.usage import Usage
 from tunebox.usagecore import NAME_MAX, RETENTION_MAX, RETENTION_MIN
@@ -2924,10 +2924,9 @@ def test_a_check_while_another_runs_says_so(tmp_path: Path) -> None:
         busy = world.call("POST", "/admin/api/stream/check", url, csrf=csrf)
         release.set()
         first.join(5)
-        assert (busy.status, json_of(busy)) == (
-            429,
-            {"error": "check_running", "retry_s": RUNNING_RETRY_S},
-        )
-        assert ("Retry-After", str(RUNNING_RETRY_S)) in busy.headers
+        answer = json_of(busy)
+        assert (busy.status, answer["error"]) == (429, "check_running")
+        assert answer["retry_s"] >= 1
+        assert ("Retry-After", str(answer["retry_s"])) in busy.headers
     finally:
         world.close()

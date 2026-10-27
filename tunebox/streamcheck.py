@@ -16,7 +16,7 @@ from typing import Any, Protocol
 from tunebox.config import SourceConfig
 from tunebox.http import HttpError
 from tunebox.logs import event
-from tunebox.netguard import Probe
+from tunebox.netguard import RESOLVE_S, Probe
 from tunebox.sources import build_source
 from tunebox.sources.base import SourceError
 from tunebox.tracks import RawEntry
@@ -30,9 +30,10 @@ PROBE_DEADLINE_S = 6.0
 # misbehaves from holding the check slot or memory.
 FEED_DEADLINE_S = 8.0
 FEED_MAX_BYTES = 262_144
-# How long to wait when another check holds the slot: the longest a check
-# can run.
-RUNNING_RETRY_S = math.ceil(max(PROBE_DEADLINE_S, FEED_DEADLINE_S))
+# The longest a check can hold the slot: its deadline, plus one name lookup
+# begun just before the deadline passed.
+STREAM_BOUND_S = PROBE_DEADLINE_S + RESOLVE_S
+FEED_BOUND_S = FEED_DEADLINE_S + RESOLVE_S
 # A few seconds of audio: enough to see that it flows and to sniff it.
 PROBE_BYTES = 65_536
 # Checks per minute, all sessions together: each one opens a connection
@@ -231,10 +232,13 @@ class StreamChecks:
         self._clock = clock
         self._running = threading.Lock()
         self._times: deque[float] = deque()
+        # When the running check must be done; read by a refused check.
+        self._ends_lock = threading.Lock()
+        self._ends = 0.0
 
     def stream(self, url: str) -> dict[str, Any]:
         with self._logged("stream_checked") as logged:
-            with self._slot():
+            with self._slot(STREAM_BOUND_S):
                 try:
                     answer = describe(self._probe(url), url)
                 except HttpError as error:
@@ -244,14 +248,20 @@ class StreamChecks:
 
     def feed(self, source: SourceConfig) -> dict[str, Any]:
         with self._logged("feed_checked", source=source.type) as logged:
-            with self._slot():
+            with self._slot(FEED_BOUND_S):
                 try:
                     entries = self._feed(source)
                 except SourceError as error:
                     answer: dict[str, Any] = {"ok": False, "reason": _tidy(str(error))}
-                except Exception as error:  # noqa: BLE001 - a parser tripping on an odd answer
-                    # Its text says nothing the panel can use.
+                except Exception as error:
+                    # A parser is meant to raise SourceError, so this is a bug
+                    # to see in the log; its text says nothing the panel can use.
                     logged["error"] = type(error).__name__
+                    log.warning(
+                        "feed_check_crashed",
+                        exc_info=True,
+                        extra={"fields": {"source": source.type}},
+                    )
                     return {"ok": False, "reason": UNREADABLE}
                 else:
                     songs_only = [entry for entry in entries if entry.artist.strip()]
@@ -289,9 +299,13 @@ class StreamChecks:
             )
 
     @contextmanager
-    def _slot(self) -> Generator[None]:
+    def _slot(self, bound_s: float) -> Generator[None]:
+        """bound_s: the longest this check can hold the slot; a check refused
+        meanwhile is told to wait what is left of it."""
         if not self._running.acquire(blocking=False):
-            raise Busy(running=True, retry_s=RUNNING_RETRY_S)
+            with self._ends_lock:
+                left = self._ends - self._clock()
+            raise Busy(running=True, retry_s=max(1, math.ceil(left)))
         try:
             now = self._clock()
             while self._times and now - self._times[0] >= 60:
@@ -299,6 +313,8 @@ class StreamChecks:
             if len(self._times) >= PER_MINUTE:
                 raise Busy(running=False, retry_s=max(1, math.ceil(60 - (now - self._times[0]))))
             self._times.append(now)
+            with self._ends_lock:
+                self._ends = now + bound_s
             yield
         finally:
             self._running.release()
