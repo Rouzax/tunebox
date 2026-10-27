@@ -11,6 +11,8 @@ from tunebox.http import HttpError
 COVER = "https://cdn-images.dzcdn.net/images/cover/abc/1000x1000-000000-80-0-0.jpg"
 ARTIST_PHOTO = "https://cdn-images.dzcdn.net/images/artist/ok/1000x1000.jpg"
 PLACEHOLDER = "https://cdn-images.dzcdn.net/images/artist//1000x1000.jpg"
+# The same grey outline, named by the md5 of an empty string.
+BLANK = "https://cdn-images.dzcdn.net/images/artist/d41d8cd98f00b204e9800998ecf8427e/1000x1000-000000-80-0-0.jpg"
 
 
 def deezer_song(artist: str, title: str, cover: str = COVER, album: str = "") -> dict[str, object]:
@@ -73,11 +75,12 @@ def test_itunes_after_deezer_with_large_artwork() -> None:
     assert found.match == "itunes: Adriatique - Palm Of Your Hands"
 
 
-def test_artist_photo_on_an_exact_name_skipping_placeholders() -> None:
+@pytest.mark.parametrize("placeholder", [PLACEHOLDER, BLANK])
+def test_artist_photo_on_an_exact_name_skipping_placeholders(placeholder: str) -> None:
     def respond(url: str) -> bytes:
         if "/search/artist" in url:
             photos = [
-                {"name": "Jef Nice", "picture_xl": PLACEHOLDER},
+                {"name": "Jef Nice", "nb_fan": 9, "picture_xl": placeholder},
                 {"name": "Jef Nice", "picture_xl": ARTIST_PHOTO},
             ]
             return body({"data": photos})
@@ -302,13 +305,16 @@ def test_artist_photo_comes_from_the_artist_of_the_song() -> None:
     assert found == Found(own, "artist", "deezer artist: Rafael")
 
 
-def test_artist_photo_falls_back_to_the_name_when_the_song_has_no_photo() -> None:
+@pytest.mark.parametrize("placeholder", [PLACEHOLDER, BLANK])
+def test_artist_photo_falls_back_to_the_name_when_the_song_has_no_photo(
+    placeholder: str,
+) -> None:
     def respond(url: str) -> bytes:
         if "/search/artist" in url:
             return body({"data": [{"name": "Jef Nice", "picture_xl": ARTIST_PHOTO}]})
         if "api.deezer.com/search?" in url and "artist%3A" not in url:
             song = deezer_song("Jef Nice", "When Le Soleil Takes Over")
-            song["artist"] = {"name": "Jef Nice", "picture_xl": PLACEHOLDER}
+            song["artist"] = {"name": "Jef Nice", "picture_xl": placeholder}
             return body({"data": [song]})
         return body({"data": [], "results": []})
 

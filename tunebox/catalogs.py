@@ -36,6 +36,7 @@ ITUNES_INTERVAL = 3.1
 RELEASES_CHECKED = 100
 # Deezer serves artist pictures and release covers from one image store, so
 # a picture that is a release cover carries that cover's id.
+_NO_IMAGE = "d41d8cd98f00b204e9800998ecf8427e"
 _IMAGE_ID = re.compile(r"/images/(?:artist|cover)/([0-9a-f]{32})/")
 
 
@@ -298,8 +299,9 @@ class Catalogs:
 
 
 def _real_picture(picture: str) -> bool:
-    # Deezer's placeholder for an artist without a photo has an empty id.
-    return bool(picture) and "/artist//" not in picture
+    # Deezer's grey outline for an artist without a photo comes with an
+    # empty image id, or with the md5 of an empty string as its id.
+    return bool(picture) and "/artist//" not in picture and f"/{_NO_IMAGE}/" not in picture
 
 
 def _fans(item: dict[str, Any]) -> int:
