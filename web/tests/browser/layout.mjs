@@ -554,8 +554,42 @@ async function checkTiles(send, evaluate) {
     await evaluate(`document.querySelector('.btn-tiles').click()`);
     await sleep(300);
     tilePage('All groups', await state());
+    // Back from the last group, its tile has the focus and is in view.
+    const last = await evaluate(`(() => {
+        const tiles = document.querySelectorAll('.tile[data-group]');
+        const tile = tiles[tiles.length - 1];
+        tile.focus();
+        tile.click();
+        return tile.dataset.group;
+    })()`);
+    await sleep(300);
+    const returned = await evaluate(`(() => {
+        const back = document.querySelector('.btn-tiles');
+        back.focus();
+        back.click();
+        const focused = document.activeElement;
+        const box = document.querySelector('.channels-page').getBoundingClientRect();
+        const rect = focused.getBoundingClientRect();
+        return {
+            group: focused.dataset ? focused.dataset.group : null,
+            inView: rect.top >= box.top && rect.bottom <= box.bottom,
+        };
+    })()`);
+    if (returned.group !== last || !returned.inView) {
+        problems.push(`back from ${last}, its tile is not focused in view (${JSON.stringify(returned)})`);
+    }
+    await sleep(300);
     await evaluate(`document.querySelector('.tile[data-group]').click()`);
     await sleep(300);
+    // An Escape the PIN keypad took leaves the group open.
+    await evaluate(`(() => {
+        const taken = new KeyboardEvent('keydown', {key: 'Escape', cancelable: true});
+        taken.preventDefault();
+        document.dispatchEvent(taken);
+    })()`);
+    if ((await state()).tiles) {
+        problems.push('an Escape the PIN keypad took also closes the group');
+    }
     const key = async () => {
         await send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
         await send('Input.dispatchKeyEvent', {type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});

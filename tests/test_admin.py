@@ -2215,6 +2215,19 @@ def test_a_group_image_is_served_whatever_the_pin(world: World, small: bool) -> 
     assert ("Content-Security-Policy", "sandbox") in shown.headers
 
 
+def test_a_group_image_removed_after_its_lookup_is_not_found(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file = group_saved(world, small=True)
+    world.login()
+
+    def swept(*_args: object, **_kwargs: object) -> Path:
+        return world.tmp / "swept.png"
+
+    monkeypatch.setattr(world.logos, "group_file", swept)
+    assert world.call("GET", f"/admin/api/group-logos/{file}").status == 404
+
+
 def test_a_group_image_needs_a_session(world: World) -> None:
     file = group_saved(world, small=True)
     assert world.call("GET", f"/admin/api/group-logos/{file}").status == 401

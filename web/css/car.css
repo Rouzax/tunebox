@@ -569,6 +569,10 @@
     background: rgba(255, 255, 255, .08);
 }
 
+.tunebox.car-day .tile-art:empty {
+    background: rgba(31, 42, 55, .12);
+}
+
 /* A group's own image fills the square; a station logo is shown whole. */
 .tunebox .tile[data-group] .tile-art > img {
     object-fit: cover;

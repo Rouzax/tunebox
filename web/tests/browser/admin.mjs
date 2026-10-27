@@ -2211,6 +2211,24 @@ async function run() {
             return stored === JSON.stringify([true, image]) ? null : `stored: ${stored}, the form held ${image}`;
         });
 
+        await step('a group emptied and deleted takes its image along', async () => {
+            // Also leaves the station list as the later steps expect it.
+            if (!(await openPage('#edit/first', `document.querySelector('form.edit')`))) {
+                return 'no edit form';
+            }
+            await evaluate(`document.querySelector('form.edit').elements.group.value = ''`);
+            await evaluate(`document.querySelector('form.edit').requestSubmit()`);
+            if (!(await until(`location.hash === '#stations' && document.querySelector('button[title="Delete group Pictured Two"]')`))) {
+                return `the emptied group offers no Delete (message: ${await message()})`;
+            }
+            const deleted = await saveBy('button[title="Delete group Pictured Two"]');
+            if (deleted.indexOf('Saved') < 0) {
+                return `deleting the group says: ${deleted}`;
+            }
+            const stored = await evaluate(`fetch('/admin/api/config').then((r) => r.json()).then((c) => JSON.stringify([c.state.groups.indexOf('Pictured Two'), c.state.group_images]))`);
+            return stored === JSON.stringify([-1, {}]) ? null : `stored: ${stored}`;
+        });
+
         rmSync(transfer, {recursive: true, force: true});
 
         // A first start: no account, the setup page on, the link from the log.
