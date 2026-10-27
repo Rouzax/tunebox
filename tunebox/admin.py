@@ -187,6 +187,11 @@ def _error(status: int, name: str) -> Response:
     return _json(status, {"error": name})
 
 
+def _busy(busy: Busy) -> Response:
+    retry = ("Retry-After", str(busy.retry_s))
+    return _json(429, {"error": str(busy), "retry_s": busy.retry_s}, retry)
+
+
 def _image(found: Path) -> Response:
     """An uploaded or downloaded logo. Either may be an SVG carrying script,
     so sandbox keeps it inert even when opened as a page of its own. A file
@@ -324,8 +329,10 @@ class Admin:
             ("POST", "account/sessions/{part}/end"): Route(self._end_session),
             ("GET", "pin"): Route(self._pin_status),
             ("POST", "pin"): Route(self._pin_change, code=True),
-            ("POST", "stream/check"): Route(self._stream_check),
-            ("POST", "source/check"): Route(self._source_check),
+            # A check fetches an address on the owner's say and shows what
+            # came back, so a session alone is not enough.
+            ("POST", "stream/check"): Route(self._stream_check, code=True),
+            ("POST", "source/check"): Route(self._source_check, code=True),
             ("GET", "usage/live"): Route(self._using(self._usage_live)),
             ("GET", "usage/summary"): Route(self._using(self._usage_summary)),
             ("GET", "usage/devices"): Route(self._using(self._usage_devices)),
@@ -1118,8 +1125,8 @@ class Admin:
             return _error(400, "bad_request")
         try:
             return _json(200, self._checks.stream(body["url"].strip()))
-        except Busy:
-            return _error(429, "too_many_checks")
+        except Busy as busy:
+            return _busy(busy)
 
     def _source_check(self, request: Request, _session: Session) -> Response:
         """The newest songs a now-playing source lists with the settings the
@@ -1138,8 +1145,8 @@ class Admin:
             return _json(400, {"error": "invalid", "message": f"source.{empty}: required"})
         try:
             return _json(200, self._checks.feed(source))
-        except Busy:
-            return _error(429, "too_many_checks")
+        except Busy as busy:
+            return _busy(busy)
 
     def _usage_rename(self, request: Request, _session: Session, usage: Usage) -> Response:
         body = _body(request, ("id", "name"))

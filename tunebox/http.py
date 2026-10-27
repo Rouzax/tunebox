@@ -21,12 +21,22 @@ class HttpError(Exception):
     failure, a refused address and an oversized body. A 404 or 410 tells a
     dead link from a host that is down. too_large is set only by the guarded
     fetch, for a body past the caller's max_bytes: the answer's fault, not
-    the network's. get() has a fixed cap and does not set it."""
+    the network's. get() has a fixed cap and does not set it. unreachable is
+    set by the guard for a name that does not resolve and for an address it
+    refuses as non-public: a caller that shows the error to someone outside
+    must word the two alike, or the difference maps the home network."""
 
-    def __init__(self, message: str, status: int | None = None, too_large: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        status: int | None = None,
+        too_large: bool = False,
+        unreachable: bool = False,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.too_large = too_large
+        self.unreachable = unreachable
 
 
 def get(url: str, timeout: float = 10.0) -> bytes:

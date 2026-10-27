@@ -36,7 +36,7 @@ from tunebox.server import TuneboxServer
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError, StaleVersion
 from tunebox.sources import build_source
 from tunebox.store import Store
-from tunebox.streamcheck import FEED_FETCH, PROBE_BYTES, PROBE_DEADLINE_S, StreamChecks
+from tunebox.streamcheck import PROBE_BYTES, PROBE_DEADLINE_S, StreamChecks, guarded_feed
 from tunebox.usage import Usage
 from tunebox.usagecore import FLUSH_S
 
@@ -150,7 +150,7 @@ def main() -> int:
         admin_dir = Path(os.environ.get("TUNEBOX_WEB_ADMIN", str(WEB_ADMIN_DIR)))
         checks = StreamChecks(
             lambda url: guard.probe(url, PROBE_DEADLINE_S, PROBE_BYTES),
-            lambda source: build_source(source, http.get).fetch(FEED_FETCH),
+            guarded_feed(guard),
         )
         admin = Admin(
             accounts,

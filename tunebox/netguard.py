@@ -109,9 +109,9 @@ def resolve(host: str, port: int) -> list[str]:
     worker.start()
     worker.join(RESOLVE_S)
     if worker.is_alive():
-        raise HttpError(f"{host}: name lookup timed out")
+        raise HttpError(f"{host}: name lookup timed out", unreachable=True)
     if failed or not found:
-        raise HttpError(f"{host}: name lookup failed")
+        raise HttpError(f"{host}: name lookup failed", unreachable=True)
     return found
 
 
@@ -306,7 +306,8 @@ class Guard:
             addresses = self._resolve(parts.hostname, port)
             if not all(self._allow(address) for address in addresses):
                 raise HttpError(
-                    f"{_short(url)}: refused, {parts.hostname} has a non-public address"
+                    f"{_short(url)}: refused, {parts.hostname} has a non-public address",
+                    unreachable=True,
                 )
             remaining = ends - time.monotonic()
             if remaining <= 0:

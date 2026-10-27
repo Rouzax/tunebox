@@ -27,7 +27,7 @@ from tunebox.netguard import Probe
 from tunebox.pin import Pin
 from tunebox.rulecheck import MAX_NEW_PATTERNS
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError, state_from_dict
-from tunebox.streamcheck import PER_MINUTE, StreamChecks
+from tunebox.streamcheck import PER_MINUTE, RUNNING_RETRY_S, StreamChecks
 from tunebox.tracks import RawEntry
 from tunebox.usage import Usage
 from tunebox.usagecore import NAME_MAX, RETENTION_MAX, RETENTION_MIN
@@ -2820,6 +2820,7 @@ def checking(tmp_path: Path) -> Generator[Checking]:
 def test_stream_check_reports_what_the_address_plays(checking: Checking) -> None:
     world, asked, _ = checking
     csrf = world.login()
+    fresh(world, csrf)
     url = "https://example.test/live.aac"
     answer = world.call("POST", "/admin/api/stream/check", {"url": f" {url} "}, csrf=csrf)
     assert (answer.status, json_of(answer)) == (
@@ -2832,13 +2833,15 @@ def test_stream_check_reports_what_the_address_plays(checking: Checking) -> None
 def test_stream_check_refuses_a_bad_body_and_paces_checks(checking: Checking) -> None:
     world, asked, _ = checking
     csrf = world.login()
+    fresh(world, csrf)
     for body in ({}, {"url": 7}, {"url": ""}, {"url": "https://x.test/" + "a" * 2048}, ["u"]):
         assert world.call("POST", "/admin/api/stream/check", body, csrf=csrf).status == 400
     assert asked == []
     for _ in range(PER_MINUTE):
         world.call("POST", "/admin/api/stream/check", {"url": "https://x.test/a"}, csrf=csrf)
     paced = world.call("POST", "/admin/api/stream/check", {"url": "https://x.test/a"}, csrf=csrf)
-    assert (paced.status, json_of(paced)) == (429, {"error": "too_many_checks"})
+    assert (paced.status, json_of(paced)) == (429, {"error": "too_many_checks", "retry_s": 60})
+    assert ("Retry-After", "60") in paced.headers
 
 
 def test_stream_check_needs_the_csrf_token(checking: Checking) -> None:
@@ -2852,6 +2855,7 @@ def test_stream_check_needs_the_csrf_token(checking: Checking) -> None:
 def test_source_check_lists_the_feed_and_refuses_bad_settings(checking: Checking) -> None:
     world, _, feeds = checking
     csrf = world.login()
+    fresh(world, csrf)
     good = {"source": {"type": "triton", "mount": "OWR_INTERNATIONAL"}}
     answer = world.call("POST", "/admin/api/source/check", good, csrf=csrf)
     assert (answer.status, json_of(answer)) == (
@@ -2877,3 +2881,53 @@ def test_source_check_lists_the_feed_and_refuses_bad_settings(checking: Checking
         assert refused.status == 400 and message in json_of(refused)["message"], body
     assert world.call("POST", "/admin/api/source/check", [1], csrf=csrf).status == 400
     assert len(feeds) == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("stream/check", {"url": "https://x.test/a"}),
+        ("source/check", {"source": {"type": "triton", "mount": "OWR_INTERNATIONAL"}}),
+    ],
+)
+def test_a_check_needs_a_fresh_code(checking: Checking, path: str, body: dict[str, object]) -> None:
+    # A check makes tunebox fetch an address and shows what came back, so a
+    # stolen session alone cannot use the server to look around with.
+    world, asked, feeds = checking
+    csrf = world.login()
+    refused = world.call("POST", f"/admin/api/{path}", body, csrf=csrf)
+    assert (refused.status, json_of(refused)) == (403, {"error": "reauth_required"})
+    assert asked == [] and feeds == []
+    fresh(world, csrf)
+    assert world.call("POST", f"/admin/api/{path}", body, csrf=csrf).status == 200
+
+
+def test_a_check_while_another_runs_says_so(tmp_path: Path) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow(_url: str) -> Probe:
+        entered.set()
+        release.wait(5)
+        return Probe("audio/mpeg", {}, b"\xff\xfb\x90\x64")
+
+    world = World(tmp_path, checks=StreamChecks(slow, lambda _source: []))
+    try:
+        csrf = world.login()
+        fresh(world, csrf)
+        url = {"url": "https://x.test/a"}
+        first = threading.Thread(
+            target=world.call, args=("POST", "/admin/api/stream/check", url), kwargs={"csrf": csrf}
+        )
+        first.start()
+        assert entered.wait(5)
+        busy = world.call("POST", "/admin/api/stream/check", url, csrf=csrf)
+        release.set()
+        first.join(5)
+        assert (busy.status, json_of(busy)) == (
+            429,
+            {"error": "check_running", "retry_s": RUNNING_RETRY_S},
+        )
+        assert ("Retry-After", str(RUNNING_RETRY_S)) in busy.headers
+    finally:
+        world.close()
