@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import urllib.parse
@@ -30,6 +31,12 @@ ITUNES = "https://itunes.apple.com/search"
 DEEZER_INTERVAL = 0.2
 # Apple allows roughly 20 searches a minute per client.
 ITUNES_INTERVAL = 3.1
+# Releases compared with an artist picture; an artist with more keeps the
+# older ones unchecked.
+RELEASES_CHECKED = 100
+# Deezer serves artist pictures and release covers from one image store, so
+# a picture that is a release cover carries that cover's id.
+_IMAGE_ID = re.compile(r"/images/(?:artist|cover)/([0-9a-f]{32})/")
 
 
 @dataclass(frozen=True)
@@ -69,6 +76,25 @@ def _items(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [cast("dict[str, Any]", i) for i in cast("list[object]", value) if isinstance(i, dict)]
+
+
+def _image_id(link: str) -> str | None:
+    found = _IMAGE_ID.search(link)
+    return found.group(1) if found else None
+
+
+def _same_image(one: str, other: str) -> bool:
+    found = _image_id(one)
+    return found is not None and found == _image_id(other)
+
+
+def _id(item: dict[str, Any], *path: str) -> str:
+    value: object = item
+    for key in path:
+        if not isinstance(value, dict):
+            return ""
+        value = cast("dict[str, object]", value).get(key)
+    return str(value) if isinstance(value, int) and not isinstance(value, bool) else ""
 
 
 def _text(item: dict[str, Any], *path: str) -> str:
@@ -120,6 +146,8 @@ class Catalogs:
             song is not None
             and _real_picture(song.artist_image)
             and artists_match([lead], song.artist)
+            and not _same_image(song.artist_image, song.image)
+            and self._not_a_release(song.artist_id, song.artist_image, failures)
         ):
             return Found(song.artist_image, "artist", f"deezer artist: {song.artist}")
         found = self._artist_photo(track, failures)
@@ -175,6 +203,7 @@ class Catalogs:
                     _text(i, "album", "cover_xl"),
                     _text(i, "album", "title"),
                     _text(i, "artist", "picture_xl"),
+                    _id(i, "artist", "id"),
                 )
                 for i in _items(data, "data")
             ]
@@ -225,11 +254,23 @@ class Catalogs:
                     and (best is None or _fans(item) > _fans(best))
                 ):
                     best = item
-            if best is not None:
-                return Found(
-                    _text(best, "picture_xl"), "artist", f"deezer artist: {_text(best, 'name')}"
-                )
+            picture = _text(best, "picture_xl") if best is not None else ""
+            if best is not None and self._not_a_release(_id(best, "id"), picture, failures):
+                return Found(picture, "artist", f"deezer artist: {_text(best, 'name')}")
         return None
+
+    def _not_a_release(self, artist_id: str, picture: str, failures: list[str]) -> bool:
+        """False for an artist without a photo whose picture is one of their
+        release covers (Kotiēr's is the cover of "Ēyēs"), and when the
+        releases cannot be had: the failure is recorded, so the search is
+        tried again rather than settled."""
+        if not artist_id or _image_id(picture) is None:
+            return True
+        query = urllib.parse.urlencode({"limit": RELEASES_CHECKED})
+        data = self._json(f"{DEEZER}/artist/{artist_id}/albums?{query}", self._deezer, failures)
+        if not data:
+            return False
+        return not any(_same_image(picture, _text(i, "cover_xl")) for i in _items(data, "data"))
 
 
 def _real_picture(picture: str) -> bool:

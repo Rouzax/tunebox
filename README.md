@@ -56,6 +56,8 @@ Behind the player:
   its own cover also gets the artist's photo: tap the cover and it turns
   like a card to show the photo, tap again to turn it back. A new song
   starts on its cover, and a cover with no photo behind it does not turn.
+  Deezer gives some artists one of their release covers as their picture;
+  tunebox counts that as no photo.
   tunebox downloads each cover and photo once and serves it itself, so
   listeners' browsers never contact Deezer or iTunes.
 - **Tidy titles.** Station jingles and voice-overs are recognised and not
@@ -1088,7 +1090,8 @@ policy that keeps them from running script.
   photo) or `null`. `artist_photo`, in `current` and `upcoming.track` only,
   is a path to the artist's photo when `cover_kind` is `album`: the other
   side of the cover. It is `null` while the photo is looked up or
-  downloaded (it can arrive a poll after the song), when Deezer has none,
+  downloaded (it can arrive a poll after the song), when Deezer has none
+  (a picture that is one of the artist's release covers counts as none),
   and whenever the cover itself is the artist photo.
   **`GET /covers/<file>`** serves the image; browsers may keep it for a
   year, since a changed cover gets a new path. Covers come
