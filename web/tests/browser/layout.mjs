@@ -616,17 +616,22 @@ async function checkTiles(send, evaluate) {
     if (await evaluate(`${tile}.classList.contains('active')`)) {
         // Another station first, from inside a group: with several streams
         // it stays on the group's rows too.
-        await evaluate(`document.querySelector('.tile[data-group]').click()`);
+        const grouped = await evaluate(`fetch('/api/channels').then((r) => r.json())
+            .then((list) => list.find((c) => c.group && c.streams.length > 1) || null)`);
+        if (!grouped) {
+            problems.push(`${single.id} plays already and no station in a group has several streams to pick first`);
+            return problems;
+        }
+        await evaluate(`[...document.querySelectorAll('.tile[data-group]')].find((t) => t.dataset.group === ${JSON.stringify(grouped.group)}).click()`);
+        await sleep(300);
+        await evaluate(`document.querySelector('.channel[data-id=${JSON.stringify(grouped.id)}]').click()`);
         await sleep(300);
         const other = await evaluate(`(() => {
-            const row = document.querySelector('.channel');
-            row.click();
-            return {id: row.dataset.id, page: document.querySelector('.tunebox').dataset.page};
+            const next = document.querySelector('.channel.active + .streams');
+            return {page: document.querySelector('.tunebox').dataset.page, choices: next ? next.querySelectorAll('button').length : 0};
         })()`);
-        await sleep(300);
-        const rowChoices = await evaluate(`document.querySelectorAll('.channel.active + .streams button').length`);
-        if (other.page !== 'channels' || !rowChoices) {
-            problems.push(`picking ${other.id} in its group does not stay on its choices (${JSON.stringify(other)}, ${rowChoices} choices)`);
+        if (other.page !== 'channels' || other.choices !== grouped.streams.length) {
+            problems.push(`picking ${grouped.id} in its group does not stay on its choices (${JSON.stringify(other)})`);
         }
         await evaluate(`document.querySelector('.btn-tiles').click()`);
         await sleep(300);
