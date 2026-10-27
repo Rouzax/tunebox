@@ -1,5 +1,6 @@
 import json
 import urllib.parse
+from collections.abc import Callable
 
 import pytest
 
@@ -333,3 +334,82 @@ def test_artist_photo_is_of_the_first_named_artist() -> None:
     track = make_track("BEN BOHMER, SPENCER BROWN", "Phosphene")
     found = catalogs(FakeHttp(respond)).artist_photo(track)
     assert found == Found(first, "artist", "deezer artist: Ben Böhmer")
+
+
+def dz(kind: str, image_id: str) -> str:
+    return f"https://cdn-images.dzcdn.net/images/{kind}/{image_id}/1000x1000-000000-80-0-0.jpg"
+
+
+SINGLE = "d3c17a0458e85ebdef6bd9605b673b4b"
+EYES = "f056445307a66a4aafa3cdfa726f99f7"
+PORTRAIT = "0123456789abcdef0123456789abcdef"
+
+
+def kotier(
+    song_picture: str, profile_picture: str, albums: list[str] | None
+) -> Callable[[str], bytes]:
+    """Deezer as it answers for Kotiēr: no photo, release covers instead.
+    albums None: the release list cannot be had."""
+
+    def respond(url: str) -> bytes:
+        if "/artist/97185152/albums" in url:
+            if albums is None:
+                raise HttpError("connection refused")
+            return body({"data": [{"cover_xl": dz("cover", a)} for a in albums]})
+        if "/search/artist" in url:
+            profile = {"id": 97185152, "name": "Kotiēr", "nb_fan": 322}
+            return body({"data": [profile | {"picture_xl": profile_picture}]})
+        if "api.deezer.com/search?" in url and "artist%3A" not in url:
+            song = deezer_song("Kotiēr", "Smalltown Boy", dz("cover", SINGLE), "Smalltown Boy")
+            song["artist"] = {"id": 97185152, "name": "Kotiēr", "picture_xl": song_picture}
+            return body({"data": [song]})
+        return body({"data": [], "results": []})
+
+    return respond
+
+
+def test_a_songs_artist_picture_that_is_its_cover_is_no_photo() -> None:
+    respond = kotier(dz("artist", SINGLE), dz("artist", PORTRAIT), [SINGLE, EYES])
+    found = catalogs(FakeHttp(respond)).artist_photo(make_track("KOTIER", "Smalltown Boy"))
+    # The name search finds the profile, whose picture is a real photo.
+    assert found == Found(dz("artist", PORTRAIT), "artist", "deezer artist: Kotiēr")
+
+
+def test_a_profile_picture_that_is_a_release_cover_is_no_photo() -> None:
+    respond = kotier(dz("artist", SINGLE), dz("artist", EYES), [SINGLE, EYES])
+    track = make_track("KOTIER", "Smalltown Boy")
+    assert catalogs(FakeHttp(respond)).artist_photo(track) is None
+
+
+def test_a_songs_artist_picture_from_another_release_is_no_photo() -> None:
+    respond = kotier(dz("artist", EYES), dz("artist", EYES), [SINGLE, EYES])
+    track = make_track("KOTIER", "Smalltown Boy")
+    assert catalogs(FakeHttp(respond)).artist_photo(track) is None
+
+
+def test_a_real_photo_is_kept_after_the_release_check() -> None:
+    respond = kotier(dz("artist", PORTRAIT), dz("artist", EYES), [SINGLE, EYES])
+    http = FakeHttp(respond)
+    found = catalogs(http).artist_photo(make_track("KOTIER", "Smalltown Boy"))
+    assert found == Found(dz("artist", PORTRAIT), "artist", "deezer artist: Kotiēr")
+    assert query(next(u for u in http.urls if "/albums" in u))["limit"] == "100"
+
+
+def test_an_unanswered_release_check_is_a_failure_not_a_miss() -> None:
+    respond = kotier(dz("artist", PORTRAIT), dz("artist", PORTRAIT), None)
+    with pytest.raises(SearchError, match="connection refused"):
+        catalogs(FakeHttp(respond)).artist_photo(make_track("KOTIER", "Smalltown Boy"))
+
+
+def test_a_cover_search_falls_back_to_a_real_photo_only() -> None:
+    # No song found anywhere: find() shows the artist's photo, never a cover
+    # standing in for one.
+    def respond(url: str) -> bytes:
+        if "/artist/97185152/albums" in url:
+            return body({"data": [{"cover_xl": dz("cover", EYES)}]})
+        if "/search/artist" in url:
+            profile = {"id": 97185152, "name": "Kotiēr", "picture_xl": dz("artist", EYES)}
+            return body({"data": [profile]})
+        return body({"data": [], "results": []})
+
+    assert catalogs(FakeHttp(respond)).find(make_track("KOTIER", "Unreleased ID")) is None
