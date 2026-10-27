@@ -413,3 +413,12 @@ def test_a_cover_search_falls_back_to_a_real_photo_only() -> None:
         return body({"data": [], "results": []})
 
     assert catalogs(FakeHttp(respond)).find(make_track("KOTIER", "Unreleased ID")) is None
+
+
+def test_an_artists_releases_are_asked_once_per_search() -> None:
+    # The song's picture is a release cover, so the name search follows and
+    # finds the same artist.
+    http = FakeHttp(kotier(dz("artist", EYES), dz("artist", PORTRAIT), [SINGLE, EYES]))
+    found = catalogs(http).artist_photo(make_track("KOTIER", "Smalltown Boy"))
+    assert found == Found(dz("artist", PORTRAIT), "artist", "deezer artist: Kotiēr")
+    assert sum("/albums" in url for url in http.urls) == 1
