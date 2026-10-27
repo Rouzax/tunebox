@@ -636,6 +636,10 @@
     display: block;
 }
 
+.tunebox .tile + .streams {
+    grid-column: 1 / -1;
+}
+
 .tunebox .btn-tiles {
     margin: 0 0 .5rem;
 }
