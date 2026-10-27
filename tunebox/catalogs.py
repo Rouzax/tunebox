@@ -125,7 +125,7 @@ class Catalogs:
         found = (
             self._deezer_song(track, failures)
             or self._itunes_song(track, failures)
-            or self._artist_photo(track, failures)
+            or self._artist_photo(track, failures, {})
         )
         if found is None and failures:
             raise SearchError("; ".join(failures))
@@ -138,6 +138,9 @@ class Catalogs:
         and "Rafa'EL" reads as "rafael" too); the name search is for a song
         Deezer does not have."""
         failures: list[str] = []
+        # Each artist's release covers, asked once per search: a refused song
+        # picture leads to the name search, which often finds the same artist.
+        releases: dict[str, frozenset[str] | None] = {}
         song = self._deezer_match(track, failures)
         # Deezer may list a song under its second artist; the photo is of
         # the first-named one, as the name search would choose.
@@ -147,10 +150,10 @@ class Catalogs:
             and _real_picture(song.artist_image)
             and artists_match([lead], song.artist)
             and not _same_image(song.artist_image, song.image)
-            and self._not_a_release(song.artist_id, song.artist_image, failures)
+            and self._not_a_release(song.artist_id, song.artist_image, failures, releases)
         ):
             return Found(song.artist_image, "artist", f"deezer artist: {song.artist}")
-        found = self._artist_photo(track, failures)
+        found = self._artist_photo(track, failures, releases)
         if found is None and failures:
             raise SearchError("; ".join(failures))
         return found
@@ -238,7 +241,9 @@ class Catalogs:
                 return Found(found.image, "album", f"itunes: {found.artist} - {found.title}")
         return None
 
-    def _artist_photo(self, track: Track, failures: list[str]) -> Found | None:
+    def _artist_photo(
+        self, track: Track, failures: list[str], releases: dict[str, frozenset[str] | None]
+    ) -> Found | None:
         for name in track.artists:
             if not norm(name):
                 continue  # nothing to compare: any name in another script would "match"
@@ -255,22 +260,41 @@ class Catalogs:
                 ):
                     best = item
             picture = _text(best, "picture_xl") if best is not None else ""
-            if best is not None and self._not_a_release(_id(best, "id"), picture, failures):
+            if best is not None and self._not_a_release(
+                _id(best, "id"), picture, failures, releases
+            ):
                 return Found(picture, "artist", f"deezer artist: {_text(best, 'name')}")
         return None
 
-    def _not_a_release(self, artist_id: str, picture: str, failures: list[str]) -> bool:
+    def _not_a_release(
+        self,
+        artist_id: str,
+        picture: str,
+        failures: list[str],
+        releases: dict[str, frozenset[str] | None],
+    ) -> bool:
         """False for an artist without a photo whose picture is one of their
         release covers (Kotiēr's is the cover of "Ēyēs"), and when the
         releases cannot be had: the failure is recorded, so the search is
         tried again rather than settled."""
-        if not artist_id or _image_id(picture) is None:
+        picture_id = _image_id(picture)
+        if not artist_id or picture_id is None:
             return True
-        query = urllib.parse.urlencode({"limit": RELEASES_CHECKED})
-        data = self._json(f"{DEEZER}/artist/{artist_id}/albums?{query}", self._deezer, failures)
-        if not data:
-            return False
-        return not any(_same_image(picture, _text(i, "cover_xl")) for i in _items(data, "data"))
+        if artist_id not in releases:
+            query = urllib.parse.urlencode({"limit": RELEASES_CHECKED})
+            url = f"{DEEZER}/artist/{artist_id}/albums?{query}"
+            data = self._json(url, self._deezer, failures)
+            releases[artist_id] = (
+                frozenset(
+                    found
+                    for i in _items(data, "data")
+                    if (found := _image_id(_text(i, "cover_xl"))) is not None
+                )
+                if data
+                else None
+            )
+        covers = releases[artist_id]
+        return covers is not None and picture_id not in covers
 
 
 def _real_picture(picture: str) -> bool:
