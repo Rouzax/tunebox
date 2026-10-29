@@ -11,6 +11,7 @@ from pathlib import Path
 
 from tunebox.blobs import Blobs
 from tunebox.config import ChannelConfig, SourceConfig, StreamConfig
+from tunebox.coverfix import Fix, FixSource
 from tunebox.http import HttpError
 from tunebox.netguard import Probe
 from tunebox.sources.base import SourceError
@@ -54,6 +55,29 @@ def blob_store(directory: Path, clock: Callable[[], float] = time.time) -> Blobs
 
 def make_track(artist: str = "FISHER", title: str = "Stay", started_at: int = 1_000_000) -> Track:
     return clean(RawEntry(artist, title, started_at), RULES, started_at)
+
+
+class FakeFixes:
+    """A fix map without a database. known=False stands for a table that
+    could not be read at start-up."""
+
+    def __init__(self, *fixes: Fix, known: bool = True) -> None:
+        self.map = {fix.key: fix for fix in fixes}
+        self.known = known
+
+    def get(self, key: str) -> Fix | None:
+        return self.map.get(key)
+
+    def values(self) -> set[str] | None:
+        if not self.known:
+            return None
+        return {fix.value for fix in self.map.values() if fix.value is not None}
+
+
+def cover_fix(
+    key: str, value: str | None, source: FixSource = "deezer", set_at: float = 0.0
+) -> Fix:
+    return Fix(key, value, f"test {source}", source, "FISHER", "Stay", set_at)
 
 
 class FakeHttp:

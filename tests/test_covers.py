@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.fakes import make_track
+from tests.fakes import FakeFixes, cover_fix, make_track
 from tunebox import covers as covers_module
 from tunebox.catalogs import Found, SearchError
 from tunebox.coverfiles import CoverFiles, SaveResult, name_for
@@ -68,6 +68,8 @@ def service(
     fetch: Fetch | None = None,
     folder: Path | None = None,
     photos: Finder | None = None,
+    fixes: FakeFixes | None = None,
+    blobs: Path | None = None,
 ) -> CoverService:
     files = CoverFiles(folder or fresh_folder(), free=lambda: None, clock=lambda: now[0])
     return CoverService(
@@ -77,7 +79,14 @@ def service(
         fetch or Fetch(),
         clock=lambda: now[0],
         find_photo=photos,
+        fixes=fixes,
+        blob_path=(lambda ref: blob_file(blobs, ref)) if blobs else None,
     )
+
+
+def blob_file(blobs: Path, ref: str) -> Path | None:
+    path = blobs / f"{ref[5:]}.jpg"
+    return path if path.exists() else None
 
 
 def drain(covers: CoverService) -> None:
@@ -857,3 +866,369 @@ def test_a_photo_search_that_fails_is_tried_again_later() -> None:
     covers.request(make_track(), NOW)
     drain(covers)
     assert covers.photo(make_track()) is not None
+
+
+FIX_URL = "https://cdn-images.dzcdn.net/images/cover/" + "f" * 32 + "/1000x1000-000000-80-0-0.jpg"
+FIX_PHOTO = (
+    "https://cdn-images.dzcdn.net/images/artist/" + "e" * 32 + "/1000x1000-000000-80-0-0.jpg"
+)
+SONG = make_track()
+
+
+def test_a_cover_fix_is_fetched_and_shown_without_a_search() -> None:
+    finder, fetch = Finder(Found(URL, "album", "deezer: Fisher - Stay")), Fetch()
+    covers = service(finder, [0.0], fetch=fetch, fixes=FakeFixes(cover_fix(SONG.key, FIX_URL)))
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert finder.calls == []
+    assert fetch.urls == [FIX_URL.replace("/1000x1000-", "/600x600-")]
+    cover = covers.lookup(SONG)
+    assert cover is not None and cover.kind == "album"
+    assert cover.url.startswith(f"/covers/{name_for(FIX_URL)}.jpg?v=")
+    assert covers.remote_link(SONG) == FIX_URL
+
+
+def test_a_fix_older_than_every_ttl_is_never_searched() -> None:
+    now = [0.0]
+    store = Store(None)
+    store.put_cover(CoverDecision(SONG.key, "cover", URL, "deezer: Fisher - Stay", 0.0))
+    finder = Finder(Found(URL, "album", "x"))
+    covers = service(finder, now, store=store, fixes=FakeFixes(cover_fix(SONG.key, FIX_URL)))
+    now[0] = 400 * DAY
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert finder.calls == []
+
+
+def test_a_photo_fix_replaces_an_automatic_artist_photo() -> None:
+    fixes = FakeFixes(cover_fix(SONG.photo_key, FIX_PHOTO))
+    covers = service(Finder(Found(URL, "artist", "deezer artist: Fisher")), [0.0], fixes=fixes)
+    covers.request(SONG, NOW)
+    drain(covers)
+    cover = covers.lookup(SONG)
+    assert cover is not None and cover.kind == "artist"
+    assert cover.url.startswith(f"/covers/{name_for(FIX_PHOTO)}.jpg")
+    assert covers.remote_link(SONG) == FIX_PHOTO
+
+
+def test_no_photo_shows_no_image_for_an_artist_answer() -> None:
+    fixes = FakeFixes(cover_fix(SONG.photo_key, None, "none"))
+    covers = service(Finder(Found(URL, "artist", "deezer artist: Fisher")), [0.0], fixes=fixes)
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert covers.lookup(SONG) is None
+
+
+def test_a_photo_fix_is_the_other_side_of_an_own_cover() -> None:
+    photos = Finder(PHOTO)
+    fixes = FakeFixes(cover_fix(SONG.photo_key, FIX_PHOTO))
+    covers = service(Finder(ALBUM), [0.0], photos=photos, fixes=fixes)
+    for _ in range(2):
+        covers.request(SONG, NOW)
+        drain(covers)
+    photo = covers.photo(SONG)
+    assert photo is not None and photo.startswith(f"/covers/{name_for(FIX_PHOTO)}.jpg")
+    assert photos.calls == []
+
+
+def test_an_evicted_photo_fix_on_an_artist_answer_is_fetched_again(tmp_path: Path) -> None:
+    fetch = Fetch()
+    fixes = FakeFixes(cover_fix(SONG.photo_key, FIX_PHOTO))
+    covers = service(
+        Finder(Found(URL, "artist", "deezer artist: Fisher")),
+        [0.0],
+        fetch=fetch,
+        folder=tmp_path,
+        fixes=fixes,
+    )
+    for _ in range(2):
+        covers.request(SONG, NOW)
+        drain(covers)
+    (tmp_path / f"{name_for(FIX_PHOTO)}.jpg").unlink()
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert fetch.urls.count(FIX_PHOTO.replace("/1000x1000-", "/600x600-")) == 2
+    assert covers.lookup(SONG) is not None
+
+
+def test_a_photo_fix_is_fetched_for_an_unsearchable_song_at_its_priority() -> None:
+    track = make_track("東京", "Stay")
+    store = Store(None)
+    store.put_cover(CoverDecision(track.key, "artist", URL, "deezer artist: x", 0.0))
+    finder, fetch = Finder(), Fetch()
+    fixes = FakeFixes(cover_fix(track.photo_key, FIX_PHOTO))
+    covers = service(finder, [0.0], store=store, fetch=fetch, fixes=fixes)
+    covers.request(track, HISTORY)
+    covers.request(make_track("A", "New"), NOW)
+    assert covers.run_once()
+    assert finder.calls == ["New"] and fetch.urls == []
+    drain(covers)
+    assert fetch.urls == [FIX_PHOTO.replace("/1000x1000-", "/600x600-")]
+    cover = covers.lookup(track)
+    assert cover is not None and cover.url.startswith(f"/covers/{name_for(FIX_PHOTO)}.jpg")
+
+
+def test_the_automatic_cover_stays_until_the_fix_is_in_the_store() -> None:
+    fixes = FakeFixes()
+    covers = service(Finder(ALBUM), [0.0], fixes=fixes)
+    covers.request(SONG, NOW)
+    drain(covers)
+    fixes.map[SONG.key] = cover_fix(SONG.key, FIX_URL)
+    covers.fix_set(SONG.key)
+    cover = covers.lookup(SONG)
+    assert cover is not None and cover.url.startswith(LOCAL) and cover.kind == "album"
+    drain(covers)
+    cover = covers.lookup(SONG)
+    assert cover is not None and cover.url.startswith(f"/covers/{name_for(FIX_URL)}.jpg")
+
+
+def test_the_automatic_photo_stays_until_the_photo_fix_is_in_the_store() -> None:
+    fixes = FakeFixes()
+    covers = service(Finder(ALBUM), [0.0], photos=Finder(PHOTO), fixes=fixes)
+    for _ in range(2):
+        covers.request(SONG, NOW)
+        drain(covers)
+    automatic = covers.photo(SONG)
+    assert automatic is not None
+    fixes.map[SONG.photo_key] = cover_fix(SONG.photo_key, FIX_PHOTO)
+    assert covers.photo(SONG) == automatic
+    artist = service(Finder(PHOTO), [0.0], fixes=fixes)
+    fixes.map.clear()
+    artist.request(SONG, NOW)
+    drain(artist)
+    fixes.map[SONG.photo_key] = cover_fix(SONG.photo_key, FIX_PHOTO)
+    cover = artist.lookup(SONG)
+    assert cover is not None and cover.kind == "artist"
+    assert cover.url.startswith(f"/covers/{name_for(PHOTO_URL)}.jpg")
+
+
+def test_a_failed_fix_fetch_never_becomes_a_decision() -> None:
+    now = [0.0]
+    store = Store(None)
+    fetch = Fetch(HttpError("gone", 404))
+    covers = service(
+        Finder(), now, store=store, fetch=fetch, fixes=FakeFixes(cover_fix(SONG.key, FIX_URL))
+    )
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert store.get_cover(SONG.key) is None
+    assert FIX_URL not in (store.cover_links() or set())
+    assert covers.fetch_failure(SONG.key) == "gone"
+    # Paused: no new try within RETRY_S, one after it, and at once on a re-pick.
+    covers.request(SONG, NOW)
+    assert not covers.run_once()
+    now[0] += covers_module.RETRY_S
+    covers.request(SONG, NOW)
+    assert covers.run_once()
+    covers.fix_set(SONG.key)
+    assert covers.run_once()
+    assert len(fetch.urls) == 3
+
+
+def test_a_search_error_while_a_fix_exists_keeps_the_fix_out_of_covers() -> None:
+    store = Store(None)
+    store.put_cover(CoverDecision(SONG.key, "cover", URL, "m", 0.0))
+    fixes = FakeFixes()
+    finder = Finder(SearchError("down"))
+    now = [0.0]
+    covers = service(finder, now, store=store, fixes=fixes)
+    now[0] = 100 * DAY
+    covers.request(SONG, NOW)  # queues a search: no fix yet
+    fixes.map[SONG.key] = cover_fix(SONG.key, FIX_URL)
+    covers.fix_set(SONG.key)
+    drain(covers)
+    decision = store.get_cover(SONG.key)
+    assert decision is not None and decision.url == URL and decision.outcome == "error"
+
+
+def test_a_fix_set_during_a_search_is_still_fetched() -> None:
+    fixes = FakeFixes()
+    fetch = Fetch()
+    covers: CoverService | None = None
+
+    class SettingFinder(Finder):
+        def __call__(self, track: Track) -> Found | None:
+            assert covers is not None
+            fixes.map[track.key] = cover_fix(track.key, FIX_URL)
+            covers.fix_set(track.key)
+            return super().__call__(track)
+
+    covers = service(SettingFinder(Found(URL, "album", "x")), [0.0], fetch=fetch, fixes=fixes)
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert FIX_URL.replace("/1000x1000-", "/600x600-") in fetch.urls
+    cover = covers.lookup(SONG)
+    assert cover is not None and cover.url.startswith(f"/covers/{name_for(FIX_URL)}")
+
+
+def test_an_unsearchable_song_with_a_fix_is_fetched() -> None:
+    track = make_track("東京", "Stay")
+    covers = service(Finder(), [0.0], fixes=FakeFixes(cover_fix(track.key, FIX_URL)))
+    covers.request(track, NOW)
+    drain(covers)
+    assert covers.lookup(track) is not None
+
+
+def test_back_to_automatic_forgets_the_answer_and_searches_again() -> None:
+    store = Store(None)
+    finder = Finder(Found(URL, "album", "x"))
+    fixes = FakeFixes()
+    covers = service(finder, [0.0], store=store, fixes=fixes)
+    covers.request(SONG, NOW)
+    drain(covers)
+    fixes.map[SONG.key] = cover_fix(SONG.key, FIX_URL)
+    covers.fix_set(SONG.key)
+    drain(covers)
+    del fixes.map[SONG.key]
+    covers.fix_cleared(SONG.key, SONG)
+    assert store.get_cover(SONG.key) is None
+    assert covers.lookup(SONG) is None
+    drain(covers)
+    assert finder.calls == ["Stay", "Stay"]
+
+
+def test_back_to_automatic_without_a_heard_song_waits_for_the_next_play() -> None:
+    finder = Finder(Found(URL, "album", "x"))
+    covers = service(finder, [0.0], fixes=FakeFixes())
+    covers.fix_cleared(SONG.key, None)
+    assert not covers.run_once()
+
+
+def test_an_upload_is_copied_from_its_blob_and_rebuilt(tmp_path: Path) -> None:
+    blobs = tmp_path / "blobs"
+    blobs.mkdir()
+    ref = "blob:" + "c" * 64
+    (blobs / f"{'c' * 64}.jpg").write_bytes(JPG)
+    fetch = Fetch()
+    folder = tmp_path / "covers"
+    covers = service(
+        Finder(),
+        [0.0],
+        fetch=fetch,
+        folder=folder,
+        blobs=blobs,
+        fixes=FakeFixes(cover_fix(SONG.key, ref, "upload")),
+    )
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert fetch.urls == []
+    assert (folder / f"{name_for(ref)}.jpg").read_bytes() == JPG
+    assert covers.remote_link(SONG) is None
+    (folder / f"{name_for(ref)}.jpg").unlink()
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert covers.lookup(SONG) is not None
+
+
+def test_a_lost_blob_is_logged_once_and_reads_lost(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    now = [0.0]
+    ref = "blob:" + "c" * 64
+    covers = service(
+        Finder(), now, blobs=tmp_path, fixes=FakeFixes(cover_fix(SONG.key, ref, "upload"))
+    )
+    with caplog.at_level(logging.ERROR):
+        for _ in range(2):
+            covers.request(SONG, NOW)
+            drain(covers)
+            now[0] += covers_module.RETRY_S
+    assert [r.getMessage() for r in caplog.records] == ["cover_fix_blob_missing"]
+    assert covers.fetch_failure(SONG.key) == "lost"
+
+
+def test_a_fix_off_the_catalogue_hosts_is_refused(caplog: pytest.LogCaptureFixture) -> None:
+    fetch = Fetch()
+    covers = service(
+        Finder(),
+        [0.0],
+        fetch=fetch,
+        fixes=FakeFixes(cover_fix(SONG.key, "https://example.invalid/x.jpg")),
+    )
+    with caplog.at_level(logging.WARNING):
+        covers.request(SONG, NOW)
+        drain(covers)
+    assert fetch.urls == []
+    (refused,) = [r for r in caplog.records if r.getMessage() == "cover_fix_refused"]
+    assert getattr(refused, "fields", {}) == {"key": SONG.key, "why": "host"}
+    assert covers.fetch_failure(SONG.key) == "refused"
+
+
+def test_housekeeping_keeps_fixed_images_and_prunes_heard(tmp_path: Path) -> None:
+    now = [40 * DAY]
+    store = Store(tmp_path / "t.db")
+    store.record_heard(
+        "owr", [make_track("A", "Old", 1_000), make_track("B", "New", int(39 * DAY * 1000))]
+    )
+    folder = tmp_path / "covers"
+    folder.mkdir()
+    (folder / f"{name_for(FIX_URL)}.jpg").write_bytes(JPG)
+    (folder / f"{name_for(URL)}.jpg").write_bytes(JPG)
+    covers = service(
+        Finder(), now, store=store, folder=folder, fixes=FakeFixes(cover_fix(SONG.key, FIX_URL))
+    )
+    covers.housekeep()
+    assert (folder / f"{name_for(FIX_URL)}.jpg").exists()
+    assert not (folder / f"{name_for(URL)}.jpg").exists()
+    assert [s.key for s in store.heard_songs(0) or []] == ["b|new"]
+
+
+def test_housekeeping_keeps_every_file_while_the_fixes_are_unknown(tmp_path: Path) -> None:
+    folder = tmp_path / "covers"
+    folder.mkdir()
+    (folder / f"{name_for(URL)}.jpg").write_bytes(JPG)
+    covers = service(
+        Finder(),
+        [0.0],
+        store=Store(tmp_path / "t.db"),
+        folder=folder,
+        fixes=FakeFixes(known=False),
+    )
+    covers.housekeep()
+    assert (folder / f"{name_for(URL)}.jpg").exists()
+
+
+def test_a_fetch_whose_fix_was_cleared_while_it_waited_does_nothing() -> None:
+    fetch = Fetch()
+    fixes = FakeFixes(cover_fix(SONG.key, FIX_URL))
+    covers = service(Finder(), [0.0], fetch=fetch, fixes=fixes)
+    covers.request(SONG, NOW)
+    fixes.map.clear()
+    assert covers.run_once()
+    assert fetch.urls == [] and not covers.run_once()
+
+
+@pytest.mark.parametrize(
+    ("answer", "free", "blocked", "reason"),
+    [
+        (b"<html></html>", [1 << 40], False, "not_image"),
+        (RuntimeError("bug"), [1 << 40], False, "crashed"),
+        (JPG, [1], False, "disk_low"),
+        (JPG, [1 << 40, 1], False, "disk_low"),
+        (JPG, [1 << 40], True, "unwritable"),
+    ],
+)
+def test_a_fix_fetch_that_cannot_be_saved_pauses_with_its_reason(
+    tmp_path: Path, answer: bytes | Exception, free: list[int], blocked: bool, reason: str
+) -> None:
+    # free: what the disk reports on each look, the last value repeating.
+    looks = iter(free)
+    folder = tmp_path / "covers"
+    if blocked:
+        (tmp_path / "file").write_bytes(b"")
+        folder = tmp_path / "file" / "covers"
+    files = CoverFiles(folder, free=lambda: next(looks, free[-1]), clock=lambda: 0.0)
+    covers = CoverService(
+        Store(None),
+        Finder(),
+        files,
+        Fetch(answer),
+        clock=lambda: 0.0,
+        fixes=FakeFixes(cover_fix(SONG.key, FIX_URL)),
+    )
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert covers.fetch_failure(SONG.key) == reason
+    assert covers.lookup(SONG) is None
+    covers.request(SONG, NOW)
+    assert not covers.run_once()

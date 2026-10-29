@@ -3,6 +3,7 @@ searches the catalogues and downloads what they find into CoverFiles."""
 
 from __future__ import annotations
 
+import contextlib
 import heapq
 import itertools
 import logging
@@ -11,16 +12,18 @@ import time
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Literal
 
 from tunebox.catalogs import Found, SearchError
+from tunebox.config import BLOB_REF
 from tunebox.coverfiles import MAX_COVER, CleanReport, CoverFiles, SaveResult, name_for, sized
-from tunebox.coverfix import is_artist_photo
+from tunebox.coverfix import FETCH_LOST, Fix, FixReader, NoFixes, Shown, allowed_image, effective
 from tunebox.disk import has_room
 from tunebox.http import HttpError, HttpGet
 from tunebox.logs import bound, event
 from tunebox.matching import searchable
-from tunebox.store import CoverDecision, Outcome, Store
+from tunebox.store import HEARD_KEEP_MS, CoverDecision, Outcome, Store
 from tunebox.tracks import Track
 
 log = logging.getLogger(__name__)
@@ -48,7 +51,7 @@ DISK_WARN_S = 3600
 HOUSEKEEP_S = 86400
 # Consecutive failed downloads of one cover before they are logged as WARNING.
 LOUD_AFTER = 3
-JobKind = Literal["search", "download"]
+JobKind = Literal["search", "download", "fetch"]
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,8 @@ class CoverService:
         fetch: HttpGet,
         clock: Callable[[], float] = time.time,
         find_photo: Callable[[Track], Found | None] | None = None,
+        fixes: FixReader | None = None,
+        blob_path: Callable[[str], Path | None] | None = None,
     ) -> None:
         self._store = store
         self._find = find
@@ -74,13 +79,20 @@ class CoverService:
         self._fetch = fetch
         self._clock = clock
         self._lock = threading.Condition()
+        self._fixes = fixes or NoFixes()
+        self._blob_path = blob_path
         self._decisions: dict[str, CoverDecision] = {}
-        self._queue: list[tuple[int, int, str]] = []
-        self._pending: dict[str, tuple[int, Track, JobKind]] = {}
+        # A fix's fetch has its own queue slot (the bool), so a pending
+        # search of the same key never swallows it.
+        self._queue: list[tuple[int, int, str, bool]] = []
+        self._pending: dict[tuple[str, bool], tuple[int, Track | None, JobKind]] = {}
         self._searching: set[str] = set()
+        self._fetching: set[str] = set()
         self._seq = itertools.count()
-        # key -> (time of the last failed download, consecutive failures)
-        self._failed: dict[str, tuple[float, int]] = {}
+        # key -> (time of the last failed download, consecutive failures, reason)
+        self._failed: dict[str, tuple[float, int, str]] = {}
+        # Fix keys whose refusal or lost blob was logged; once per key.
+        self._told: set[str] = set()
         self._disk_warned = -DISK_WARN_S
 
     def _known(self, key: str) -> CoverDecision | None:
@@ -114,49 +126,75 @@ class CoverService:
         failed = self._failed.get(key)
         return failed is None or self._clock() - failed[0] >= RETRY_S
 
+    def _shown(self, track: Track) -> list[Shown | None]:
+        """Caller holds the lock. What the song shows, then what it shows
+        while a fixed image is not in the cover store yet: without the
+        song's own fix, then without the photo fix either."""
+        fix = self._fixes.get(track.key)
+        photo_fix = self._fixes.get(track.photo_key)
+        automatic = self._known(track.key)
+        return [
+            effective(fix, automatic, photo_fix),
+            effective(None, automatic, photo_fix),
+            effective(None, automatic, None),
+        ]
+
+    def _local(self, choices: list[Shown | None]) -> tuple[str, Shown] | None:
+        """The local address of the first choice that can be shown, and that
+        choice. A fixed image not yet downloaded passes to the next choice;
+        "no photo" and an automatic image not downloaded end the search."""
+        for shown in choices:
+            if shown is None or shown.url is None:
+                break
+            found = self._files.found(shown.url)
+            if found is not None:
+                path, address = found
+                self._files.touch(path)
+                return address, shown
+            if shown.fix is None:
+                break
+        return None
+
     def lookup(self, track: Track) -> Cover | None:
         """The local cover, even past its decision's TTL (a stale cover beats
         none while the worker looks again), or None while it is not
-        downloaded: the player then shows the station's own images. The next
-        request() queues the missing download."""
+        downloaded: the player then shows the station's own images. A fix
+        wins over the automatic answer once its image is in the cover store.
+        The next request() queues what is missing."""
         with self._lock:
-            decision = self._known(track.key)
-        if decision is None or decision.url is None:
-            return None
-        found = self._files.found(decision.url)
-        if found is None:
-            return None
-        path, address = found
-        self._files.touch(path)
-        return Cover(address, "artist" if is_artist_photo(decision) else "album")
+            choices = self._shown(track)
+        local = self._local(choices)
+        return Cover(local[0], local[1].kind) if local is not None else None
 
     def photo(self, track: Track) -> str | None:
         """The local address of the artists' photo, the other side of a
         song's own cover; None while it is not downloaded or not found."""
         with self._lock:
-            decision = self._known(track.photo_key)
-        if decision is None or decision.url is None:
-            return None
-        found = self._files.found(decision.url)
-        if found is None:
-            return None
-        path, address = found
-        self._files.touch(path)
-        return address
+            fix = self._fixes.get(track.photo_key)
+            automatic = self._known(track.photo_key)
+        local = self._local([effective(fix, automatic, None), effective(None, automatic, None)])
+        return local[0] if local is not None else None
 
     def remote_link(self, track: Track) -> str | None:
         """The catalogue link, for PawTunes, which counts a changed artwork
-        link as a new track."""
+        link as a new track. An upload has no public link and is omitted."""
         with self._lock:
-            decision = self._known(track.key)
-        return decision.url if decision else None
+            shown = self._shown(track)[0]
+        if shown is None or shown.url is None or BLOB_REF.fullmatch(shown.url):
+            return None
+        return shown.url
 
     def request(self, track: Track, priority: int) -> None:
-        """Queues what the track still needs. A song about to play whose own
-        cover was found also queues its artists' photo, after every song."""
-        if not searchable(track):
-            return
+        """Queues what the track still needs: the fetch of the fixes it may
+        show (also for a song no search could match), else a search or
+        download. A song about to play whose own cover was found also
+        queues its artists' photo, after every song."""
         with self._lock:
+            for fix in (self._fixes.get(track.key), self._fixes.get(track.photo_key)):
+                if fix is not None:
+                    self._queue_fetch(fix, priority)
+            if not searchable(track):
+                return
             self._queue_job(track, priority)
             if self._find_photo is not None and priority == NOW and self._has_own_cover(track):
                 # The photo job runs as the song under the photo's key, so
@@ -166,11 +204,15 @@ class CoverService:
     def _has_own_cover(self, track: Track) -> bool:
         """Caller holds the lock. A song whose only image is its artists'
         photo has no other side to show."""
-        decision = self._known(track.key)
-        return decision is not None and decision.url is not None and not is_artist_photo(decision)
+        shown = self._shown(track)[0]
+        return shown is not None and shown.url is not None and shown.kind == "album"
 
     def _queue_job(self, track: Track, priority: int) -> None:
-        """Caller holds the lock."""
+        """Caller holds the lock. A fixed key is never searched."""
+        fix = self._fixes.get(track.key)
+        if fix is not None:
+            self._queue_fetch(fix, priority)
+            return
         if track.key in self._searching:
             return
         kind: JobKind
@@ -180,39 +222,96 @@ class CoverService:
             kind = "download"
         else:
             return
-        pending = self._pending.get(track.key)
+        self._push(track.key, priority, kind, track)
+
+    def _queue_fetch(self, fix: Fix, priority: int) -> None:
+        """Caller holds the lock. Only a fix whose image is missing, and not
+        within the pause after a failed fetch."""
+        if fix.value is None or fix.key in self._fetching:
+            return
+        if self._files.path_for(fix.value) is not None:
+            return
+        failed = self._failed.get(fix.key)
+        if failed is not None and self._clock() - failed[0] < RETRY_S:
+            return
+        self._push(fix.key, priority, "fetch", None)
+
+    def _push(self, key: str, priority: int, kind: JobKind, track: Track | None) -> None:
+        """Caller holds the lock."""
+        slot = (key, kind == "fetch")
+        pending = self._pending.get(slot)
         if pending is not None and pending[0] <= priority:
             return
-        self._pending[track.key] = (priority, track, kind)
-        heapq.heappush(self._queue, (priority, next(self._seq), track.key))
+        self._pending[slot] = (priority, track, kind)
+        heapq.heappush(self._queue, (priority, next(self._seq), key, kind == "fetch"))
         self._lock.notify()
 
     def run_once(self) -> bool:
         """Runs the most urgent queued job; False when nothing was queued."""
+        fix: Fix | None = None
+        decision: CoverDecision | None = None
         with self._lock:
             while True:
                 if not self._queue:
                     return False
-                priority, _, key = heapq.heappop(self._queue)
-                pending = self._pending.get(key)
+                priority, _, key, fetching = heapq.heappop(self._queue)
+                slot = (key, fetching)
+                pending = self._pending.get(slot)
                 # A later request with a higher priority left this entry behind.
                 if pending is None or pending[0] != priority:
                     continue
-                del self._pending[key]
+                del self._pending[slot]
                 _, track, kind = pending
-                self._searching.add(key)
-                decision = self._known(key) if kind == "download" else None
+                if fetching:
+                    self._fetching.add(key)
+                    fix = self._fixes.get(key)
+                else:
+                    self._searching.add(key)
+                    decision = self._known(key) if kind == "download" else None
                 break
         try:
-            if decision is not None:
+            if fix is not None:
+                with bound("cover"):
+                    self._fetch_fix(fix)
+            elif track is None:
+                pass  # a fetch whose fix was cleared while it waited
+            elif decision is not None:
                 with bound("cover"):
                     self._download(track, decision)
             elif kind == "search":
                 self._search(track)
         finally:
             with self._lock:
-                self._searching.discard(track.key)
+                (self._fetching if fetching else self._searching).discard(key)
         return True
+
+    def fix_set(self, key: str) -> None:
+        """A fix just saved (or picked again): fetched at once, whatever an
+        earlier failure paused."""
+        with self._lock:
+            self._failed.pop(key, None)
+            self._told.discard(key)
+            fix = self._fixes.get(key)
+            if fix is not None:
+                self._queue_fetch(fix, NOW)
+
+    def fix_cleared(self, key: str, track: Track | None) -> None:
+        """Back to automatic: the automatic answer is forgotten, so the key
+        searches again; with a heard song at once, behind the songs
+        playing. track is that song under this key."""
+        self._store.delete_cover(key)
+        with self._lock:
+            self._decisions.pop(key, None)
+            self._failed.pop(key, None)
+            self._told.discard(key)
+        if track is not None:
+            self.request(track, HISTORY)
+
+    def fetch_failure(self, key: str) -> str | None:
+        """Why the key's last fetch failed, while its pause holds the entry."""
+        with self._lock:
+            failed = self._failed.get(key)
+        return failed[2] if failed is not None else None
 
     def run_forever(self, stop: threading.Event) -> None:
         self._housekeep_safely()
@@ -235,17 +334,23 @@ class CoverService:
             log.error("cover_housekeeping_crashed", exc_info=True)
 
     def housekeep(self) -> None:
-        """Forgets decisions for songs long unplayed, then removes the files
-        no remaining decision names and keeps the folder under its cap."""
+        """Forgets decisions for songs long unplayed and heard songs past the
+        panel's window, then removes the files no decision and no fix names
+        and keeps the folder under its cap."""
         removed = self._store.prune_covers(self._clock() - PRUNE_AFTER_S)
+        heard = self._store.prune_heard(round(self._clock() * 1000) - HEARD_KEEP_MS)
         with self._lock:
             for key in removed:
                 self._decisions.pop(key, None)
                 self._failed.pop(key, None)
         links = self._store.cover_links()
-        # Unknown links must not read as "none": only the size cap then applies.
-        report = self._files.clean(None if links is None else {name_for(link) for link in links})
-        _log_cleaned(report, len(removed), "daily", links is not None)
+        fixed = self._fixes.values()
+        # Unknown links or fixes must not read as "none": only the size cap
+        # then applies. The cap can still remove a fix's image, which its
+        # next request fetches again.
+        keep = None if links is None or fixed is None else {name_for(i) for i in links | fixed}
+        report = self._files.clean(keep)
+        _log_cleaned(report, len(removed), "daily", keep is not None, heard_removed=heard)
 
     def _search(self, track: Track) -> None:
         started = time.monotonic()
@@ -332,12 +437,11 @@ class CoverService:
             body = self._fetch(sized(link))
             result = self._files.save(link, body)
         except HttpError as error:
-            if error.status in (404, 410):
-                self._dead(track, decision, "gone", host, started, keeping)
-            elif error.too_large:
-                self._dead(track, decision, SaveResult.TOO_LARGE.value, host, started, keeping)
+            reason = _http_reason(error)
+            if reason == "unreachable":
+                self._failure(track.key, reason, host, started, error.status)
             else:
-                self._failure(track.key, "unreachable", host, started, error.status)
+                self._dead(track, decision, reason, host, started, keeping)
             return False
         except Exception:  # one broken download must not stop the worker
             log.error("cover_download_crashed", exc_info=True, extra={"fields": {"host": host}})
@@ -345,19 +449,7 @@ class CoverService:
             self._failure(track.key, "crashed", host, started, quiet=True, counted=False)
             return False
         if result in (SaveResult.SAVED, SaveResult.UNCHANGED):
-            with self._lock:
-                self._failed.pop(track.key, None)
-            if result is SaveResult.SAVED and self._files.over_cap():
-                # Only the size cap: the links are not looked up on this path.
-                _log_cleaned(self._files.clean(None), 0, "cap", None)
-            event(
-                log,
-                logging.DEBUG,
-                "cover_downloaded",
-                host=host,
-                bytes=len(body),
-                duration_ms=_ms_since(started),
-            )
+            self._done(track.key, result, host, len(body), started)
             return True
         if result in (SaveResult.NOT_IMAGE, SaveResult.TOO_LARGE):
             self._dead(track, decision, result.value, host, started, keeping)
@@ -366,6 +458,83 @@ class CoverService:
         else:
             self._failure(track.key, "unwritable", host, started)
         return False
+
+    def _done(self, key: str, result: SaveResult, host: str, size: int, started: float) -> None:
+        with self._lock:
+            self._failed.pop(key, None)
+        if result is SaveResult.SAVED and self._files.over_cap():
+            # Only the size cap: the links are not looked up on this path.
+            _log_cleaned(self._files.clean(None), 0, "cap", None)
+        event(
+            log,
+            logging.DEBUG,
+            "cover_downloaded",
+            host=host,
+            bytes=size,
+            duration_ms=_ms_since(started),
+        )
+
+    def _fetch_fix(self, fix: Fix) -> None:
+        """A fix's image into the cover store: an upload is copied from its
+        blob (no HTTP), a catalogue link fetched like any cover once the
+        host rule passes again. A failure only pauses the next try; a fix
+        never becomes a decision in the covers table."""
+        value = fix.value
+        if value is None or self._files.path_for(value) is not None:
+            return
+        started = time.monotonic()
+        host = ""
+        try:
+            if BLOB_REF.fullmatch(value):
+                body = self._blob_body(fix.key, value, started)
+                if body is None:
+                    return
+            else:
+                if not allowed_image(value):
+                    self._failure(fix.key, "refused", host, started, quiet=True, counted=False)
+                    self._tell_once(fix.key, logging.WARNING, "cover_fix_refused", why="host")
+                    return
+                host = urllib.parse.urlsplit(value).hostname or ""
+                if not has_room(self._files.free(), MAX_COVER):
+                    self._disk_low(fix.key, host, started)
+                    return
+                body = self._fetch(sized(value))
+            result = self._files.save(value, body)
+        except HttpError as error:
+            self._failure(fix.key, _http_reason(error), host, started, error.status)
+            return
+        except Exception:  # one broken fetch must not stop the worker
+            log.error("cover_download_crashed", exc_info=True, extra={"fields": {"host": host}})
+            self._failure(fix.key, "crashed", host, started, quiet=True, counted=False)
+            return
+        if result in (SaveResult.SAVED, SaveResult.UNCHANGED):
+            self._done(fix.key, result, host, len(body), started)
+        elif result is SaveResult.DISK_LOW:
+            self._disk_low(fix.key, host, started)
+        elif result in (SaveResult.NOT_IMAGE, SaveResult.TOO_LARGE):
+            self._failure(fix.key, result.value, host, started)
+        else:
+            self._failure(fix.key, "unwritable", host, started)
+
+    def _blob_body(self, key: str, ref: str, started: float) -> bytes | None:
+        """The upload's bytes; None when the blob is gone, which is logged
+        once and reads as FETCH_LOST until the owner picks again."""
+        path = self._blob_path(ref) if self._blob_path is not None else None
+        body: bytes | None = None
+        if path is not None:
+            with contextlib.suppress(OSError):
+                body = path.read_bytes()
+        if body is None:
+            self._failure(key, FETCH_LOST, "", started, quiet=True, counted=False)
+            self._tell_once(key, logging.ERROR, "cover_fix_blob_missing")
+        return body
+
+    def _tell_once(self, key: str, level: int, name: str, **fields: object) -> None:
+        with self._lock:
+            if key in self._told:
+                return
+            self._told.add(key)
+        event(log, level, name, key=key, **fields)
 
     def _disk_low(self, key: str, host: str, started: float) -> None:
         """Not the cover's fault: it sets the retry pause but is not a failure to count."""
@@ -410,8 +579,8 @@ class CoverService:
         counted: bool = True,
     ) -> None:
         with self._lock:
-            count = self._failed.pop(key, (0.0, 0))[1] + counted
-            self._failed[key] = (self._clock(), count)
+            count = self._failed.pop(key, (0.0, 0, ""))[1] + counted
+            self._failed[key] = (self._clock(), count, reason)
             while len(self._failed) > MEMORY:
                 del self._failed[next(iter(self._failed))]
         if quiet:
@@ -427,8 +596,20 @@ class CoverService:
         )
 
 
+def _http_reason(error: HttpError) -> str:
+    if error.status in (404, 410):
+        return "gone"
+    if error.too_large:
+        return SaveResult.TOO_LARGE.value
+    return "unreachable"
+
+
 def _log_cleaned(
-    report: CleanReport, decisions_removed: int, trigger: str, links_known: bool | None
+    report: CleanReport,
+    decisions_removed: int,
+    trigger: str,
+    links_known: bool | None,
+    heard_removed: int = 0,
 ) -> None:
     """links_known is None when this clean did not look the links up."""
     event(
@@ -437,6 +618,7 @@ def _log_cleaned(
         "cover_cache_cleaned",
         trigger=trigger,
         decisions_removed=decisions_removed,
+        heard_removed=heard_removed,
         links_known=links_known,
         files_removed=report.files_removed,
         bytes_freed=report.bytes_freed,
