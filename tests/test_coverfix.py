@@ -111,6 +111,7 @@ def test_a_photo_fix_shows_for_a_photo_key_and_behind_an_artist_answer() -> None
     # as an artist image, so /now sends no second side.
     assert effective(None, ARTIST, PHOTO) == Shown(LINK, "artist", PHOTO)
     assert effective(None, OLD_ARTIST, PHOTO) == Shown(LINK, "artist", PHOTO)
+    assert effective(NO_PHOTO, None, None) == Shown(None, "artist", NO_PHOTO)
     assert effective(None, ARTIST, NO_PHOTO) == Shown(None, "artist", NO_PHOTO)
 
 
@@ -145,6 +146,14 @@ def test_kinds_by_key_and_match() -> None:
         ("https://user@cdn-images.dzcdn.net/x.jpg", False),
         ("https://cdn-images.dzcdn.net:bad/x.jpg", False),
         ("https://cdn-images.dzcdn.net/x y.jpg", False),
+        ("https://evil.com\\.dzcdn.net/x.jpg", False),
+        ("https://evil.com%2f.dzcdn.net/x", False),
+        ("https://evil.com;.dzcdn.net/x", False),
+        ("https://a,b.dzcdn.net/", False),
+        ("https://a..dzcdn.net/x", False),
+        ("https://.dzcdn.net/x", False),
+        ("https://cdn.dzcdn.net:/x", False),
+        ("https://cdn.dzcdn.net?x", True),
         ("blob:" + "a" * 64, False),
         ("", False),
     ],

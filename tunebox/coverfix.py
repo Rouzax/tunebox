@@ -6,6 +6,7 @@ so the /now path and the cover worker never read the database."""
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 import urllib.parse
@@ -22,7 +23,7 @@ log = logging.getLogger(__name__)
 
 FixSource = Literal["deezer", "itunes", "link", "upload", "none"]
 
-CATALOGUE_HOSTS = ("dzcdn.net", "mzstatic.com")
+_CATALOGUE_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*(?:dzcdn\.net|mzstatic\.com)")
 # The failure reason of an uploaded cover whose blob is gone.
 FETCH_LOST = "lost"
 
@@ -175,17 +176,19 @@ def allowed_image(link: str) -> bool:
     """An image link a fix may name: https on a catalogue image host, no
     port and no user. Checked when a candidate is signed and again before
     the worker fetches it."""
-    if not link.isascii() or not link.isprintable() or " " in link:
+    if not link.isascii() or not link.isprintable() or " " in link or "\\" in link:
         return False
     try:
         parts = urllib.parse.urlsplit(link)
         port = parts.port
     except ValueError:
         return False
-    host = parts.hostname or ""
+    # Browsers and urllib read some odd hosts differently, so the host must
+    # be plain labels; an empty port ("host:") is refused for the same reason.
     return (
         parts.scheme == "https"
         and port is None
+        and not parts.netloc.endswith(":")
         and parts.username is None
-        and any(host == name or host.endswith("." + name) for name in CATALOGUE_HOSTS)
+        and _CATALOGUE_HOST.fullmatch(parts.hostname or "") is not None
     )
