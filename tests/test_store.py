@@ -206,3 +206,16 @@ def test_delete_cover_and_heard_track(tmp_path: Path) -> None:
     )
     photo = store.heard_track("photo:fisher")
     assert photo is not None and photo.key == "photo:fisher" and photo.title == "Losing It"
+
+
+def test_a_photo_key_lookup_uses_its_index(tmp_path: Path) -> None:
+    store = Store(tmp_path / "tunebox.db")
+    db = store._db  # pyright: ignore[reportPrivateUsage]
+    names = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert "heard_photo" in names
+    plan = db.execute(
+        "EXPLAIN QUERY PLAN SELECT artist, artists, title, last_at FROM heard"
+        " WHERE photo_key = ? ORDER BY last_at DESC LIMIT 1",
+        ("photo:fisher",),
+    ).fetchall()
+    assert any("heard_photo" in str(row[-1]) for row in plan)

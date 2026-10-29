@@ -274,6 +274,10 @@ class CoverService:
                     if fix is not None and fix.value is not None:
                         running = (key, fix.value)
                         self._fetching.add(running)
+                elif self._fixes.get(key) is not None:
+                    # The fix was saved after this job was queued: the fix
+                    # wins, so tunebox never looks the key up itself.
+                    track = None
                 else:
                     self._searching.add(key)
                     decision = self._known(key) if kind == "download" else None
@@ -283,7 +287,7 @@ class CoverService:
                 with bound("cover"):
                     self._fetch_fix(fix)
             elif track is None:
-                pass  # a fetch whose fix was cleared while it waited
+                pass  # a fetch whose fix was cleared, or a search whose key got one
             elif decision is not None:
                 with bound("cover"):
                     self._download(track, decision)
@@ -316,20 +320,20 @@ class CoverService:
             self._decisions.pop(key, None)
             # The search's pause is held under the key, each fix fetch's
             # under (key, value).
-            for failed in [k for k in self._failed if k == key or k[0] == key]:
+            for failed in [
+                k for k in self._failed if k == key or (isinstance(k, tuple) and k[0] == key)
+            ]:
                 del self._failed[failed]
             self._told = {told for told in self._told if told[0] != key}
         if track is not None:
             self.request(track, HISTORY)
 
-    def fetch_failure(self, key: str) -> str | None:
-        """Why the last fetch of the key's current fix failed, while its
-        pause holds the entry."""
+    def fetch_failure(self, key: str, value: str) -> str | None:
+        """Why the last fetch of that fix value failed, while its pause
+        holds the entry. The caller passes the value it shows, so a list
+        built from one snapshot of the fixes never mixes in a newer one."""
         with self._lock:
-            fix = self._fixes.get(key)
-            if fix is None or fix.value is None:
-                return None
-            failed = self._failed.get((key, fix.value))
+            failed = self._failed.get((key, value))
         return failed[2] if failed is not None else None
 
     def run_forever(self, stop: threading.Event) -> None:

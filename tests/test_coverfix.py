@@ -221,7 +221,7 @@ def listed(
         songs,
         fixes or {},
         lambda link: f"{name_for(link)}.jpg" if link in on_disk else None,
-        lambda key: (failure or {}).get(key),
+        lambda key, _value: (failure or {}).get(key),
         NOW_MS,
         view,
         query,
@@ -245,7 +245,7 @@ def test_states_of_automatic_answers() -> None:
         heard("東京", "歌", NOW_MS - 5),
         heard("E", "Failed", NOW_MS - 6, decision(make_track("E", "Failed").key, "error", None)),
     ]
-    rows = listed(songs, files={URL_A}).rows
+    rows = listed(songs, files={URL_A, URL_B}).rows
     assert [r.state for r in rows] == [
         "cover",
         "artist",
@@ -254,8 +254,44 @@ def test_states_of_automatic_answers() -> None:
         "nothing",
         "looking",
     ]
-    assert rows[0].image == f"{name_for(URL_A)}.jpg" and rows[1].image is None
-    assert listed(songs).totals == Totals(songs=6, cover=1, artist=1, nothing=2, fixed=0)
+    assert rows[0].image == f"{name_for(URL_A)}.jpg" and rows[1].image == f"{name_for(URL_B)}.jpg"
+    assert listed(songs, files={URL_A, URL_B}).totals == Totals(
+        songs=6, cover=1, artist=1, nothing=2, fixed=0
+    )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "url", "state"), [("cover", URL_A, "cover"), ("artist", URL_B, "artist")]
+)
+def test_an_automatic_image_counts_once_its_file_is_there(
+    outcome: str, url: str, state: str
+) -> None:
+    waiting = heard("A", "New", NOW_MS - 1, decision(make_track("A", "New").key, outcome, url))
+    old = replace(waiting, first_at=NOW_MS - 2 * DAY_MS)
+    (row,) = listed([waiting]).rows
+    assert (row.state, row.link, row.image, row.kind) == ("looking", None, None, None)
+    assert listed([waiting]).totals == Totals(songs=1, cover=0, artist=0, nothing=0, fixed=0)
+    assert listed([waiting], view="problems").rows == []
+    assert [r.key for r in listed([old], view="problems").rows] == [old.key]
+    (row,) = listed([waiting], files={url}).rows
+    assert (row.state, row.link, row.image) == (state, url, f"{name_for(url)}.jpg")
+
+
+def test_a_failure_of_an_older_fix_value_does_not_label_the_current_one() -> None:
+    song = heard("A", "Song", NOW_MS - 1)
+    fixes = {song.key: cover_fix(song.key, URL_B)}
+    failures = {(song.key, URL_A): "gone"}
+    listing = song_list(
+        [song],
+        fixes,
+        lambda _link: None,
+        lambda key, value: failures.get((key, value)),
+        NOW_MS,
+        "all",
+        "",
+        None,
+    )
+    assert [(r.state, r.reason) for r in listing.rows] == [("fetching", None)]
 
 
 def test_problems_hold_photos_nothing_and_old_unresolved_songs() -> None:
@@ -263,7 +299,7 @@ def test_problems_hold_photos_nothing_and_old_unresolved_songs() -> None:
     old = heard("F", "Old", NOW_MS - 2, first_at=NOW_MS - 2 * DAY_MS)
     photo = heard("B", "Photo", NOW_MS - 3, decision(make_track("B", "Photo").key, "artist", URL_B))
     good = heard("A", "Cover", NOW_MS - 4, decision(make_track("A", "Cover").key, "cover", URL_A))
-    rows = listed([young, old, photo, good], view="problems").rows
+    rows = listed([young, old, photo, good], view="problems", files={URL_A, URL_B}).rows
     assert [r.key for r in rows] == [old.key, photo.key]
 
 
@@ -314,9 +350,9 @@ def test_the_problems_page_stays_full_after_many_fixed_rows() -> None:
         for n in range(120)
     ]
     fixes = {s.key: cover_fix(s.key, URL_A) for s in fixed}
-    page = listed(fixed + photos, fixes, view="problems")
+    page = listed(fixed + photos, fixes, view="problems", files={URL_B})
     assert len(page.rows) == PAGE and page.next is not None
-    rest = listed(fixed + photos, fixes, view="problems", after=page.next)
+    rest = listed(fixed + photos, fixes, view="problems", after=page.next, files={URL_B})
     assert len(rest.rows) == 20 and rest.next is None
 
 
@@ -393,7 +429,7 @@ def test_the_list_does_not_touch_access_times(tmp_path: Path) -> None:
         found = files.found(link)
         return found[0].name if found else None
 
-    listing = song_list([song], {}, image, lambda _k: None, NOW_MS, "all", "", None)
+    listing = song_list([song], {}, image, lambda _k, _v: None, NOW_MS, "all", "", None)
     assert listing.rows[0].image == path.name
     assert path.stat().st_atime_ns == 1_000_000_000
 

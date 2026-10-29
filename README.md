@@ -689,8 +689,8 @@ stations, when the song was last heard, and where the image comes from:
   instead.
 - **No image**: tunebox found neither, or the song is not looked up (a
   title in a script the catalogues cannot match).
-- **Still looking**: tunebox has no answer yet, or its last lookup failed
-  and it will try again.
+- **Still looking**: tunebox has no answer yet or has not downloaded the
+  image yet, or its last lookup failed and it will try again.
 - **Your fix**: you chose the image. **Your fix · fetching** while tunebox
   downloads it; **Fetch failed** or **Image lost** when that went wrong
   (see [Troubleshooting](#troubleshooting)).

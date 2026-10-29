@@ -1014,7 +1014,7 @@ def test_a_failed_fix_fetch_never_becomes_a_decision() -> None:
     drain(covers)
     assert store.get_cover(SONG.key) is None
     assert FIX_URL not in (store.cover_links() or set())
-    assert covers.fetch_failure(SONG.key) == "gone"
+    assert covers.fetch_failure(SONG.key, FIX_URL) == "gone"
     # Paused: no new try within RETRY_S, one after it, and at once on a re-pick.
     covers.request(SONG, NOW)
     assert not covers.run_once()
@@ -1026,7 +1026,7 @@ def test_a_failed_fix_fetch_never_becomes_a_decision() -> None:
     assert len(fetch.urls) == 3
 
 
-def test_a_search_error_while_a_fix_exists_keeps_the_fix_out_of_covers() -> None:
+def test_a_search_queued_before_a_fix_leaves_the_stored_answer() -> None:
     store = Store(None)
     store.put_cover(CoverDecision(SONG.key, "cover", URL, "m", 0.0))
     fixes = FakeFixes()
@@ -1038,8 +1038,9 @@ def test_a_search_error_while_a_fix_exists_keeps_the_fix_out_of_covers() -> None
     fixes.map[SONG.key] = cover_fix(SONG.key, FIX_URL)
     covers.fix_set(SONG.key)
     drain(covers)
-    decision = store.get_cover(SONG.key)
-    assert decision is not None and decision.url == URL and decision.outcome == "error"
+    # The queued search sees the fix and never runs.
+    assert finder.calls == []
+    assert store.get_cover(SONG.key) == CoverDecision(SONG.key, "cover", URL, "m", 0.0)
 
 
 def test_a_fix_set_during_a_search_is_still_fetched() -> None:
@@ -1135,7 +1136,7 @@ def test_a_lost_blob_is_logged_once_and_reads_lost(
             drain(covers)
             now[0] += covers_module.RETRY_S
     assert [r.getMessage() for r in caplog.records] == ["cover_fix_blob_missing"]
-    assert covers.fetch_failure(SONG.key) == "lost"
+    assert covers.fetch_failure(SONG.key, ref) == "lost"
 
 
 def test_a_fix_off_the_catalogue_hosts_is_refused(caplog: pytest.LogCaptureFixture) -> None:
@@ -1152,7 +1153,7 @@ def test_a_fix_off_the_catalogue_hosts_is_refused(caplog: pytest.LogCaptureFixtu
     assert fetch.urls == []
     (refused,) = [r for r in caplog.records if r.getMessage() == "cover_fix_refused"]
     assert getattr(refused, "fields", {}) == {"key": SONG.key, "why": "host"}
-    assert covers.fetch_failure(SONG.key) == "refused"
+    assert covers.fetch_failure(SONG.key, "https://example.invalid/x.jpg") == "refused"
 
 
 def test_housekeeping_keeps_fixed_images_and_prunes_heard(
@@ -1263,7 +1264,7 @@ def test_a_fix_fetch_that_cannot_be_saved_pauses_with_its_reason(
     )
     covers.request(SONG, NOW)
     drain(covers)
-    assert covers.fetch_failure(SONG.key) == reason
+    assert covers.fetch_failure(SONG.key, FIX_URL) == reason
     assert covers.lookup(SONG) is None
     covers.request(SONG, NOW)
     assert not covers.run_once()
@@ -1295,4 +1296,32 @@ def test_a_re_pick_during_a_failing_fetch_is_fetched_at_once() -> None:
     ]
     cover = covers.lookup(SONG)
     assert cover is not None and cover.url.startswith(f"/covers/{name_for(FIX_PHOTO)}.jpg")
-    assert covers.fetch_failure(SONG.key) is None
+    assert covers.fetch_failure(SONG.key, FIX_PHOTO) is None
+
+
+def test_clearing_a_fix_keeps_the_pauses_of_other_keys() -> None:
+    track = make_track("A", "B")
+    covers = service(Finder(Found(URL, "album", "m")), [1000.0], fetch=Fetch(HttpError("x", 503)))
+    covers.request(track, NOW)
+    drain(covers)
+    failed = covers._failed  # pyright: ignore[reportPrivateUsage]
+    assert list(failed) == [track.key]
+    # A fix key equal to the first character of another key's pause.
+    covers.fix_cleared(track.key[0], None)
+    assert list(failed) == [track.key]
+
+
+def test_a_search_queued_before_a_fix_never_runs(tmp_path: Path) -> None:
+    store = Store(tmp_path / "t.db")
+    finder = Finder(Found(URL, "album", "m"))
+    fetch = Fetch()
+    fixes = FakeFixes()
+    covers = service(finder, [0.0], store=store, fetch=fetch, fixes=fixes)
+    covers.request(SONG, HISTORY)
+    fixes.map[SONG.key] = cover_fix(SONG.key, FIX_URL)
+    covers.fix_set(SONG.key)
+    drain(covers)
+    assert finder.calls == []
+    assert store.get_cover(SONG.key) is None
+    assert fetch.urls == [FIX_URL.replace("/1000x1000-", "/600x600-")]
+    store.close()

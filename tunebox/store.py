@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS heard (
     PRIMARY KEY (key, channel)
 );
 CREATE INDEX IF NOT EXISTS heard_last ON heard(last_at);
+-- heard_track by photo key, newest first: an undo of a photo fix.
+CREATE INDEX IF NOT EXISTS heard_photo ON heard(photo_key, last_at);
 """
 
 # The panel lists the songs of this many days; older heard rows go daily.

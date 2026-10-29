@@ -210,7 +210,8 @@ class Row:
     """One row of the panel's list. photo_key is None on the row of a photo
     fix (its key is the photo key). first_at and last_at are None for a fix
     not heard in the window. link is the image the row shows; image is its
-    cover-store file name, looked up for fix rows and the page's rows only."""
+    cover-store file name. A row shows an image only once that file is
+    there."""
 
     key: str
     artist: str
@@ -250,7 +251,7 @@ def song_list(
     songs: Sequence[HeardSong],
     fixes: Mapping[str, Fix],
     image: Callable[[str], str | None],
-    failure: Callable[[str], str | None],
+    failure: Callable[[str, str], str | None],
     now_ms: int,
     view: View,
     query: str,
@@ -259,7 +260,8 @@ def song_list(
 ) -> Listing:
     """The panel's page: filter, search, newest first, keyset paging on
     (sort_at, key). image names the cover-store file of a link (a stat, no
-    access-time touch); failure the reason of a key's failed fetch."""
+    access-time touch); failure the reason the fetch of a fix value (key,
+    value) failed."""
     heard = [_song_row(song, fixes, image, failure) for song in songs]
     totals = Totals(
         len(heard),
@@ -274,27 +276,24 @@ def song_list(
         rows = [r for r in heard if _problem(r, now_ms)]
     else:
         rows = heard
+    wanted, raw = norm(query), query.strip().casefold()
     rows = sorted(
-        (r for r in rows if _matches(r, query)), key=lambda r: (r.sort_at, r.key), reverse=True
+        (r for r in rows if _matches(r, wanted, raw)),
+        key=lambda r: (r.sort_at, r.key),
+        reverse=True,
     )
     if after is not None:
         rows = [r for r in rows if (r.sort_at, r.key) < after]
     page = rows[:limit]
-    shown = [
-        replace(r, image=image(r.link))
-        if r.image is None and r.link is not None and r.fix is None
-        else r
-        for r in page
-    ]
     more = len(rows) > limit
-    return Listing(shown, (page[-1].sort_at, page[-1].key) if more else None, totals)
+    return Listing(page, (page[-1].sort_at, page[-1].key) if more else None, totals)
 
 
 def _song_row(
     song: HeardSong,
     fixes: Mapping[str, Fix],
     image: Callable[[str], str | None],
-    failure: Callable[[str], str | None],
+    failure: Callable[[str, str], str | None],
 ) -> Row:
     fix = fixes.get(song.key)
     shown = effective(fix, song.cover, fixes.get(song.photo_key))
@@ -326,7 +325,12 @@ def _song_row(
         return Row(*base, _kind_state(shown), shown.kind, shown.url, None, None, file)
     if shown.url is None:
         return Row(*base, "nothing", None, None, None)
-    return Row(*base, _kind_state(shown), shown.kind, shown.url, None)
+    # lookup serves an automatic image only while its file is there; until
+    # the download lands the song is still looking, not covered.
+    file = image(shown.url)
+    if file is None:
+        return Row(*base, "looking", None, None, None)
+    return Row(*base, _kind_state(shown), shown.kind, shown.url, None, None, file)
 
 
 def _kind_state(shown: Shown) -> State:
@@ -334,7 +338,9 @@ def _kind_state(shown: Shown) -> State:
 
 
 def _fix_state(
-    shown: Shown, image: Callable[[str], str | None], failure: Callable[[str], str | None]
+    shown: Shown,
+    image: Callable[[str], str | None],
+    failure: Callable[[str, str], str | None],
 ) -> tuple[State, str | None, str | None]:
     """A fix's state, reason and file: shown once its image is in the cover
     store, else fetching, failed (with the reason) or lost (an upload
@@ -345,7 +351,7 @@ def _fix_state(
     file = image(shown.url)
     if file is not None:
         return "fix", None, file
-    reason = failure(shown.fix.key)
+    reason = failure(shown.fix.key, shown.url)
     if reason == FETCH_LOST:
         return "lost", reason, None
     return ("failed", reason, None) if reason else ("fetching", None, None)
@@ -356,7 +362,7 @@ def _fixed_rows(
     songs: Sequence[HeardSong],
     fixes: Mapping[str, Fix],
     image: Callable[[str], str | None],
-    failure: Callable[[str], str | None],
+    failure: Callable[[str, str], str | None],
 ) -> list[Row]:
     """Every fix, ordered by the later of its last play and when it was
     set. A cover fix no heard song has (not heard in the window, or a song
@@ -409,11 +415,10 @@ def _problem(row: Row, now_ms: int) -> bool:
     )
 
 
-def _matches(row: Row, query: str) -> bool:
-    """Case-insensitive substring on the normalized text; a query with
-    nothing left after norm() (another script) compares the text as typed."""
-    wanted = norm(query)
+def _matches(row: Row, wanted: str, raw: str) -> bool:
+    """Case-insensitive substring on the normalized text (wanted is the
+    query after norm()); a query with nothing left after norm() (another
+    script) compares the text as typed (raw, casefolded)."""
     if wanted:
         return wanted in norm(row.artist) or wanted in norm(row.title)
-    raw = query.strip().casefold()
     return not raw or raw in row.artist.casefold() or raw in row.title.casefold()
