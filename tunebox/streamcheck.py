@@ -4,11 +4,8 @@ what a now-playing source reports, before a station is saved."""
 from __future__ import annotations
 
 import logging
-import math
 import re
-import threading
 import time
-from collections import deque
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any, Protocol
@@ -17,6 +14,7 @@ from tunebox.config import SourceConfig
 from tunebox.http import HttpError
 from tunebox.logs import event
 from tunebox.netguard import RESOLVE_S, Probe
+from tunebox.pacer import Busy, Pacer
 from tunebox.sources import build_source
 from tunebox.sources.base import SourceError
 from tunebox.tracks import RawEntry
@@ -84,16 +82,6 @@ _PLS_ENTRY = re.compile(rb"^[ \t]*file\d+[ \t]*=[ \t]*(https?://\S+)", re.IGNORE
 _ASX_ENTRY = re.compile(rb"<ref\s+href\s*=\s*[\"']?(https?://[^\"'\s>]+)", re.IGNORECASE)
 _M3U_ENTRY = re.compile(rb"^[ \t]*(https?://\S+)", re.MULTILINE)
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-
-
-class Busy(Exception):
-    """Another check is running (running), or the minute's checks are used
-    up; retry_s is when a check can run again."""
-
-    def __init__(self, running: bool, retry_s: int) -> None:
-        super().__init__("check_running" if running else "too_many_checks")
-        self.running = running
-        self.retry_s = retry_s
 
 
 class GuardedGet(Protocol):
@@ -230,18 +218,11 @@ class StreamChecks:
     ) -> None:
         self._probe = probe
         self._feed = feed
-        self._clock = clock
-        # One lock over the running flag, the minute's checks and when the
-        # running check must be done, so a refused check reads all three as
-        # one moment.
-        self._lock = threading.Lock()
-        self._busy = False
-        self._times: deque[float] = deque()
-        self._ends = 0.0
+        self._pacer = Pacer(PER_MINUTE, "check_running", "too_many_checks", clock)
 
     def stream(self, url: str) -> dict[str, Any]:
         with self._logged("stream_checked") as logged:
-            with self._slot(STREAM_BOUND_S):
+            with self._pacer.slot(STREAM_BOUND_S):
                 try:
                     answer = describe(self._probe(url), url)
                 except HttpError as error:
@@ -251,7 +232,7 @@ class StreamChecks:
 
     def feed(self, source: SourceConfig) -> dict[str, Any]:
         with self._logged("feed_checked", source=source.type) as logged:
-            with self._slot(FEED_BOUND_S):
+            with self._pacer.slot(FEED_BOUND_S):
                 try:
                     entries = self._feed(source)
                 except SourceError as error:
@@ -300,24 +281,3 @@ class StreamChecks:
                 duration_ms=round((time.monotonic() - started) * 1000),
                 **logged,
             )
-
-    @contextmanager
-    def _slot(self, bound_s: float) -> Generator[None]:
-        """bound_s: the longest this check can hold the slot; a check refused
-        meanwhile is told to wait what is left of it."""
-        with self._lock:
-            now = self._clock()
-            if self._busy:
-                raise Busy(running=True, retry_s=max(1, math.ceil(self._ends - now)))
-            while self._times and now - self._times[0] >= 60:
-                self._times.popleft()
-            if len(self._times) >= PER_MINUTE:
-                raise Busy(running=False, retry_s=max(1, math.ceil(60 - (now - self._times[0]))))
-            self._times.append(now)
-            self._busy = True
-            self._ends = now + bound_s
-        try:
-            yield
-        finally:
-            with self._lock:
-                self._busy = False

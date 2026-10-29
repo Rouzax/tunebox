@@ -51,6 +51,7 @@ from tunebox.http_headers import single
 from tunebox.limits import Once, network
 from tunebox.logos import CONTENT_TYPES, Logos, group_key
 from tunebox.logs import event
+from tunebox.pacer import Busy
 from tunebox.paths import inside
 from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, PinStale, read_cookie
 from tunebox.rulecheck import check_new, lint_new
@@ -63,7 +64,7 @@ from tunebox.settings import (
     state_from_dict,
     state_to_json,
 )
-from tunebox.streamcheck import URL_MAX, Busy, StreamChecks
+from tunebox.streamcheck import URL_MAX, StreamChecks
 from tunebox.tomlout import dumps
 from tunebox.usage import Usage, UsageSettings, UsageUnavailable
 from tunebox.usagecore import NAME_MAX, RETENTION_MAX, RETENTION_MIN, valid_device

@@ -8,6 +8,7 @@ import pytest
 from tunebox.config import SourceConfig
 from tunebox.http import HttpError
 from tunebox.netguard import Probe
+from tunebox.pacer import Busy
 from tunebox.sources.base import SourceError
 from tunebox.streamcheck import (
     FEED_DEADLINE_S,
@@ -16,7 +17,6 @@ from tunebox.streamcheck import (
     PER_MINUTE,
     STREAM_BOUND_S,
     UNREACHABLE,
-    Busy,
     StreamChecks,
     codec_of,
     describe,
