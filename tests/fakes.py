@@ -22,9 +22,11 @@ STATION_ID = r"^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b"
 PLAYED_BY = r"\s*\(Played by ([^)]*)\)\s*$"
 RULES = Rules(station_id=re.compile(STATION_ID), played_by=re.compile(PLAYED_BY))
 FIXTURE = Path(__file__).parent / "fixtures" / "tracks-2026-10-16.psv"
-# SOI, a JFIF segment, a scan header, scan data and EOI: walkable as a JPEG.
+# SOI, a JFIF segment, a frame header, a scan header, scan data and EOI:
+# walkable as a JPEG.
 COVER_JPG = (
     b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    + b"\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
     + b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
     + b"\x01" * 48
     + b"\xff\xd9"

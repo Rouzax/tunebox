@@ -5,7 +5,8 @@ carries the place it was taken, the time and the device. The runtime has no
 image library to re-encode with, so the file's segments or chunks are walked
 and only those needed to draw the picture are kept, byte for byte; anything
 else, known or not, is dropped. A structure that cannot be walked raises
-ValueError: an image tunebox cannot read is not kept."""
+ValueError: an image tunebox cannot read is not kept, nor one whose structure
+holds no picture at all."""
 
 from __future__ import annotations
 
@@ -21,6 +22,8 @@ _APP14 = 0xEE
 # Tables and frame headers a decoder needs: SOF0-SOF15 (C4 is DHT, C8 is
 # reserved, CC is DAC, the arithmetic-coding table), DNL, DQT and DRI.
 _DECODE = frozenset(m for m in range(0xC0, 0xD0) if m != 0xC8) | {0xDB, 0xDC, 0xDD}
+# The frame headers among them: a scan can be decoded only after one.
+_SOF = frozenset(m for m in range(0xC0, 0xD0) if m not in (0xC4, 0xC8, 0xCC))
 _JFIF = b"JFIF\x00"
 # Identifier, version, units and density; the thumbnail that may follow
 # would show the picture as it was before any crop.
@@ -34,6 +37,7 @@ _ORIENTATION = 0x0112
 _SHORT = 3
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_IHDR_LENGTH = 13
 # What draws a still picture and its colours. Animation chunks (acTL, fcTL,
 # fdAT) go too: browsers then show the default image, and a cover is a still.
 _PNG_KEEP = frozenset(
@@ -59,6 +63,7 @@ _WEBP_KEEP = frozenset({b"VP8 ", b"VP8L", b"VP8X", b"ALPH", b"ICCP"})
 _WEBP_ANIMATION = frozenset({b"ANIM", b"ANMF"})
 _VP8X_ANIMATION = 0x02
 _VP8X_METADATA = 0x08 | 0x04  # the EXIF and XMP flags
+_WEBP_PICTURE = frozenset({b"VP8 ", b"VP8L"})
 
 
 def strip(body: bytes, kind: str) -> bytes:
@@ -79,6 +84,7 @@ def _jpeg(body: bytes) -> bytes:
         raise ValueError("no start of image")
     kept: list[bytes] = []
     jfif = False
+    frame = scanned = False
     orientation: int | None = None
     pos = len(_SOI)
     while True:
@@ -92,6 +98,8 @@ def _jpeg(body: bytes) -> bytes:
         marker = body[pos]
         pos += 1
         if marker == _EOI:
+            if not scanned:
+                raise ValueError("no picture")
             # Phones append further JPEGs after the end, each with its own
             # Exif; those go.
             kept.append(body[start:pos])
@@ -110,9 +118,13 @@ def _jpeg(body: bytes) -> bytes:
         payload = body[pos + 2 : pos + length]
         pos += length
         if marker == _SOS:
+            if not frame:
+                raise ValueError("scan before the frame header")
+            scanned = True
             pos = _scan_end(body, pos)
             kept.append(body[start:pos])
         elif marker in _DECODE:
+            frame = frame or marker in _SOF
             kept.append(body[start:pos])
         elif marker == _APP0 and not jfif and not kept and payload.startswith(_JFIF):
             if len(payload) < _JFIF_HEAD + 2:
@@ -177,6 +189,7 @@ def _png(body: bytes) -> bytes:
         raise ValueError("no PNG signature")
     out = [_PNG_SIGNATURE]
     pos = len(_PNG_SIGNATURE)
+    data = False
     while True:
         if pos + 12 > len(body):
             raise ValueError("truncated chunk")
@@ -185,11 +198,19 @@ def _png(body: bytes) -> bytes:
         if end > len(body):
             raise ValueError("truncated chunk")
         kind = body[pos + 4 : pos + 8]
+        # The header comes first and once, with its fixed length.
+        if (kind == b"IHDR") != (pos == len(_PNG_SIGNATURE)):
+            raise ValueError("misplaced IHDR")
+        if kind == b"IHDR" and length != _IHDR_LENGTH:
+            raise ValueError("bad IHDR length")
+        data = data or kind == b"IDAT"
         if kind in _PNG_KEEP:
             # Copied whole: the CRC covers type and data, so it stays valid.
             out.append(body[pos:end])
         pos = end
         if kind == b"IEND":
+            if not data:
+                raise ValueError("no image data")
             return b"".join(out)
 
 
@@ -223,5 +244,7 @@ def _webp(body: bytes) -> bytes:
                 raise ValueError("animated WebP")
             chunk = chunk[:8] + bytes([chunk[8] & ~_VP8X_METADATA & 0xFF]) + chunk[9:]
         chunks.append(chunk)
+    if not any(chunk[:4] in _WEBP_PICTURE for chunk in chunks):
+        raise ValueError("no image chunk")
     data = b"".join(chunks)
     return b"RIFF" + struct.pack("<I", 4 + len(data)) + b"WEBP" + data

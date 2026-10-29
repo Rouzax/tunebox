@@ -101,14 +101,14 @@ def test_an_upright_or_unknown_orientation_is_no_rotation(orientation: int) -> N
     ],
 )
 def test_an_unreadable_exif_means_no_rotation(payload: bytes) -> None:
-    body = SOI + segment(0xE1, payload) + SOS + SCAN + EOI
-    assert strip(body, "jpg") == SOI + SOS + SCAN + EOI
+    body = SOI + segment(0xE1, payload) + SOF0 + SOS + SCAN + EOI
+    assert strip(body, "jpg") == SOI + SOF0 + SOS + SCAN + EOI
 
 
 def test_the_rotation_goes_after_the_jfif_segment_only() -> None:
-    body = SOI + segment(0xE1, exif(3)) + DQT + SOS + SCAN + EOI
+    body = SOI + segment(0xE1, exif(3)) + DQT + SOF0 + SOS + SCAN + EOI
     out = strip(body, "jpg")
-    assert out.startswith(SOI + b"\xff\xe1") and out.endswith(DQT + SOS + SCAN + EOI)
+    assert out.startswith(SOI + b"\xff\xe1") and out.endswith(DQT + SOF0 + SOS + SCAN + EOI)
 
 
 def test_a_clean_jpeg_comes_back_unchanged() -> None:
@@ -118,16 +118,16 @@ def test_a_clean_jpeg_comes_back_unchanged() -> None:
 
 
 def test_a_standalone_marker_outside_a_scan_goes() -> None:
-    body = SOI + APP0 + b"\xff\x01" + DQT + b"\xff\xd3" + SOS + SCAN + EOI
-    assert strip(body, "jpg") == SOI + APP0 + DQT + SOS + SCAN + EOI
+    body = SOI + APP0 + b"\xff\x01" + DQT + b"\xff\xd3" + SOF0 + SOS + SCAN + EOI
+    assert strip(body, "jpg") == SOI + APP0 + DQT + SOF0 + SOS + SCAN + EOI
 
 
 def test_the_jfif_thumbnail_goes_and_only_a_leading_jfif_stays() -> None:
     thumbnail = segment(0xE0, b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x01\x01" + b"\x7f" * 3)
-    body = SOI + thumbnail + segment(0xE0, APP0[4:]) + DQT + SOS + SCAN + EOI
-    assert strip(body, "jpg") == SOI + APP0 + DQT + SOS + SCAN + EOI
-    late = SOI + DQT + APP0 + SOS + SCAN + EOI
-    assert strip(late, "jpg") == SOI + DQT + SOS + SCAN + EOI
+    body = SOI + thumbnail + segment(0xE0, APP0[4:]) + DQT + SOF0 + SOS + SCAN + EOI
+    assert strip(body, "jpg") == SOI + APP0 + DQT + SOF0 + SOS + SCAN + EOI
+    late = SOI + DQT + APP0 + SOF0 + SOS + SCAN + EOI
+    assert strip(late, "jpg") == SOI + DQT + SOF0 + SOS + SCAN + EOI
 
 
 def test_segments_between_the_scans_of_a_progressive_jpeg_are_walked() -> None:
@@ -178,6 +178,21 @@ def test_a_jpeg_that_cannot_be_walked_is_refused(body: bytes) -> None:
         strip(body, "jpg")
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        SOI + EOI,
+        SOI + APP0 + DQT + SOS + SCAN + EOI,  # no frame header
+        SOI + APP0 + DQT + SOF0 + EOI,  # no scan
+        SOI + APP0 + DQT + SOS + SCAN + SOF0 + SOS + SCAN + EOI,  # a scan before the frame
+    ],
+    ids=["empty", "no-frame", "no-scan", "scan-first"],
+)
+def test_a_jpeg_without_a_picture_is_refused(body: bytes) -> None:
+    with pytest.raises(ValueError):
+        strip(body, "jpg")
+
+
 def chunk(kind: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
@@ -222,6 +237,20 @@ def test_a_clean_png_comes_back_unchanged() -> None:
 def test_a_png_that_cannot_be_walked_is_refused(body: bytes) -> None:
     with pytest.raises(ValueError):
         strip(body, "png")
+
+
+def test_a_png_without_a_picture_is_refused() -> None:
+    _body, (ihdr, gama, idat, iend) = small_png()
+    short = chunk(b"IHDR", b"\x00" * 12)
+    for chunks in (
+        [iend],
+        [ihdr, iend],  # no image data
+        [gama, ihdr, idat, iend],  # header not first
+        [short, idat, iend],  # header of the wrong length
+        [ihdr, ihdr, idat, iend],  # a second header
+    ):
+        with pytest.raises(ValueError):
+            strip(png.SIGNATURE + b"".join(chunks), "png")
 
 
 def riff(*chunks: bytes) -> bytes:
@@ -274,6 +303,21 @@ def test_a_clean_webp_comes_back_unchanged() -> None:
     ],
 )
 def test_a_webp_that_cannot_be_walked_is_refused(body: bytes) -> None:
+    with pytest.raises(ValueError):
+        strip(body, "webp")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        riff(),
+        riff(webp_chunk(b"VP8X", b"\x10" + b"\x00" * 9)),
+        riff(webp_chunk(b"VP8X", b"\x10" + b"\x00" * 9), webp_chunk(b"ALPH", b"\x00")),
+        riff(webp_chunk(b"ICCP", b"icc"), webp_chunk(b"EXIF", exif(6)[6:])),
+    ],
+    ids=["empty", "vp8x-only", "alpha-only", "metadata-only"],
+)
+def test_a_webp_without_a_picture_is_refused(body: bytes) -> None:
     with pytest.raises(ValueError):
         strip(body, "webp")
 
