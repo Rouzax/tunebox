@@ -52,6 +52,9 @@ HOUSEKEEP_S = 86400
 # Consecutive failed downloads of one cover before they are logged as WARNING.
 LOUD_AFTER = 3
 JobKind = Literal["search", "download", "fetch"]
+# A failure is held under the song or photo key for an automatic download,
+# and under (key, fix value) for a fix's fetch.
+FailKey = str | tuple[str, str]
 
 
 @dataclass(frozen=True)
@@ -87,12 +90,15 @@ class CoverService:
         self._queue: list[tuple[int, int, str, bool]] = []
         self._pending: dict[tuple[str, bool], tuple[int, Track | None, JobKind]] = {}
         self._searching: set[str] = set()
-        self._fetching: set[str] = set()
+        # (key, fix value) of the fetches running now.
+        self._fetching: set[tuple[str, str]] = set()
         self._seq = itertools.count()
-        # key -> (time of the last failed download, consecutive failures, reason)
-        self._failed: dict[str, tuple[float, int, str]] = {}
-        # Fix keys whose refusal or lost blob was logged; once per key.
-        self._told: set[str] = set()
+        # The time of the last failure, consecutive failures and the reason.
+        # A fix's failure is held per value, so a fetch of a value the owner
+        # has since replaced can neither pause nor label the new one.
+        self._failed: dict[FailKey, tuple[float, int, str]] = {}
+        # Fixes whose refusal or lost blob was logged; once per fix value.
+        self._told: set[tuple[str, str]] = set()
         self._disk_warned = -DISK_WARN_S
 
     def _known(self, key: str) -> CoverDecision | None:
@@ -227,11 +233,11 @@ class CoverService:
     def _queue_fetch(self, fix: Fix, priority: int) -> None:
         """Caller holds the lock. Only a fix whose image is missing, and not
         within the pause after a failed fetch."""
-        if fix.value is None or fix.key in self._fetching:
+        if fix.value is None or (fix.key, fix.value) in self._fetching:
             return
         if self._files.path_for(fix.value) is not None:
             return
-        failed = self._failed.get(fix.key)
+        failed = self._failed.get((fix.key, fix.value))
         if failed is not None and self._clock() - failed[0] < RETRY_S:
             return
         self._push(fix.key, priority, "fetch", None)
@@ -249,6 +255,7 @@ class CoverService:
     def run_once(self) -> bool:
         """Runs the most urgent queued job; False when nothing was queued."""
         fix: Fix | None = None
+        running: tuple[str, str] | None = None
         decision: CoverDecision | None = None
         with self._lock:
             while True:
@@ -263,8 +270,10 @@ class CoverService:
                 del self._pending[slot]
                 _, track, kind = pending
                 if fetching:
-                    self._fetching.add(key)
                     fix = self._fixes.get(key)
+                    if fix is not None and fix.value is not None:
+                        running = (key, fix.value)
+                        self._fetching.add(running)
                 else:
                     self._searching.add(key)
                     decision = self._known(key) if kind == "download" else None
@@ -282,17 +291,20 @@ class CoverService:
                 self._search(track)
         finally:
             with self._lock:
-                (self._fetching if fetching else self._searching).discard(key)
+                if running is not None:
+                    self._fetching.discard(running)
+                elif not fetching:
+                    self._searching.discard(key)
         return True
 
     def fix_set(self, key: str) -> None:
         """A fix just saved (or picked again): fetched at once, whatever an
-        earlier failure paused."""
+        earlier failure paused, also while a fetch of an earlier value runs."""
         with self._lock:
-            self._failed.pop(key, None)
-            self._told.discard(key)
             fix = self._fixes.get(key)
-            if fix is not None:
+            if fix is not None and fix.value is not None:
+                self._failed.pop((key, fix.value), None)
+                self._told.discard((key, fix.value))
                 self._queue_fetch(fix, NOW)
 
     def fix_cleared(self, key: str, track: Track | None) -> None:
@@ -303,14 +315,17 @@ class CoverService:
         with self._lock:
             self._decisions.pop(key, None)
             self._failed.pop(key, None)
-            self._told.discard(key)
         if track is not None:
             self.request(track, HISTORY)
 
     def fetch_failure(self, key: str) -> str | None:
-        """Why the key's last fetch failed, while its pause holds the entry."""
+        """Why the last fetch of the key's current fix failed, while its
+        pause holds the entry."""
         with self._lock:
-            failed = self._failed.get(key)
+            fix = self._fixes.get(key)
+            if fix is None or fix.value is None:
+                return None
+            failed = self._failed.get((key, fix.value))
         return failed[2] if failed is not None else None
 
     def run_forever(self, stop: threading.Event) -> None:
@@ -459,7 +474,7 @@ class CoverService:
             self._failure(track.key, "unwritable", host, started)
         return False
 
-    def _done(self, key: str, result: SaveResult, host: str, size: int, started: float) -> None:
+    def _done(self, key: FailKey, result: SaveResult, host: str, size: int, started: float) -> None:
         with self._lock:
             self._failed.pop(key, None)
         if result is SaveResult.SAVED and self._files.over_cap():
@@ -482,61 +497,62 @@ class CoverService:
         value = fix.value
         if value is None or self._files.path_for(value) is not None:
             return
+        fail = (fix.key, value)
         started = time.monotonic()
         host = ""
         try:
             if BLOB_REF.fullmatch(value):
-                body = self._blob_body(fix.key, value, started)
+                body = self._blob_body(fail, started)
                 if body is None:
                     return
             else:
                 if not allowed_image(value):
-                    self._failure(fix.key, "refused", host, started, quiet=True, counted=False)
-                    self._tell_once(fix.key, logging.WARNING, "cover_fix_refused", why="host")
+                    self._failure(fail, "refused", host, started, quiet=True, counted=False)
+                    self._tell_once(fail, logging.WARNING, "cover_fix_refused", why="host")
                     return
                 host = urllib.parse.urlsplit(value).hostname or ""
                 if not has_room(self._files.free(), MAX_COVER):
-                    self._disk_low(fix.key, host, started)
+                    self._disk_low(fail, host, started)
                     return
                 body = self._fetch(sized(value))
             result = self._files.save(value, body)
         except HttpError as error:
-            self._failure(fix.key, _http_reason(error), host, started, error.status)
+            self._failure(fail, _http_reason(error), host, started, error.status)
             return
         except Exception:  # one broken fetch must not stop the worker
             log.error("cover_download_crashed", exc_info=True, extra={"fields": {"host": host}})
-            self._failure(fix.key, "crashed", host, started, quiet=True, counted=False)
+            self._failure(fail, "crashed", host, started, quiet=True, counted=False)
             return
         if result in (SaveResult.SAVED, SaveResult.UNCHANGED):
-            self._done(fix.key, result, host, len(body), started)
+            self._done(fail, result, host, len(body), started)
         elif result is SaveResult.DISK_LOW:
-            self._disk_low(fix.key, host, started)
+            self._disk_low(fail, host, started)
         elif result in (SaveResult.NOT_IMAGE, SaveResult.TOO_LARGE):
-            self._failure(fix.key, result.value, host, started)
+            self._failure(fail, result.value, host, started)
         else:
-            self._failure(fix.key, "unwritable", host, started)
+            self._failure(fail, "unwritable", host, started)
 
-    def _blob_body(self, key: str, ref: str, started: float) -> bytes | None:
+    def _blob_body(self, fix: tuple[str, str], started: float) -> bytes | None:
         """The upload's bytes; None when the blob is gone, which is logged
         once and reads as FETCH_LOST until the owner picks again."""
-        path = self._blob_path(ref) if self._blob_path is not None else None
+        path = self._blob_path(fix[1]) if self._blob_path is not None else None
         body: bytes | None = None
         if path is not None:
             with contextlib.suppress(OSError):
                 body = path.read_bytes()
         if body is None:
-            self._failure(key, FETCH_LOST, "", started, quiet=True, counted=False)
-            self._tell_once(key, logging.ERROR, "cover_fix_blob_missing")
+            self._failure(fix, FETCH_LOST, "", started, quiet=True, counted=False)
+            self._tell_once(fix, logging.ERROR, "cover_fix_blob_missing")
         return body
 
-    def _tell_once(self, key: str, level: int, name: str, **fields: object) -> None:
+    def _tell_once(self, fix: tuple[str, str], level: int, name: str, **fields: object) -> None:
         with self._lock:
-            if key in self._told:
+            if fix in self._told:
                 return
-            self._told.add(key)
-        event(log, level, name, key=key, **fields)
+            self._told.add(fix)
+        event(log, level, name, key=fix[0], **fields)
 
-    def _disk_low(self, key: str, host: str, started: float) -> None:
+    def _disk_low(self, key: FailKey, host: str, started: float) -> None:
         """Not the cover's fault: it sets the retry pause but is not a failure to count."""
         self._failure(key, "disk_low", host, started, quiet=True, counted=False)
         now = self._clock()
@@ -570,7 +586,7 @@ class CoverService:
 
     def _failure(
         self,
-        key: str,
+        key: FailKey,
         reason: str,
         host: str,
         started: float,

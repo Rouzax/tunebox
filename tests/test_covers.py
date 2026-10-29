@@ -1154,7 +1154,9 @@ def test_a_fix_off_the_catalogue_hosts_is_refused(caplog: pytest.LogCaptureFixtu
     assert covers.fetch_failure(SONG.key) == "refused"
 
 
-def test_housekeeping_keeps_fixed_images_and_prunes_heard(tmp_path: Path) -> None:
+def test_housekeeping_keeps_fixed_images_and_prunes_heard(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     now = [40 * DAY]
     store = Store(tmp_path / "t.db")
     store.record_heard(
@@ -1167,10 +1169,13 @@ def test_housekeeping_keeps_fixed_images_and_prunes_heard(tmp_path: Path) -> Non
     covers = service(
         Finder(), now, store=store, folder=folder, fixes=FakeFixes(cover_fix(SONG.key, FIX_URL))
     )
-    covers.housekeep()
+    with caplog.at_level(logging.INFO):
+        covers.housekeep()
     assert (folder / f"{name_for(FIX_URL)}.jpg").exists()
     assert not (folder / f"{name_for(URL)}.jpg").exists()
     assert [s.key for s in store.heard_songs(0) or []] == ["b|new"]
+    (cleaned,) = [r for r in caplog.records if r.getMessage() == "cover_cache_cleaned"]
+    assert getattr(cleaned, "fields", {})["heard_removed"] == 1
 
 
 def test_housekeeping_keeps_every_file_while_the_fixes_are_unknown(tmp_path: Path) -> None:
@@ -1232,3 +1237,32 @@ def test_a_fix_fetch_that_cannot_be_saved_pauses_with_its_reason(
     assert covers.lookup(SONG) is None
     covers.request(SONG, NOW)
     assert not covers.run_once()
+
+
+def test_a_re_pick_during_a_failing_fetch_is_fetched_at_once() -> None:
+    fixes = FakeFixes(cover_fix(SONG.key, FIX_URL))
+    covers: CoverService | None = None
+
+    class RePick(Fetch):
+        def __call__(self, url: str) -> bytes:
+            self.urls.append(url)
+            if url == FIX_URL.replace("/1000x1000-", "/600x600-"):
+                assert covers is not None
+                fixes.map[SONG.key] = cover_fix(SONG.key, FIX_PHOTO)
+                covers.fix_set(SONG.key)
+                raise HttpError("busy", 503)
+            return JPG
+
+    fetch = RePick()
+    covers = service(Finder(), [0.0], fetch=fetch, fixes=fixes)
+    covers.request(SONG, NOW)
+    drain(covers)
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert fetch.urls == [
+        FIX_URL.replace("/1000x1000-", "/600x600-"),
+        FIX_PHOTO.replace("/1000x1000-", "/600x600-"),
+    ]
+    cover = covers.lookup(SONG)
+    assert cover is not None and cover.url.startswith(f"/covers/{name_for(FIX_PHOTO)}.jpg")
+    assert covers.fetch_failure(SONG.key) is None

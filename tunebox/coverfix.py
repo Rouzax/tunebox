@@ -157,8 +157,8 @@ def effective(
     fix: Fix | None, automatic: CoverDecision | None, photo_fix: Fix | None
 ) -> Shown | None:
     """The one rule for what a key shows. fix is the key's own fix,
-    automatic its decision from the covers table (callers skip reading it
-    when fix is set), photo_fix the fix of the song's photo key. A song
+    automatic its decision from the covers table (ignored when fix is
+    set), photo_fix the fix of the song's photo key. A song
     whose automatic image is its artists' photo shows the photo fix in its
     place; a song with a cover of its own keeps that cover."""
     if fix is not None:
