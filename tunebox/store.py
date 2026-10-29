@@ -78,6 +78,10 @@ LEFT JOIN covers c ON c.key = g.key
 """
 
 
+class HeardUnreadable(Exception):
+    """The song list could not be read from the database file just now."""
+
+
 @dataclass(frozen=True)
 class CoverDecision:
     key: str
@@ -331,7 +335,10 @@ class Store:
     def heard_songs(self, since_ms: int) -> list[HeardSong] | None:
         """The panel's list, on a read-only connection of its own so it
         never waits for (or holds up) the store's lock. None on the
-        in-memory store, whose list says nothing about what was played."""
+        in-memory store, whose list says nothing about what was played.
+        Raises HeardUnreadable when the file cannot be read now; that is
+        logged as cover_list_unreadable on every failure and leaves the
+        one-shot store_unavailable to the store's own connection."""
         if self._path is None:
             return None
         try:
@@ -340,8 +347,8 @@ class Store:
             ) as db:
                 rows = db.execute(_HEARD, (since_ms,)).fetchall()
         except sqlite3.Error as error:
-            self._report(error)
-            return None
+            event(log, logging.WARNING, "cover_list_unreadable", error=str(error))
+            raise HeardUnreadable from error
         songs: list[HeardSong] = []
         for row in rows:
             (

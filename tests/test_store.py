@@ -1,10 +1,11 @@
 import logging
+import os
 from pathlib import Path
 
 import pytest
 
 from tests.fakes import make_track
-from tunebox.store import CoverDecision, Store
+from tunebox.store import CoverDecision, HeardUnreadable, Store
 
 URL = "https://example.invalid/a.jpg"
 
@@ -162,6 +163,31 @@ def test_a_failed_heard_write_leaves_the_links_known(
     assert [r.getMessage() for r in caplog.records] == ["store_unavailable"]
     assert store.cover_links() == {URL}
     assert store.heard_songs(0) == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a file without permissions")
+def test_an_unreadable_list_is_its_own_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "tunebox.db"
+    store = Store(path)
+    store.record_heard("owr", [make_track()])
+    path.chmod(0)
+    try:
+        with caplog.at_level(logging.WARNING), pytest.raises(HeardUnreadable):
+            store.heard_songs(0)
+    finally:
+        path.chmod(0o600)
+    assert [r.getMessage() for r in caplog.records] == ["cover_list_unreadable"]
+    assert caplog.records[0].levelno == logging.WARNING
+    # The store's own one-shot report is still there for its own connection.
+    caplog.clear()
+    store._db.execute(  # pyright: ignore[reportPrivateUsage]
+        "CREATE TRIGGER refuse BEFORE INSERT ON heard BEGIN SELECT RAISE(ABORT, 'full'); END"
+    )
+    with caplog.at_level(logging.ERROR):
+        store.record_heard("owr", [make_track("A", "B")])
+    assert [r.getMessage() for r in caplog.records] == ["store_unavailable"]
 
 
 def test_delete_cover_and_heard_track(tmp_path: Path) -> None:

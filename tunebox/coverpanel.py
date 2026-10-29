@@ -17,7 +17,7 @@ from tunebox.coverfix import CoverFixes, Fix, Row, View, is_photo_key, song_list
 from tunebox.covers import CoverService
 from tunebox.coversearch import CoverSearch, SearchKind
 from tunebox.logs import event
-from tunebox.store import HEARD_KEEP_MS, Store
+from tunebox.store import HEARD_KEEP_MS, HeardUnreadable, Store
 
 log = logging.getLogger(__name__)
 
@@ -54,10 +54,15 @@ class CoverPanel:
     def listing(self, view: View, query: str, after: tuple[int, str] | None) -> dict[str, object]:
         """Never calls lookup or photo: the list neither touches access
         times nor fills the decision memory, and never asks a catalogue.
-        available is False when the heard songs cannot be read (the
-        in-memory store keeps none)."""
+        available is False on the in-memory store, which keeps no heard
+        songs; readable is False when the file could not be read just now,
+        and the page then lists the fixes only."""
         now_ms = round(self._clock() * 1000)
-        songs = self._store.heard_songs(now_ms - HEARD_KEEP_MS)
+        readable = True
+        try:
+            songs = self._store.heard_songs(now_ms - HEARD_KEEP_MS)
+        except HeardUnreadable:
+            songs, readable = [], False
         listing = song_list(
             songs or [],
             {fix.key: fix for fix in self._fixes.all()},
@@ -70,6 +75,7 @@ class CoverPanel:
         )
         return {
             "available": songs is not None,
+            "readable": readable,
             "totals": dataclasses.asdict(listing.totals),
             "rows": [_row(row) for row in listing.rows],
             # The key may hold colons itself; the reader splits at the first.

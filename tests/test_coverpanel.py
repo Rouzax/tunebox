@@ -14,7 +14,7 @@ from tunebox.coverpanel import IMAGE_PATH, CoverPanel, NotACover, StaleCandidate
 from tunebox.covers import CoverService
 from tunebox.coversearch import CoverSearch
 from tunebox.settings import Settings
-from tunebox.store import Store
+from tunebox.store import HeardSong, HeardUnreadable, Store
 
 LINK = "https://cdn-images.dzcdn.net/images/cover/" + "c" * 32 + "/1000x1000-000000-80-0-0.jpg"
 
@@ -172,6 +172,24 @@ def test_the_list_says_when_it_cannot_be_read(tmp_path: Path) -> None:
     listing = memory.listing("all", "", None)
     assert listing["available"] is False and listing["rows"] == []
     assert made.panel.listing("all", "", None)["available"] is True
+    made.close()
+
+
+class UnreadableStore(Store):
+    def heard_songs(self, since_ms: int) -> list[HeardSong] | None:
+        raise HeardUnreadable
+
+
+def test_an_unreadable_list_shows_the_fixes_only(tmp_path: Path) -> None:
+    made = Panel(tmp_path)
+    made.panel.upload("a|b", "A", "B", COVER_JPG)
+    store = UnreadableStore(tmp_path / "t.db")
+    panel = CoverPanel(made.fixes, made.service, store, made.files, made.blobs, made.search)
+    listing = panel.listing("all", "", None)
+    assert (listing["available"], listing["readable"], listing["rows"]) == (True, False, [])
+    fixed = panel.listing("fixed", "", None)
+    assert [row["key"] for row in cast("list[dict[str, object]]", fixed["rows"])] == ["a|b"]
+    assert made.panel.listing("all", "", None)["readable"] is True
     made.close()
 
 

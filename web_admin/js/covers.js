@@ -86,6 +86,8 @@ export function render(root, ctx) {
     const totals = el('p', {class: 'cover-totals hint'});
     const note = el('p', {class: 'warning', hidden: true}, icon('warning'),
         ' tunebox keeps its song list in memory only (it could not open tunebox.db), so the list is empty until a restart. Fixes still apply.');
+    const unread = el('p', {class: 'warning', hidden: true}, icon('warning'),
+        ' tunebox could not read its song list just now. Reload the page to try again; fixes still apply.');
     const list = el('ul', {class: 'cover-list'});
     const more = button('history', 'More', () => load(true).catch(unreachable(ctx)), {class: 'quiet', hidden: true});
     const views = VIEWS.map(([value, label]) => el('button', {
@@ -123,6 +125,7 @@ export function render(root, ctx) {
         }
         const data = answer.data;
         note.hidden = data.available !== false;
+        unread.hidden = data.readable !== false;
         const t = data.totals;
         totals.textContent = `Last 30 days: ${t.songs} songs · ${t.cover} with a cover · ${t.artist} showing an artist photo · ${t.nothing} with no image · ${t.fixed} fixed by you`;
         page.rows = append ? page.rows.concat(data.rows) : data.rows;
@@ -308,7 +311,7 @@ export function render(root, ctx) {
     root.replaceChildren(
         el('section', {class: 'covers-page'},
             el('h2', null, 'Covers'),
-            totals, note,
+            totals, note, unread,
             el('div', {class: 'actions ranges'}, views),
             search, list, more));
     load(false).catch(unreachable(ctx));
