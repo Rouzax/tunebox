@@ -268,6 +268,9 @@ def test_a_clean_webp_comes_back_unchanged() -> None:
         riff(b"VP8 \x00"),  # chunk header cut short
         riff(b"VP8 \x20\x00\x00\x00abc"),  # chunk past the RIFF size
         riff(webp_chunk(b"VP8X", b"")),  # VP8X without its flags
+        riff(webp_chunk(b"VP8X", b"\x02" + b"\x00" * 9)),  # the animation flag
+        # Metadata hidden in an animation frame.
+        riff(webp_chunk(b"ANIM", b"\x00" * 6), webp_chunk(b"ANMF", b"\x00" * 16 + b"EXIF" + GPS)),
     ],
 )
 def test_a_webp_that_cannot_be_walked_is_refused(body: bytes) -> None:

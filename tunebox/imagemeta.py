@@ -53,7 +53,11 @@ _PNG_KEEP = frozenset(
     }
 )
 
-_WEBP_KEEP = frozenset({b"VP8 ", b"VP8L", b"VP8X", b"ALPH", b"ICCP", b"ANIM", b"ANMF"})
+_WEBP_KEEP = frozenset({b"VP8 ", b"VP8L", b"VP8X", b"ALPH", b"ICCP"})
+# An animation frame (ANMF) holds sub-chunks of its own, metadata among
+# them; a cover is a still, so an animated WebP is refused, not walked.
+_WEBP_ANIMATION = frozenset({b"ANIM", b"ANMF"})
+_VP8X_ANIMATION = 0x02
 _VP8X_METADATA = 0x08 | 0x04  # the EXIF and XMP flags
 
 
@@ -208,11 +212,15 @@ def _webp(body: bytes) -> bytes:
             raise ValueError("truncated chunk")
         chunk = body[pos:end]
         pos = end
+        if fourcc in _WEBP_ANIMATION:
+            raise ValueError("animated WebP")
         if fourcc not in _WEBP_KEEP:
             continue
         if fourcc == b"VP8X":
             if length < 1:
                 raise ValueError("empty VP8X chunk")
+            if chunk[8] & _VP8X_ANIMATION:
+                raise ValueError("animated WebP")
             chunk = chunk[:8] + bytes([chunk[8] & ~_VP8X_METADATA & 0xFF]) + chunk[9:]
         chunks.append(chunk)
     data = b"".join(chunks)
