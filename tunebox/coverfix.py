@@ -176,6 +176,37 @@ def effective(
     return Shown(automatic.url, "artist" if is_artist_photo(automatic) else "album")
 
 
+def choices(
+    fix: Fix | None, automatic: CoverDecision | None, photo_fix: Fix | None
+) -> list[Shown | None]:
+    """What a song shows, then what it shows while a fixed image is not in
+    the cover store yet: without the song's own fix, then without the photo
+    fix either."""
+    return [
+        effective(fix, automatic, photo_fix),
+        effective(None, automatic, photo_fix),
+        effective(None, automatic, None),
+    ]
+
+
+def first_stored[T](
+    options: Sequence[Shown | None], find: Callable[[str], T | None]
+) -> tuple[T, Shown] | None:
+    """The first option whose image find() locates in the cover store, with
+    what find() returned. A fixed image not stored yet passes to the next
+    option; no image ("no photo") and an automatic image not downloaded end
+    the search, as the player then shows the station's own images."""
+    for shown in options:
+        if shown is None or shown.url is None:
+            break
+        found = find(shown.url)
+        if found is not None:
+            return found, shown
+        if shown.fix is None:
+            break
+    return None
+
+
 def allowed_image(link: str) -> bool:
     """An image link a fix may name: https on a catalogue image host, no
     port and no user. Checked when a candidate is signed and again before
@@ -297,8 +328,8 @@ def _song_row(
     image: Callable[[str], str | None],
     failure: Callable[[str, str], str | None],
 ) -> Row:
-    fix = fixes.get(song.key)
-    shown = effective(fix, song.cover, fixes.get(song.photo_key))
+    options = choices(fixes.get(song.key), song.cover, fixes.get(song.photo_key))
+    shown = options[0]
     base = (
         song.key,
         song.artist,
@@ -315,8 +346,14 @@ def _song_row(
         )
         return Row(*base, "looking" if searchable(track) else "nothing", None, None, None)
     if shown.fix is not None:
-        state, reason, file = _fix_state(shown, image, failure)
-        return Row(*base, state, shown.kind, shown.url, shown.fix, reason, file)
+        # The state is the fix's; the image is the one lookup serves, which
+        # stays the earlier image while the fix is fetched or failed.
+        state, reason, _ = _fix_state(shown, image, failure)
+        stored = first_stored(options, image)
+        if stored is None:
+            return Row(*base, state, shown.kind, shown.url, shown.fix, reason, None)
+        file, served = stored
+        return Row(*base, state, served.kind, served.url, shown.fix, reason, file)
     if song.cover is not None and song.cover.outcome == "error":
         # A failed search or download keeps the previous image, which lookup
         # still serves while its file is there; without it the song is

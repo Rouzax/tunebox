@@ -505,3 +505,33 @@ def test_a_song_without_an_album_cover_lists_its_photo_fix() -> None:
     none = {s.photo_key: cover_fix(s.photo_key, None, "none") for s in songs}
     rows = listed(songs, none).rows
     assert [(r.state, r.link, r.image) for r in rows] == [("fix", None, None)] * 3
+
+
+@pytest.mark.parametrize(("failure", "state"), [(None, "fetching"), ("gone", "failed")])
+def test_a_fix_not_yet_stored_lists_the_image_the_player_still_shows(
+    failure: str | None, state: str
+) -> None:
+    cover = heard("A", "Cover", NOW_MS - 1, decision(make_track("A", "Cover").key, "cover", URL_A))
+    artist = heard(
+        "B",
+        "Photo",
+        NOW_MS - 2,
+        decision(make_track("B", "Photo").key, "artist", URL_B, "deezer artist: B"),
+    )
+    fixes = {
+        cover.key: cover_fix(cover.key, URL_C),
+        artist.key: cover_fix(artist.key, URL_C),
+        artist.photo_key: cover_fix(artist.photo_key, link(4)),
+    }
+    failures = {cover.key: failure, artist.key: failure} if failure else None
+    rows = listed([cover, artist], fixes, files={URL_A, link(4)}, failure=failures).rows
+    assert [(r.state, r.reason, r.fix) for r in rows] == [
+        (state, failure, fixes[cover.key]),
+        (state, failure, fixes[artist.key]),
+    ]
+    # The automatic cover, and the photo fix that stands in for the automatic
+    # photo, in the order lookup tries them.
+    assert [(r.kind, r.link, r.image) for r in rows] == [
+        ("album", URL_A, f"{name_for(URL_A)}.jpg"),
+        ("artist", link(4), f"{name_for(link(4))}.jpg"),
+    ]

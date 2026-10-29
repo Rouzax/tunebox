@@ -18,7 +18,17 @@ from typing import Literal
 from tunebox.catalogs import Found, SearchError
 from tunebox.config import BLOB_REF
 from tunebox.coverfiles import MAX_COVER, CleanReport, CoverFiles, SaveResult, name_for, sized
-from tunebox.coverfix import FETCH_LOST, Fix, FixReader, NoFixes, Shown, allowed_image, effective
+from tunebox.coverfix import (
+    FETCH_LOST,
+    Fix,
+    FixReader,
+    NoFixes,
+    Shown,
+    allowed_image,
+    choices,
+    effective,
+    first_stored,
+)
 from tunebox.disk import has_room
 from tunebox.http import HttpError, HttpGet
 from tunebox.logs import bound, event
@@ -133,33 +143,20 @@ class CoverService:
         return failed is None or self._clock() - failed[0] >= RETRY_S
 
     def _shown(self, track: Track) -> list[Shown | None]:
-        """Caller holds the lock. What the song shows, then what it shows
-        while a fixed image is not in the cover store yet: without the
-        song's own fix, then without the photo fix either."""
-        fix = self._fixes.get(track.key)
-        photo_fix = self._fixes.get(track.photo_key)
-        automatic = self._known(track.key)
-        return [
-            effective(fix, automatic, photo_fix),
-            effective(None, automatic, photo_fix),
-            effective(None, automatic, None),
-        ]
+        """Caller holds the lock."""
+        return choices(
+            self._fixes.get(track.key), self._known(track.key), self._fixes.get(track.photo_key)
+        )
 
-    def _local(self, choices: list[Shown | None]) -> tuple[str, Shown] | None:
-        """The local address of the first choice that can be shown, and that
-        choice. A fixed image not yet downloaded passes to the next choice;
-        "no photo" and an automatic image not downloaded end the search."""
-        for shown in choices:
-            if shown is None or shown.url is None:
-                break
-            found = self._files.found(shown.url)
-            if found is not None:
-                path, address = found
-                self._files.touch(path)
-                return address, shown
-            if shown.fix is None:
-                break
-        return None
+    def _local(self, options: list[Shown | None]) -> tuple[str, Shown] | None:
+        """The local address of the first option that can be shown, and that
+        option; its file's access time marks it handed out."""
+        stored = first_stored(options, self._files.found)
+        if stored is None:
+            return None
+        (path, address), shown = stored
+        self._files.touch(path)
+        return address, shown
 
     def lookup(self, track: Track) -> Cover | None:
         """The local cover, even past its decision's TTL (a stale cover beats
@@ -168,8 +165,8 @@ class CoverService:
         wins over the automatic answer once its image is in the cover store.
         The next request() queues what is missing."""
         with self._lock:
-            choices = self._shown(track)
-        local = self._local(choices)
+            options = self._shown(track)
+        local = self._local(options)
         return Cover(local[0], local[1].kind) if local is not None else None
 
     def photo(self, track: Track) -> str | None:
