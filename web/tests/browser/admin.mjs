@@ -5,7 +5,9 @@
 // before a PIN change or before showing that station again, confirm account
 // changes with a code, see a listener on the Usage page, rename and delete
 // its device, change the usage settings, export and import the stations,
-// upload a logo, give a group an image, change the password, log out and log in with it,
+// upload a logo, give a group an image, find a song on the Covers page, fix
+// its cover from a search and an upload, and undo it, change the password,
+// log out and log in with it,
 // checking after each step
 // that the player's /api/channels follows. Also checks that the pages have no
 // sideways scroll at phone and laptop sizes, and no page or CSP errors.
@@ -25,6 +27,7 @@
 import {spawn, spawnSync} from 'node:child_process';
 import {createHmac} from 'node:crypto';
 import {mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
+import {createServer as createHttpServer} from 'node:http';
 import {createServer as createHttpsServer} from 'node:https';
 import {createServer} from 'node:net';
 import os, {tmpdir} from 'node:os';
@@ -137,6 +140,50 @@ function silentStream(folder) {
     })));
 }
 
+// The Deezer and iTunes APIs as tunebox's Covers search reads them
+// (TUNEBOX_CATALOGS), with one album and two artist profiles. The images
+// they name are dzcdn links, which the page's requests answer locally.
+function localCatalogue() {
+    const image = (kind, id, size) => `https://cdn-images.dzcdn.net/images/${kind}/${id.repeat(32)}/${size}x${size}-000000-80-0-0.jpg`;
+    const album = {
+        id: 655089251,
+        title: 'Collide',
+        cover_xl: image('cover', '1', 1000),
+        cover_medium: image('cover', '1', 250),
+        artist: {name: 'AGENTS OF TIME'},
+    };
+    const answer = (path) => {
+        if (path === '/deezer/search') {
+            return {data: [{title: 'Hearts Collide', artist: album.artist, album}]};
+        }
+        if (path === '/deezer/search/artist') {
+            return {data: [
+                {id: 11, name: 'Jessica', nb_fan: 12345, picture_xl: image('artist', '2', 1000), picture_medium: image('artist', '2', 250)},
+                {id: 12, name: 'Jessica Mauboy', nb_fan: 678, picture_xl: image('artist', '3', 1000), picture_medium: image('artist', '3', 250)},
+            ]};
+        }
+        if (/^\/deezer\/artist\/[0-9]+\/albums$/.test(path)) {
+            return {data: []};
+        }
+        if (/^\/deezer\/album\/[0-9]+$/.test(path)) {
+            return album;
+        }
+        if (path === '/itunes/search') {
+            return {results: []};
+        }
+        return null;
+    };
+    const server = createHttpServer((request, response) => {
+        const found = answer(new URL(request.url, 'http://catalogue').pathname);
+        response.writeHead(found ? 200 : 404, {'Content-Type': 'application/json'});
+        response.end(JSON.stringify(found || {error: {code: 800}}));
+    });
+    return new Promise((done) => server.listen(0, '127.0.0.1', () => done({
+        url: `http://127.0.0.1:${server.address().port}`,
+        close: () => server.close(),
+    })));
+}
+
 // Data folders made by this check; each holds owner.json naming the node
 // process and, once started, its tunebox.
 const FOLDER_PREFIXES = ['tunebox-admin-', 'tunebox-setup-', 'tunebox-transfer-'];
@@ -186,7 +233,8 @@ function sweepStaleFolders() {
 }
 
 // setup: no account yet and the setup page on, as a first start would be.
-async function startTunebox(folder, port, streamUrl, setup = false) {
+// catalogueUrl: where the Covers search finds Deezer and iTunes.
+async function startTunebox(folder, port, streamUrl, setup = false, catalogueUrl = null) {
     writeFileSync(join(folder, 'tunebox.toml'), [
         '[server]',
         'host = "127.0.0.1"',
@@ -213,6 +261,24 @@ async function startTunebox(folder, port, streamUrl, setup = false) {
     if (made.status !== 0) {
         throw new Error(`could not create the account: ${made.stderr}`);
     }
+    // Two songs for the Covers page: one first heard over a day ago with
+    // no cover found yet, and one showing an artist photo.
+    const seeded = setup ? {status: 0} : spawnSync(PYTHON, ['-c', [
+        'import sys, time',
+        'from pathlib import Path',
+        'from tunebox.store import CoverDecision, Store',
+        'from tunebox.tracks import RawEntry, Rules, clean',
+        'now = int(time.time() * 1000)',
+        'store = Store(Path(sys.argv[1]) / "tunebox.db")',
+        'songs = [clean(RawEntry("AGENTS OF TIME", "Hearts Collide", now - 90000000), Rules(), now),',
+        '         clean(RawEntry("JESSICA", "Summer Song", now - 60000), Rules(), now)]',
+        'store.record_heard("first", songs)',
+        'store.put_cover(CoverDecision(songs[1].key, "artist", "https://cdn-images.dzcdn.net/images/artist/' + '0'.repeat(32) + '/1000x1000-000000-80-0-0.jpg", "deezer artist: Jessica", time.time()))',
+        'store.close()',
+    ].join('\n'), folder], {cwd: ROOT, encoding: 'utf8'});
+    if (seeded.status !== 0) {
+        throw new Error(`could not seed the song list: ${seeded.stderr}`);
+    }
     const log = [];
     // Its own process group, so one signal also reaches the title-rule
     // checks it runs in child processes.
@@ -224,7 +290,7 @@ async function startTunebox(folder, port, streamUrl, setup = false) {
             TUNEBOX_CONFIG: join(folder, 'tunebox.toml'),
             LOG_LEVEL: process.env.DEBUG_TUNEBOX_LOG ? 'debug' : 'info',
             TUNEBOX_USAGE_FLUSH_S: '1',
-        }),
+        }, catalogueUrl ? {TUNEBOX_CATALOGS: catalogueUrl} : {}),
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
     });
@@ -298,6 +364,7 @@ async function run() {
     let tunebox = null;
     let browser = null;
     let stream = null;
+    let catalogue = null;
     let steps = 0;
     // A check interrupted mid-run skips the finally below; its data folder
     // goes with the process all the same (startTunebox stops tunebox).
@@ -306,7 +373,8 @@ async function run() {
     });
     try {
         stream = await silentStream(folder);
-        tunebox = await startTunebox(folder, port, stream.url);
+        catalogue = await localCatalogue();
+        tunebox = await startTunebox(folder, port, stream.url, false, catalogue.url);
         browser = await connect({port: DEVTOOLS_PORT});
         const {send, evaluate, on} = browser;
         await send('Page.enable');
@@ -2248,6 +2316,155 @@ async function run() {
             return stored === JSON.stringify([-1, {}]) ? null : `stored: ${stored}`;
         });
 
+        // The Covers page, on the two songs startTunebox seeds.
+        const agents = `document.querySelector('.cover-row[data-key="agents of time|hearts collide"]')`;
+        const jessica = `document.querySelector('.cover-row[data-key="jessica|summer song"]')`;
+        const rowButton = (row, text) => evaluate(`(() => {
+            const found = [...${row}.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)});
+            if (!found) { throw new Error('no button ' + ${JSON.stringify(text)}); }
+            found.click();
+            return true;
+        })()`);
+        const coverView = (view) => click(`.covers-page button[data-view="${view}"]`);
+        const rowState = (row) => evaluate(`${row} ? ${row}.dataset.state : null`);
+
+        await step('the Covers page lists the songs that need a fix', async () => {
+            if (!(await openPage('#covers', `${agents} && ${jessica}`))) {
+                return `the Problems list holds ${await evaluate(`[...document.querySelectorAll('.cover-row')].map((r) => r.dataset.key + '=' + r.dataset.state).join() || 'nothing'`)} (message: ${await message()})`;
+            }
+            const states = `${await rowState(agents)} ${await rowState(jessica)}`;
+            await noSideways('covers');
+            return states === 'looking artist' ? null : `the rows are ${states}`;
+        });
+
+        await step('a cover search offers candidates and a pick shows as your fix', async () => {
+            // Thumbnails come from Deezer's image host, answered here so they
+            // load without the network.
+            on('Fetch.requestPaused', (params) => {
+                send('Fetch.fulfillRequest', {
+                    requestId: params.requestId,
+                    responseCode: 200,
+                    responseHeaders: [{name: 'Content-Type', value: 'image/png'}],
+                    body: smallPng().toString('base64'),
+                });
+            });
+            await send('Fetch.enable', {patterns: [{urlPattern: 'https://*.dzcdn.net/*'}]});
+            try {
+                await rowButton(agents, 'Fix');
+                if (!(await until(`${agents}.querySelector('form.cover-search')`))) {
+                    return 'Fix opened no search';
+                }
+                await evaluate(`${agents}.querySelector('form.cover-search').requestSubmit()`);
+                // Thumbnails load lazily, so only once on screen; the feed
+                // of the first station may have put more songs above it.
+                if (!(await until(`${agents}.querySelector('.cover-choice img')`, 15000))) {
+                    return `no candidate (message: ${await message()}, note: ${await evaluate(`${agents}.querySelector('form.cover-search [role=alert]').textContent`)})`;
+                }
+                await evaluate(`${agents}.querySelector('.cover-choice').scrollIntoView()`);
+                if (!(await until(`(() => { const img = ${agents}.querySelector('.cover-choice img'); return img && img.naturalWidth > 0; })()`))) {
+                    return 'the candidate shows no image';
+                }
+                await noSideways('covers search');
+                await evaluate(`${agents}.querySelector('.cover-choice').click()`);
+                if (!(await until(`document.querySelector('.message').textContent.startsWith('Saved.')`))) {
+                    return `the pick says: ${await message()}`;
+                }
+                // A fixed song is no problem any more: it shows under All.
+                await coverView('all');
+                // The worker's fetch of the picked image may have no network.
+                if (!(await until(`${agents} && ['fix', 'fetching', 'failed'].includes(${agents}.dataset.state)`))) {
+                    return `the row is ${await rowState(agents)}`;
+                }
+                return null;
+            } finally {
+                await send('Fetch.disable');
+                on('Fetch.requestPaused', null);
+            }
+        });
+
+        await step('Fixed by you lists it and Back to automatic undoes it', async () => {
+            await coverView('fixed');
+            if (!(await until(`${agents} && document.querySelectorAll('.cover-row').length === 1`))) {
+                return `Fixed by you holds ${await evaluate(`document.querySelectorAll('.cover-row').length`)} rows`;
+            }
+            await rowButton(agents, 'Back to automatic');
+            if (!(await until(`document.querySelector('.message').textContent === 'Back to automatic: tunebox looks the cover up again.'`))) {
+                return `Back to automatic says: ${await message()}`;
+            }
+            return (await until(`!${agents} && !document.querySelector('.cover-row')`)) ? null : 'the row stayed under Fixed by you';
+        });
+
+        await step('an uploaded cover shows on its row', async () => {
+            writeFileSync(join(transfer, 'cover.png'), smallPng());
+            await coverView('all');
+            if (!(await until(agents))) {
+                return 'no row under All';
+            }
+            await rowButton(agents, 'Fix');
+            if (!(await until(`${agents}.querySelector('input[name=cover-file]')`))) {
+                return 'Fix opened no upload';
+            }
+            await setFile('input[name=cover-file]', join(transfer, 'cover.png'));
+            if (!(await until(`document.querySelector('.message').textContent.startsWith('Uploaded.')`))) {
+                return `the upload says: ${await message()}`;
+            }
+            // The list does not follow the worker that copies the image:
+            // read it again until the row shows it.
+            const shown = `(() => { const img = ${agents} && ${agents}.querySelector('img'); return ${agents} && ${agents}.dataset.state === 'fix' && img && img.naturalWidth > 0; })()`;
+            for (let i = 0; i < 16; i++) {
+                await coverView('all');
+                await until(agents, 500);
+                await evaluate(`${agents} && ${agents}.scrollIntoView()`);
+                if (await until(shown, 500)) {
+                    return null;
+                }
+            }
+            return `the row is ${await rowState(agents)} and shows ${await evaluate(`${agents} && ${agents}.querySelector('img') ? ${agents}.querySelector('img').src : 'no image'`)}`;
+        });
+
+        await step('a link that is not a Deezer album is refused on the page', async () => {
+            let searches = 0;
+            on('Fetch.requestPaused', (params) => {
+                searches += 1;
+                send('Fetch.continueRequest', {requestId: params.requestId});
+            });
+            await send('Fetch.enable', {patterns: [{urlPattern: '*/admin/api/covers/search'}]});
+            try {
+                await rowButton(agents, 'Fix');
+                const linkForm = `${agents}.querySelectorAll('form.cover-search')[1]`;
+                if (!(await until(linkForm))) {
+                    return 'Fix opened no link form';
+                }
+                await evaluate(`(() => {
+                    const form = ${linkForm};
+                    form.querySelector('input').value = 'https://deezer.page.link/x';
+                    form.requestSubmit();
+                })()`);
+                const rule = 'Paste a Deezer album link (https://www.deezer.com/album/...). Share links (deezer.page.link) are not followed.';
+                if (!(await until(`${linkForm}.querySelector('[role=alert]').textContent === ${JSON.stringify(rule)}`))) {
+                    return `the form says: ${await evaluate(`${linkForm}.querySelector('[role=alert]').textContent`)}`;
+                }
+                await sleep(300);
+                return searches === 0 ? null : `${searches} search request(s) went out`;
+            } finally {
+                await send('Fetch.disable');
+                on('Fetch.requestPaused', null);
+            }
+        });
+
+        await step('the search box finds a song by name', async () => {
+            await coverView('all');
+            await evaluate(`(() => {
+                const box = document.querySelector('input[name=cover-search]');
+                box.value = 'summer song';
+                box.dispatchEvent(new Event('input'));
+            })()`);
+            if (!(await until(`document.querySelectorAll('.cover-row').length === 1 && ${jessica}`))) {
+                return `the list holds ${await evaluate(`[...document.querySelectorAll('.cover-row')].map((r) => r.dataset.key).join() || 'nothing'`)}`;
+            }
+            return null;
+        });
+
         rmSync(transfer, {recursive: true, force: true});
 
         // A first start: no account, the setup page on, the link from the log.
@@ -2377,6 +2594,9 @@ async function run() {
         }
         if (stream) {
             stream.close();
+        }
+        if (catalogue) {
+            catalogue.close();
         }
         if (tunebox) {
             const exited = new Promise((done) => tunebox.child.once('exit', done));
