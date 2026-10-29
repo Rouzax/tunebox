@@ -157,14 +157,13 @@ def sign(key: bytes, payload: str, purpose: str) -> str:
 
 def unsign(key: bytes, value: str, purpose: str) -> str | None:
     payload, dot, mac = value.rpartition(".")
-    if not dot or not payload:
-        return None
-    try:
-        given = _unb64(mac)
-    except ValueError:  # bad base64 (binascii.Error) is a ValueError too
+    if not dot or not payload or not mac.isascii():
         return None
     try:
         expected = _mac(key, payload, purpose)
     except UnicodeEncodeError:  # a lone surrogate: never signed, since sign() encodes too
         return None
-    return payload if hmac.compare_digest(given, expected) else None
+    # The text is compared, not the decoded bytes: base64 has several
+    # spellings of the same bytes, and only the one sign() wrote is the
+    # signature.
+    return payload if hmac.compare_digest(mac, _b64(expected)) else None

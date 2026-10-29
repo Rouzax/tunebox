@@ -69,6 +69,21 @@ def test_signed_values_round_trip_and_reject_tampering() -> None:
     assert crypto.unsign(key, "\ud800.AAAA", "known-browser") is None
 
 
+def test_only_the_exact_signature_text_verifies() -> None:
+    # The last of 43 base64 characters carries two spare bits, so four
+    # spellings decode to the same 32 bytes; only the one sign() wrote counts.
+    key = b"k" * 32
+    signed = crypto.sign(key, "p2.dev.1.99", "listener-grant")
+    payload, _, mac = signed.rpartition(".")
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    base = alphabet.index(mac[-1]) & ~3
+    for spare in range(4):
+        twin = mac[:-1] + alphabet[base + spare]
+        expected = payload if twin == mac else None
+        assert crypto.unsign(key, f"{payload}.{twin}", "listener-grant") == expected
+    assert crypto.unsign(key, f"{payload}.{mac}=", "listener-grant") is None
+
+
 def test_a_signature_is_bound_to_its_purpose() -> None:
     key = b"k" * 32
     signed = crypto.sign(key, "p2.dev.1.99", "listener-grant")
