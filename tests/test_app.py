@@ -21,6 +21,7 @@ import pytest
 from tunebox import app
 from tunebox.accounts import Accounts
 from tunebox.app import WEB_ADMIN_DIR, StopSignal, main, open_settings, shut_down
+from tunebox.catalogs import Catalogs
 from tunebox.config import Config, state_from_toml
 from tunebox.logos import group_key
 from tunebox.pin import Pin
@@ -513,6 +514,35 @@ def test_with_the_panel_on_usage_records_and_stops_cleanly(
     # The final round at stop wrote the visit before the file was let go.
     with contextlib.closing(sqlite3.connect(tmp_path / "usage.db")) as db:
         assert [row[0] for row in db.execute("SELECT device FROM visits")] == [device]
+
+
+@pytest.mark.parametrize("given", [None, "http://catalogue.invalid"])
+def test_the_catalogue_knob_points_both_catalogues_or_leaves_them(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, given: str | None
+) -> None:
+    if given is None:
+        monkeypatch.delenv("TUNEBOX_CATALOGS", raising=False)
+    else:
+        monkeypatch.setenv("TUNEBOX_CATALOGS", given)
+    made: list[dict[str, Any]] = []
+    real = app.Catalogs
+
+    def recording(http_get: Any, **kwargs: Any) -> Catalogs:
+        made.append(kwargs)
+        return real(http_get, **kwargs)
+
+    monkeypatch.setattr(app, "Catalogs", recording)
+    assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
+    expected = (
+        {}
+        if given is None
+        else {
+            "deezer": "http://catalogue.invalid/deezer",
+            "itunes": "http://catalogue.invalid/itunes/search",
+        }
+    )
+    # One instance: the panel's searches take their turn in the worker's throttles.
+    assert made == [expected]
 
 
 def usages_made(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:

@@ -26,7 +26,8 @@ from tests.fakes import (
     fetch_cover,
     offline_checks,
 )
-from tests.test_admin import PASSWORD, SECRET
+from tests.test_admin import PASSWORD, SECRET, World
+from tests.test_admin_covers import KEY, raw_upload
 from tunebox import crypto
 from tunebox.accounts import Accounts
 from tunebox.admin import MAX_BODY, MAX_STATE_BODY, Admin, Request, Response, Route
@@ -1011,6 +1012,37 @@ def stations(tmp_path: Path) -> Generator[PinWorld]:
     made = PinWorld(tmp_path, "stations")
     yield made
     made.close()
+
+
+def test_the_panel_shows_a_fixed_cover_while_the_site_pin_locks_covers(tmp_path: Path) -> None:
+    world = World(tmp_path, covers=True)
+    assert world.cover_service is not None
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    httpd = TuneboxServer(
+        ("127.0.0.1", 0), lambda: EMPTY, web, world.pin, covers=world.cover_files, admin=world.admin
+    )
+    serve(httpd)
+    try:
+        csrf = world.login()
+        assert raw_upload(world, csrf, f"key={KEY}", COVER_JPG).status == 200
+        while world.cover_service.run_once():
+            pass
+        world.pin.change("site", "123456", world.pin.status().revision)
+        cookie = {"Cookie": "; ".join(f"{k}={v}" for k, v in world.cookies.items())}
+        status, _, body = request(httpd, "/admin/api/covers?view=fixed", headers=cookie)
+        assert status == 200
+        image = json.loads(body)["rows"][0]["image"]
+        status, _, body = request(httpd, image, headers=cookie)
+        assert (status, body) == (200, COVER_JPG)
+        name = image.rsplit("/", 1)[-1]
+        status, _, body = request(httpd, f"/covers/{name}", headers=cookie)
+        assert (status, json.loads(body)) == (401, {"error": "pin_required"})
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        world.close()
 
 
 def give_pin(httpd: TuneboxServer, pin: str = "123456") -> tuple[int, dict[str, str], bytes]:
