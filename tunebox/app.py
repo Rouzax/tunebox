@@ -20,7 +20,7 @@ from tunebox.accounts import Accounts
 from tunebox.admin import Admin
 from tunebox.blobs import Blobs
 from tunebox.bursts import Bursts
-from tunebox.catalogs import Catalogs
+from tunebox.catalogs import CALL_DEADLINE_S, Catalogs
 from tunebox.channel import Channel
 from tunebox.config import ChannelConfig, ConfigError, ConfigState, load
 from tunebox.coverfiles import MAX_COVER, CoverFiles
@@ -122,7 +122,7 @@ def main() -> int:
     cover_files = CoverFiles(config.server.data_dir / "covers", free=free_space)
     # One instance for the worker and the panel: a panel search takes its
     # turn in the same throttles.
-    catalogs = _catalogs()
+    catalogs = _catalogs(guard)
     covers = CoverService(
         store,
         catalogs.find,
@@ -256,12 +256,16 @@ class StopSignal:
             time.sleep(poll_s)
 
 
-def _catalogs() -> Catalogs:
-    """TUNEBOX_CATALOGS points Deezer and iTunes at one local server: a
-    knob for the admin browser check, which has no network."""
+def _catalogs(guard: Guard) -> Catalogs:
+    """Catalogue calls go through the guard, which ends each one within
+    CALL_DEADLINE_S. TUNEBOX_CATALOGS points Deezer and iTunes at one local
+    server instead: a knob for the admin browser check, which has no
+    network. The guard refuses a loopback server, so that path uses the
+    plain client."""
     base = os.environ.get("TUNEBOX_CATALOGS")
     if not base:
-        return Catalogs(http.get)
+        return Catalogs(lambda url: guard.get(url, deadline_s=CALL_DEADLINE_S))
+    event(log, logging.WARNING, "catalogs_overridden", base=base)
     return Catalogs(http.get, deezer=f"{base}/deezer", itunes=f"{base}/itunes/search")
 
 

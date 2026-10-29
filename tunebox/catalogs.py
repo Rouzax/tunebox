@@ -38,10 +38,13 @@ RELEASES_CHECKED = 100
 OFFERS_ASKED = 12
 # Asked of Deezer's artist search; duplicate profiles share a name.
 ARTISTS_ASKED = 25
-# Deezer serves artist pictures and release covers from one image store, so
-# a picture that is a release cover carries that cover's id.
+# One whole catalogue call (connect, answer and body), not one socket
+# operation: a host that trickles its answer is cut off here.
+CALL_DEADLINE_S = 10.0
 # Deezer's error code for an id it has no data for.
 _NO_DATA = 800
+# Deezer serves artist pictures and release covers from one image store, so
+# a picture that is a release cover carries that cover's id.
 _NO_IMAGE = "d41d8cd98f00b204e9800998ecf8427e"
 _IMAGE_ID = re.compile(r"/images/(?:artist|cover)/([0-9a-f]{32})/")
 
@@ -300,7 +303,8 @@ class Catalogs:
             return {}
         try:
             data: object = json.loads(self._get(url))
-        except (HttpError, ValueError) as error:
+        # RecursionError: deeply nested JSON fits well within MAX_BYTES.
+        except (HttpError, ValueError, RecursionError) as error:
             failures.append(str(error))
             event(log, logging.WARNING, "search_failed", url=where, error=str(error))
             return {}

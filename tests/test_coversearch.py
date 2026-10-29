@@ -319,6 +319,26 @@ def test_a_cover_search_out_of_budget_names_the_catalogue_it_skipped() -> None:
     assert [c.source for c in answer.choices] == ["deezer"]
 
 
+def test_deeply_nested_json_counts_as_a_catalogue_that_did_not_answer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    itunes = {
+        "results": [{"artistName": "A", "collectionName": "I", "artworkUrl100": link("cover", 2)}]
+    }
+
+    def answer(url: str) -> bytes:
+        return json.dumps(itunes).encode() if "itunes" in url else b"[" * 100_000
+
+    clock = Clock()
+    search = CoverSearch(
+        Catalogs(FakeHttp(answer), 0, 0), lambda: SECRET, clock=clock, monotonic=clock
+    )
+    found = search.search("cover", "a|b", "A", "B", "a b")
+    assert found.unanswered == ["deezer"]
+    assert [c.source for c in found.choices] == ["itunes"]
+    assert "search_failed" in caplog.messages
+
+
 def test_an_image_both_catalogues_offer_is_shown_once() -> None:
     same = link("cover", 3)
 

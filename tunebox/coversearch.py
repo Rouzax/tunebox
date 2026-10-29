@@ -16,10 +16,9 @@ from dataclasses import dataclass
 from typing import Literal, cast
 
 from tunebox import crypto
-from tunebox.catalogs import ArtistOffer, Catalogs, Offer, is_release_cover
+from tunebox.catalogs import CALL_DEADLINE_S, ArtistOffer, Catalogs, Offer, is_release_cover
 from tunebox.config import encodable
 from tunebox.coverfix import FixSource, allowed_image, is_photo_key
-from tunebox.http import TIMEOUT_S
 from tunebox.logs import event
 from tunebox.pacer import Busy, Pacer
 
@@ -30,10 +29,10 @@ log = logging.getLogger(__name__)
 PER_MINUTE = 10
 # No catalogue call starts after this; the answer carries what it has.
 BUDGET_S = 8.0
-# The wait a refused search is told (Pacer.slot): a call begun just before
-# the budget ran out usually ends within one socket timeout, but the timeout
-# applies to each socket operation, so this is a hint, not a hard bound.
-SLOT_BOUND_S = BUDGET_S + TIMEOUT_S
+# The wait a refused search is told (Pacer.slot): no call starts past the
+# budget (Throttle.wait re-checks it after taking its lock), and each call
+# ends within CALL_DEADLINE_S.
+SLOT_BOUND_S = BUDGET_S + CALL_DEADLINE_S
 OFFERS = 12
 # Release checks cost a call each; only the profiles with the most fans,
 # the likely artist, get one.
