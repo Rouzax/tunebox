@@ -46,6 +46,9 @@ def phone_jpeg(orientation: int | None = 6, order: str = ">") -> bytes:
         + segment(0xE2, b"MPF\x00" + b"m" * 16)
         + segment(0xEE, b"Adobe" + b"\x00" * 7)
         + segment(0xED, b"Photoshop 3.0\x00" + GPS)
+        + segment(0xE0, b"JFXX\x00\x10" + GPS)
+        + segment(0xF3, b"JPG3 " + GPS)
+        + segment(0xE5, b"vendor " + GPS)
         + DQT
         + SOF0
         + SOS
@@ -62,7 +65,8 @@ def test_a_phone_jpeg_loses_its_metadata_and_keeps_its_rotation(order: str) -> N
     out = strip(phone_jpeg(6, order), "jpg")
     assert GPS not in out
     assert b"xmpmeta" not in out and b"comment" not in out and b"MPF" not in out
-    assert b"Photoshop" not in out
+    assert b"Photoshop" not in out and b"JFXX" not in out and b"JPG3" not in out
+    assert b"vendor" not in out
     oriented = segment(
         0xE1,
         b"Exif\x00\x00MM\x00*\x00\x00\x00\x08"
@@ -108,14 +112,51 @@ def test_the_rotation_goes_after_the_jfif_segment_only() -> None:
 
 
 def test_a_clean_jpeg_comes_back_unchanged() -> None:
-    # Fill bytes before a marker and a standalone marker are copied as they are.
-    body = SOI + APP0 + b"\xff\xff\xdb\x00\x05\x00\x01\x02" + b"\xff\x01" + SOF0 + SOS + SCAN + EOI
+    # Fill bytes before a marker are copied as they are.
+    body = SOI + APP0 + b"\xff\xff\xdb\x00\x05\x00\x01\x02" + SOF0 + SOS + SCAN + EOI
     assert strip(body, "jpg") == body
 
 
-def test_a_scan_without_an_end_is_copied_to_the_end() -> None:
-    body = SOI + APP0 + SOS + SCAN
-    assert strip(body, "jpg") == body
+def test_a_standalone_marker_outside_a_scan_goes() -> None:
+    body = SOI + APP0 + b"\xff\x01" + DQT + b"\xff\xd3" + SOS + SCAN + EOI
+    assert strip(body, "jpg") == SOI + APP0 + DQT + SOS + SCAN + EOI
+
+
+def test_the_jfif_thumbnail_goes_and_only_a_leading_jfif_stays() -> None:
+    thumbnail = segment(0xE0, b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x01\x01" + b"\x7f" * 3)
+    body = SOI + thumbnail + segment(0xE0, APP0[4:]) + DQT + SOS + SCAN + EOI
+    assert strip(body, "jpg") == SOI + APP0 + DQT + SOS + SCAN + EOI
+    late = SOI + DQT + APP0 + SOS + SCAN + EOI
+    assert strip(late, "jpg") == SOI + DQT + SOS + SCAN + EOI
+
+
+def test_segments_between_the_scans_of_a_progressive_jpeg_are_walked() -> None:
+    dht = b"\xff\xc4\x00\x04\x00\x00"
+    body = (
+        SOI
+        + APP0
+        + DQT
+        + SOF0
+        + SOS
+        + SCAN
+        + segment(0xFE, b"comment " + GPS)
+        + segment(0xE1, exif(6))
+        + dht
+        + b"\xff\xff"  # fill before the next scan
+        + SOS
+        + SCAN
+        + EOI
+    )
+    out = strip(body, "jpg")
+    assert GPS not in out and b"comment" not in out and b"Exif" in out
+    assert out.endswith(SOF0 + SOS + SCAN + dht + b"\xff\xff" + SOS + SCAN + EOI)
+
+
+def test_a_scan_without_an_end_is_refused() -> None:
+    with pytest.raises(ValueError):
+        strip(SOI + APP0 + SOS + SCAN, "jpg")
+    with pytest.raises(ValueError):
+        strip(SOI + APP0 + SOS + SCAN + b"\xff", "jpg")
 
 
 @pytest.mark.parametrize(
@@ -128,7 +169,8 @@ def test_a_scan_without_an_end_is_copied_to_the_end() -> None:
         SOI + b"\xff\xe0\x00",  # length cut short
         SOI + b"\xff\xe0\x00\x01",  # length below 2
         SOI + b"\xff\xe1\x00\x40Exif",  # segment past the end
-        SOI + APP0 + EOI,  # no scan
+        SOI + b"\xff\xd8",  # a second SOI
+        SOI + segment(0xE0, b"JFIF\x00\x01"),  # JFIF cut short
     ],
 )
 def test_a_jpeg_that_cannot_be_walked_is_refused(body: bytes) -> None:
@@ -155,6 +197,8 @@ def test_a_png_loses_its_text_and_time_chunks() -> None:
         chunk(b"iTXt", b"XML:com.adobe.xmp\x00\x00\x00\x00\x00" + GPS),
         chunk(b"eXIf", exif(6)[6:]),
         chunk(b"tIME", b"\x07\xea\x0a\x1b\x0c\x00\x00"),
+        chunk(b"prVt", GPS),
+        chunk(b"acTL", b"\x00\x00\x00\x01\x00\x00\x00\x00"),
     )
     out = strip(body + b"trailing " + GPS, "png")
     assert out == png.SIGNATURE + b"".join(kept)
@@ -196,7 +240,12 @@ def test_a_webp_loses_its_exif_and_xmp_chunks() -> None:
     iccp = webp_chunk(b"ICCP", b"icc")
     vp8l = webp_chunk(b"VP8L", b"\x2f\x00\x00\x00\x00")
     body = riff(
-        vp8x, iccp, vp8l, webp_chunk(b"EXIF", exif(6)[6:]), webp_chunk(b"XMP ", b"<x>" + GPS)
+        vp8x,
+        iccp,
+        vp8l,
+        webp_chunk(b"EXIF", exif(6)[6:]),
+        webp_chunk(b"XMP ", b"<x>" + GPS),
+        webp_chunk(b"NOTE", GPS),
     )
     out = strip(body + b"trailing" + GPS, "webp")
     assert GPS not in out

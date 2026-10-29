@@ -2,23 +2,29 @@
 
 An uploaded cover is served at /covers/ to every listener, and a phone photo
 carries the place it was taken, the time and the device. The runtime has no
-image library to re-encode with, so whole metadata segments and chunks are
-dropped and everything else is copied byte for byte. A structure that cannot
-be walked raises ValueError: an image tunebox cannot read is not kept."""
+image library to re-encode with, so the file's segments or chunks are walked
+and only those needed to draw the picture are kept, byte for byte; anything
+else, known or not, is dropped. A structure that cannot be walked raises
+ValueError: an image tunebox cannot read is not kept."""
 
 from __future__ import annotations
 
 import struct
 
 _SOI = b"\xff\xd8"
-_EOI = b"\xff\xd9"
+_EOI = 0xD9
 _SOS = 0xDA
 _APP0 = 0xE0
 _APP1 = 0xE1
 _APP2 = 0xE2
 _APP14 = 0xEE
-_APP15 = 0xEF
-_COM = 0xFE
+# Tables and frame headers a decoder needs: SOF0-SOF15 (C4 is DHT, C8 is
+# reserved, CC is DAC, the arithmetic-coding table), DNL, DQT and DRI.
+_DECODE = frozenset(m for m in range(0xC0, 0xD0) if m != 0xC8) | {0xDB, 0xDC, 0xDD}
+_JFIF = b"JFIF\x00"
+# Identifier, version, units and density; the thumbnail that may follow
+# would show the picture as it was before any crop.
+_JFIF_HEAD = 12
 _ICC = b"ICC_PROFILE\x00"
 # An Adobe segment says whether a 4-channel JPEG is CMYK or YCCK; without it
 # the colours come out inverted.
@@ -28,16 +34,33 @@ _ORIENTATION = 0x0112
 _SHORT = 3
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-_PNG_DROP = frozenset({b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"tIME"})
+# What draws a still picture and its colours. Animation chunks (acTL, fcTL,
+# fdAT) go too: browsers then show the default image, and a cover is a still.
+_PNG_KEEP = frozenset(
+    {
+        b"IHDR",
+        b"PLTE",
+        b"IDAT",
+        b"IEND",
+        b"tRNS",
+        b"gAMA",
+        b"cHRM",
+        b"sRGB",
+        b"iCCP",
+        b"sBIT",
+        b"pHYs",
+        b"cICP",
+    }
+)
 
-_WEBP_DROP = frozenset({b"EXIF", b"XMP "})
+_WEBP_KEEP = frozenset({b"VP8 ", b"VP8L", b"VP8X", b"ALPH", b"ICCP", b"ANIM", b"ANMF"})
 _VP8X_METADATA = 0x08 | 0x04  # the EXIF and XMP flags
 
 
 def strip(body: bytes, kind: str) -> bytes:
     """The image without its metadata; kind is what coverfiles.sniff_cover
-    answered. A JPEG keeps its rotation in a minimal Exif segment, since
-    browsers turn the picture by it."""
+    answered. A JPEG keeps its rotation in an Exif segment that holds
+    nothing else, since browsers turn the picture by it."""
     if kind == "jpg":
         return _jpeg(body)
     if kind == "png":
@@ -50,7 +73,8 @@ def strip(body: bytes, kind: str) -> bytes:
 def _jpeg(body: bytes) -> bytes:
     if not body.startswith(_SOI):
         raise ValueError("no start of image")
-    kept: list[tuple[int, bytes]] = []
+    kept: list[bytes] = []
+    jfif = False
     orientation: int | None = None
     pos = len(_SOI)
     while True:
@@ -63,11 +87,17 @@ def _jpeg(body: bytes) -> bytes:
             raise ValueError("truncated marker")
         marker = body[pos]
         pos += 1
+        if marker == _EOI:
+            # Phones append further JPEGs after the end, each with its own
+            # Exif; those go.
+            kept.append(body[start:pos])
+            if orientation is not None:
+                kept.insert(1 if jfif else 0, _orientation_segment(orientation))
+            return _SOI + b"".join(kept)
         if marker == 0x01 or 0xD0 <= marker <= 0xD7:
-            kept.append((marker, body[start:pos]))
-            continue
-        if marker in (0x00, 0xD8, 0xD9):
-            raise ValueError("no scan")
+            continue  # standalone, no payload; outside a scan it means nothing
+        if marker in (0x00, 0xD8):
+            raise ValueError("not a marker")
         if pos + 2 > len(body):
             raise ValueError("truncated segment")
         (length,) = struct.unpack(">H", body[pos : pos + 2])
@@ -76,42 +106,46 @@ def _jpeg(body: bytes) -> bytes:
         payload = body[pos + 2 : pos + length]
         pos += length
         if marker == _SOS:
-            # Inside entropy-coded data 0xFF is always followed by 0x00 or a
-            # restart or scan marker, so the first FFD9 is the end of the
-            # image. Phones append further JPEGs after it, each with its own
-            # Exif; those go.
-            end = body.find(_EOI, pos)
-            scan = body[start:] if end < 0 else body[start : end + len(_EOI)]
-            return _SOI + b"".join(_with_orientation(kept, orientation)) + scan
-        if marker == _APP1 and orientation is None and payload.startswith(_EXIF):
+            pos = _scan_end(body, pos)
+            kept.append(body[start:pos])
+        elif marker in _DECODE:
+            kept.append(body[start:pos])
+        elif marker == _APP0 and not jfif and not kept and payload.startswith(_JFIF):
+            if len(payload) < _JFIF_HEAD + 2:
+                raise ValueError("short JFIF segment")
+            jfif = True
+            head = payload[:_JFIF_HEAD] + b"\x00\x00"  # no thumbnail
+            kept.append(b"\xff\xe0" + struct.pack(">H", len(head) + 2) + head)
+        elif (marker == _APP2 and payload.startswith(_ICC)) or (
+            marker == _APP14 and payload.startswith(_ADOBE)
+        ):
+            kept.append(body[start:pos])
+        elif marker == _APP1 and orientation is None and payload.startswith(_EXIF):
             orientation = _orientation(payload[len(_EXIF) :])
-        if _keep(marker, payload):
-            kept.append((marker, body[start:pos]))
 
 
-def _keep(marker: int, payload: bytes) -> bool:
-    if marker == _APP0:
-        return True
-    if marker == _APP2:
-        return payload.startswith(_ICC)
-    if marker == _APP14:
-        return payload.startswith(_ADOBE)
-    return not (_APP1 <= marker <= _APP15 or marker == _COM)
+def _scan_end(body: bytes, pos: int) -> int:
+    """Where the entropy-coded data after a scan header ends: the next
+    marker. Inside it 0xFF is followed by 0x00 (a stuffed byte) or a
+    restart marker; any other byte after 0xFF starts a marker, which may
+    be an APPn or COM between the scans of a progressive JPEG."""
+    while True:
+        at = body.find(b"\xff", pos)
+        if at < 0 or at + 1 >= len(body):
+            raise ValueError("no end of image")
+        follower = body[at + 1]
+        if follower == 0x00 or 0xD0 <= follower <= 0xD7:
+            pos = at + 2
+            continue
+        return at
 
 
-def _with_orientation(kept: list[tuple[int, bytes]], orientation: int | None) -> list[bytes]:
-    segments = [segment for _marker, segment in kept]
-    if orientation is None:
-        return segments
-    at = 0
-    while at < len(kept) and kept[at][0] == _APP0:
-        at += 1
+def _orientation_segment(orientation: int) -> bytes:
     tiff = b"MM\x00*\x00\x00\x00\x08" + struct.pack(
         ">HHHIHHI", 1, _ORIENTATION, _SHORT, 1, orientation, 0, 0
     )
     payload = _EXIF + tiff
-    segments.insert(at, b"\xff\xe1" + struct.pack(">H", len(payload) + 2) + payload)
-    return segments
+    return b"\xff\xe1" + struct.pack(">H", len(payload) + 2) + payload
 
 
 def _orientation(tiff: bytes) -> int | None:
@@ -147,7 +181,7 @@ def _png(body: bytes) -> bytes:
         if end > len(body):
             raise ValueError("truncated chunk")
         kind = body[pos + 4 : pos + 8]
-        if kind not in _PNG_DROP:
+        if kind in _PNG_KEEP:
             # Copied whole: the CRC covers type and data, so it stays valid.
             out.append(body[pos:end])
         pos = end
@@ -174,7 +208,7 @@ def _webp(body: bytes) -> bytes:
             raise ValueError("truncated chunk")
         chunk = body[pos:end]
         pos = end
-        if fourcc in _WEBP_DROP:
+        if fourcc not in _WEBP_KEEP:
             continue
         if fourcc == b"VP8X":
             if length < 1:

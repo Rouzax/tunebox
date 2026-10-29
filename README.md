@@ -721,9 +721,9 @@ image hosts.
 - **Upload an image**: a JPEG, PNG or WebP file of at most 2 MB. Before
   keeping it, tunebox removes the metadata a camera or phone stores in the
   file (such as the place a photo was taken, the time and the device); a
-  JPEG keeps its rotation. The picture itself is not changed or resized. A
-  damaged file is refused with "That file is not a JPEG, PNG or WebP
-  image."
+  JPEG keeps its rotation. The picture itself is not changed or resized,
+  except that an animated PNG keeps only its still image. A damaged file is
+  refused with "That file is not a JPEG, PNG or WebP image."
 
 **Fix an artist photo**: when a row shows an artist photo, **This artist's
 photo is wrong** searches Deezer for artists by that name. Up to 10 come
