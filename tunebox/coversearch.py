@@ -17,6 +17,7 @@ from typing import Literal, cast
 
 from tunebox import crypto
 from tunebox.catalogs import ArtistOffer, Catalogs, Offer, is_release_cover
+from tunebox.config import encodable
 from tunebox.coverfix import FixSource, allowed_image, is_photo_key
 from tunebox.http import TIMEOUT_S
 from tunebox.logs import event
@@ -181,6 +182,9 @@ class CoverSearch:
         ):
             return None
         if not -CLOCK_SKEW_S <= self._clock() - at <= TOKEN_S:
+            return None
+        # json.loads restores lone surrogates from \u escapes; SQLite refuses them.
+        if not all(encodable(text) for text in (key, label, artist, title, link or "")):
             return None
         if link is None and not is_photo_key(key):
             return None

@@ -112,6 +112,15 @@ def test_a_replayed_pick_changes_nothing(world: World) -> None:
     assert len(json_of(world.call("GET", "/admin/api/covers?view=fixed"))["rows"]) == 1
 
 
+def test_a_token_that_cannot_be_encoded_is_stale(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    csrf = world.login()
+    answer = world.call("POST", "/admin/api/covers/fix", {"token": "\ud800.AAAA"}, csrf=csrf)
+    assert answer.status == 400 and json_of(answer) == {"error": "stale_candidate"}
+    assert "request_crashed" not in caplog.messages
+
+
 def test_a_stale_or_forged_pick_is_refused(world: World) -> None:
     csrf = world.login()
     token = json_of(search(world, csrf))["choices"][0]["token"]

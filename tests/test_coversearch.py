@@ -392,6 +392,23 @@ def test_a_signed_token_still_has_to_hold_a_pick(payload: str) -> None:
     assert search.redeem(crypto.sign(SECRET, payload, PURPOSE)) is None
 
 
+@pytest.mark.parametrize("field", ["k", "b", "a", "t", "l"])
+def test_a_token_with_a_lone_surrogate_is_no_pick(field: str) -> None:
+    fields: dict[str, object] = {
+        "k": "a|b",
+        "l": link("cover", 1),
+        "b": "x",
+        "s": "deezer",
+        "a": "A",
+        "t": "",
+        "i": 1000,
+    }
+    fields[field] = f"{fields[field]}\ud800"
+    search, _ = searcher(lambda _url: {})
+    # json.dumps writes the surrogate as an escape, so the token signs.
+    assert search.redeem(crypto.sign(SECRET, json.dumps(fields), PURPOSE)) is None
+
+
 def test_a_release_check_that_fails_leaves_the_mark_unknown() -> None:
     artists = {"data": [{"id": 1, "name": "A", "nb_fan": 1, "picture_xl": link("artist", 1)}]}
 

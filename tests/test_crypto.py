@@ -66,6 +66,7 @@ def test_signed_values_round_trip_and_reject_tampering() -> None:
     assert crypto.unsign(b"x" * 32, signed, "known-browser") is None
     assert crypto.unsign(key, "no-signature", "known-browser") is None
     assert crypto.unsign(key, "payload.!!!", "known-browser") is None
+    assert crypto.unsign(key, "\ud800.AAAA", "known-browser") is None
 
 
 def test_a_signature_is_bound_to_its_purpose() -> None:
