@@ -29,7 +29,9 @@ log = logging.getLogger(__name__)
 PER_MINUTE = 10
 # No catalogue call starts after this; the answer carries what it has.
 BUDGET_S = 8.0
-# A call begun just before the budget ran out may take one timeout more.
+# The wait a refused search is told (Pacer.slot): a call begun just before
+# the budget ran out usually ends within one socket timeout, but the timeout
+# applies to each socket operation, so this is a hint, not a hard bound.
 SLOT_BOUND_S = BUDGET_S + TIMEOUT_S
 OFFERS = 12
 # Release checks cost a call each; only the profiles with the most fans,
@@ -37,6 +39,9 @@ OFFERS = 12
 PHOTOS = 10
 PHOTOS_CHECKED = 5
 TOKEN_S = 3600
+# A token issued this far in the future still counts: the wall clock can
+# step back a little between issue and redeem.
+CLOCK_SKEW_S = 5
 PURPOSE = "cover_candidate"
 _NAMES = {"deezer": "Deezer", "itunes": "iTunes"}
 # The whole input: https, Deezer's own host, an optional language, the
@@ -50,6 +55,10 @@ SearchKind = Literal["cover", "link", "photo"]
 
 class BadLink(ValueError):
     """Not a Deezer album link this search follows."""
+
+
+class NothingToSearch(ValueError):
+    """The search text (and, for a photo, the artist) is blank."""
 
 
 def album_id(text: str) -> str | None:
@@ -109,22 +118,30 @@ class CoverSearch:
         self._pacer = Pacer(PER_MINUTE, "search_running", "too_many_searches", monotonic)
 
     def search(self, kind: SearchKind, key: str, artist: str, title: str, text: str) -> Answer:
-        """Raises BadLink for a link no search follows and ValueError for a
-        key that does not fit the kind, before the pace is spent; Busy when
-        another search runs or the minute's are used up."""
+        """Raises BadLink for a link no search follows, NothingToSearch for
+        blank text and ValueError for a key that does not fit the kind, all
+        before the pace is spent; Busy when another search runs or the
+        minute's are used up."""
         album = album_id(text) if kind == "link" else None
         if kind == "link" and album is None:
             raise BadLink(text)
+        query = text.strip() or (artist.strip() if kind == "photo" else "")
+        if not query:
+            raise NothingToSearch(kind)
         if (kind == "photo") != is_photo_key(key):
             raise ValueError("the key does not fit the search")
         with self._logged(kind) as logged, self._pacer.slot(SLOT_BOUND_S):
             deadline = self._monotonic() + BUDGET_S
+
+            def left() -> float:
+                return deadline - self._monotonic()
+
             if kind == "photo":
-                answer = self._photos(key, artist, text.strip() or artist, deadline)
+                answer = self._photos(key, artist, query, left)
             elif album is not None:
-                answer = self._album(key, artist, title, album)
+                answer = self._album(key, artist, title, album, left)
             else:
-                answer = self._covers(key, artist, title, text.strip(), deadline)
+                answer = self._covers(key, artist, title, query, left)
             asked = 1 if kind != "cover" else 2
             logged["results"] = len(answer.choices)
             logged["outcome"] = (
@@ -160,9 +177,10 @@ class CoverSearch:
             and isinstance(at, int | float)
             and source in ("deezer", "itunes", "link", "none")
             and (link is None or isinstance(link, str))
+            and (source == "none") == (link is None)
         ):
             return None
-        if not 0 <= self._clock() - at <= TOKEN_S:
+        if not -CLOCK_SKEW_S <= self._clock() - at <= TOKEN_S:
             return None
         if link is None and not is_photo_key(key):
             return None
@@ -193,18 +211,17 @@ class CoverSearch:
         thumb = offer.thumb if allowed_image(offer.thumb) else offer.link
         return Choice(self._token(pick), thumb, offer.artist, offer.album, offer.source)
 
-    def _covers(self, key: str, artist: str, title: str, query: str, deadline: float) -> Answer:
+    def _covers(
+        self, key: str, artist: str, title: str, query: str, left: Callable[[], float]
+    ) -> Answer:
         found: dict[str, list[Offer]] = {}
         unanswered: list[str] = []
         for name, ask in (
             ("deezer", self._catalogs.deezer_offers),
             ("itunes", self._catalogs.itunes_offers),
         ):
-            if self._monotonic() >= deadline:
-                unanswered.append(name)
-                continue
             failures: list[str] = []
-            offers = ask(query, failures)
+            offers = ask(query, failures, left)
             if failures:
                 unanswered.append(name)
             found[name] = [offer for offer in offers if allowed_image(offer.link)]
@@ -215,33 +232,35 @@ class CoverSearch:
         ]
         return Answer(choices, unanswered)
 
-    def _album(self, key: str, artist: str, title: str, album: str) -> Answer:
+    def _album(
+        self, key: str, artist: str, title: str, album: str, left: Callable[[], float]
+    ) -> Answer:
         failures: list[str] = []
-        offer = self._catalogs.deezer_album(album, failures)
+        offer = self._catalogs.deezer_album(album, failures, left)
         if offer is None or not allowed_image(offer.link):
             return Answer([], ["deezer"] if failures else [])
         return Answer([self._offered(key, artist, title, offer, "link")], [])
 
-    def _photos(self, key: str, artist: str, name: str, deadline: float) -> Answer:
+    def _photos(self, key: str, artist: str, name: str, left: Callable[[], float]) -> Answer:
         failures: list[str] = []
         offers = [
             offer
-            for offer in self._catalogs.deezer_artists(name, failures)
+            for offer in self._catalogs.deezer_artists(name, failures, left)
             if allowed_image(offer.link)
         ][:PHOTOS]
         choices = [
-            self._photo(key, artist, offer, index < PHOTOS_CHECKED, deadline)
+            self._photo(key, artist, offer, index < PHOTOS_CHECKED, left)
             for index, offer in enumerate(offers)
         ]
         none = Pick(key, None, "No photo", "none", artist, "", self._clock())
         return Answer(choices, ["deezer"] if failures else [], self._token(none))
 
     def _photo(
-        self, key: str, artist: str, offer: ArtistOffer, check: bool, deadline: float
+        self, key: str, artist: str, offer: ArtistOffer, check: bool, left: Callable[[], float]
     ) -> Choice:
         release: bool | None = None
-        if check and offer.artist_id and self._monotonic() < deadline:
-            covers = self._catalogs.release_covers(offer.artist_id, [])
+        if check and offer.artist_id:
+            covers = self._catalogs.release_covers(offer.artist_id, [], left)
             if covers is not None:
                 release = is_release_cover(offer.link, covers)
         pick = Pick(

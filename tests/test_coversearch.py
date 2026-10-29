@@ -9,13 +9,16 @@ from tunebox import crypto
 from tunebox.catalogs import Catalogs
 from tunebox.coversearch import (
     BUDGET_S,
+    CLOCK_SKEW_S,
     OFFERS,
     PER_MINUTE,
     PURPOSE,
     TOKEN_S,
     BadLink,
     CoverSearch,
+    NothingToSearch,
     Pick,
+    SearchKind,
     album_id,
 )
 from tunebox.pacer import Busy
@@ -168,7 +171,7 @@ def test_a_photo_search_checks_five_and_stops_at_the_budget() -> None:
     search, http = searcher(respond)
     answer = search.search("photo", "photo:jessica", "JESSICA", "", "JESSICA")
     assert len(answer.choices) == 10
-    assert len(http.urls) <= 1 + 5
+    assert len(http.urls) == 1 + 5
     assert [c.release for c in answer.choices] == [True] + [False] * 4 + [None] * 5
     assert answer.no_photo is not None
     none = search.redeem(answer.no_photo)
@@ -224,7 +227,11 @@ def test_an_album_link_offers_that_album_as_a_link_fix() -> None:
     album = {"title": "Collide", "cover_xl": link("cover", 7), "artist": {"name": "A"}}
 
     def respond(url: str) -> object:
-        return album if url.endswith("/album/655089251") else {"error": {"code": 800}}
+        if url.endswith("/album/655089251"):
+            return album
+        if url.endswith("/album/1"):
+            return {"error": {"type": "DataException", "message": "no data", "code": 800}}
+        return {"error": {"type": "Exception", "message": "Quota limit exceeded", "code": 4}}
 
     search, http = searcher(respond)
     answer = search.search("link", "a|b", "A", "B", "https://www.deezer.com/album/655089251")
@@ -232,8 +239,70 @@ def test_an_album_link_offers_that_album_as_a_link_fix() -> None:
     assert len(http.urls) == 1
     pick = search.redeem(answer.choices[0].token)
     assert pick is not None and pick.source == "link" and pick.link == link("cover", 7)
+    # No such album is an answer; a refusal is a catalogue that did not answer.
     missing = search.search("link", "a|b", "A", "B", "https://www.deezer.com/album/1")
-    assert missing.choices == [] and missing.unanswered == ["deezer"]
+    assert missing.choices == [] and missing.unanswered == []
+    refused = search.search("link", "a|b", "A", "B", "https://www.deezer.com/album/2")
+    assert refused.choices == [] and refused.unanswered == ["deezer"]
+
+
+def test_a_throttle_wait_past_the_budget_sends_nothing() -> None:
+    def respond(url: str) -> object:
+        if "itunes" in url:
+            return {"results": []}
+        return {
+            "data": [
+                {"artist": {"name": "A"}, "album": {"title": "X", "cover_xl": link("cover", 1)}}
+            ]
+        }
+
+    # Another iTunes call ran just before (the worker's, or an earlier
+    # search's): the next may start only well after this search's budget.
+    clock = Clock()
+    http = FakeHttp(lambda url: json.dumps(respond(url)).encode())
+    search = CoverSearch(
+        Catalogs(http, 0, BUDGET_S * 10), lambda: SECRET, clock=clock, monotonic=clock
+    )
+    search.search("cover", "a|b", "A", "B", "a")
+    asked = len(http.urls)
+    answer = search.search("cover", "a|b", "A", "B", "a")
+    assert [u for u in http.urls[asked:] if "itunes" in u] == []
+    assert answer.unanswered == ["itunes"] and len(answer.choices) == 1
+
+
+@pytest.mark.parametrize(
+    ("kind", "key", "artist", "text"),
+    [
+        ("cover", "a|b", "A", "   "),
+        ("cover", "a|b", "A", ""),
+        ("photo", "photo:a", " ", " "),
+    ],
+)
+def test_blank_text_spends_no_search(kind: SearchKind, key: str, artist: str, text: str) -> None:
+    search, http = searcher(lambda _url: {"data": [], "results": []})
+    for _ in range(PER_MINUTE + 1):
+        with pytest.raises(NothingToSearch):
+            search.search(kind, key, artist, "B", text)
+    assert http.urls == []
+    search.search("cover", "a|b", "A", "B", "a")
+
+
+def test_a_token_from_slightly_ahead_still_counts() -> None:
+    def token(issued_at: float) -> str:
+        payload = {
+            "k": "a|b",
+            "l": link("cover", 1),
+            "b": "x",
+            "s": "deezer",
+            "a": "A",
+            "t": "",
+            "i": issued_at,
+        }
+        return crypto.sign(SECRET, json.dumps(payload), PURPOSE)
+
+    search, _ = searcher(lambda _url: {})
+    assert search.redeem(token(1_000.0 + CLOCK_SKEW_S - 1)) is not None
+    assert search.redeem(token(1_000.0 + CLOCK_SKEW_S + 1)) is None
 
 
 def test_a_cover_search_out_of_budget_names_the_catalogue_it_skipped() -> None:
@@ -300,6 +369,21 @@ def test_an_image_both_catalogues_offer_is_shown_once() -> None:
                 "t": "",
                 "i": 2000,
             }
+        ),
+        # "No photo" carries no link, and only "No photo" may lack one.
+        json.dumps(
+            {
+                "k": "photo:a",
+                "l": link("artist", 1),
+                "b": "x",
+                "s": "none",
+                "a": "A",
+                "t": "",
+                "i": 1000,
+            }
+        ),
+        json.dumps(
+            {"k": "photo:a", "l": None, "b": "x", "s": "deezer", "a": "A", "t": "", "i": 1000}
         ),
     ],
 )

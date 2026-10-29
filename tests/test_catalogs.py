@@ -449,15 +449,63 @@ def test_deezer_offers_ask_the_loose_query_once() -> None:
     assert "q=agents+of+time+hearts+collide" in http.urls[0]
 
 
-def test_an_album_by_id_and_a_missing_one() -> None:
+def test_an_album_by_id_a_missing_one_and_a_refusal() -> None:
     album = {"title": "Collide", "cover_xl": COVER, "cover_medium": COVER, "artist": {"name": "A"}}
-    http = FakeHttp(
-        lambda url: body(album if url.endswith("/655089251") else {"error": {"code": 800}})
-    )
-    found = catalogs(http)
+
+    def respond(url: str) -> bytes:
+        if url.endswith("/655089251"):
+            return body(album)
+        if url.endswith("/3"):
+            return body({"error": "unreadable"})
+        if url.endswith("/1"):
+            return body({"error": {"type": "DataException", "message": "no data", "code": 800}})
+        return body({"error": {"type": "Exception", "message": "Quota limit exceeded", "code": 4}})
+
+    found = catalogs(FakeHttp(respond))
     assert found.deezer_album("655089251", []) == Offer(COVER, COVER, "A", "Collide", "deezer")
+    missing: list[str] = []
+    assert found.deezer_album("1", missing) is None and missing == []
+    refused: list[str] = []
+    assert found.deezer_album("2", refused) is None and refused
+    odd: list[str] = []
+    assert found.deezer_album("3", odd) is None and odd
+
+
+def test_itunes_offers_store_the_large_link_and_show_a_small_one() -> None:
+    art = "https://is1-ssl.mzstatic.com/image/thumb/x/cover.jpg/100x100bb.jpg"
+    answer = {"results": [{"artistName": "A", "collectionName": "C", "artworkUrl100": art}]}
+    offers = catalogs(FakeHttp(lambda _url: body(answer))).itunes_offers("a", [])
+    assert offers == [
+        Offer(
+            art.replace("100x100bb", "1000x1000bb"),
+            art.replace("100x100bb", "300x300bb"),
+            "A",
+            "C",
+            "itunes",
+        )
+    ]
+
+
+def test_a_budgeted_wait_never_starts_past_the_budget() -> None:
+    now = [0.0]
+    slept: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
+    throttle = Throttle(3.0, clock=lambda: now[0], sleep=sleep)
+    assert throttle.wait(lambda: 1.0)
+    assert not throttle.wait(lambda: 3.0) and slept == []
+    assert throttle.wait(lambda: 3.5) and slept == [3.0]
+    assert not throttle.wait(lambda: 0.0)
+
+
+def test_a_call_out_of_budget_is_not_sent_and_counts_as_failed() -> None:
+    http = FakeHttp(lambda _url: body({"data": []}))
     failures: list[str] = []
-    assert found.deezer_album("1", failures) is None and failures
+    assert catalogs(http).deezer_offers("x", failures, lambda: 0.0) == []
+    assert http.urls == [] and failures
 
 
 def test_artists_most_fans_first_without_placeholders() -> None:

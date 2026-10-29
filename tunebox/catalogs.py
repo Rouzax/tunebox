@@ -34,12 +34,14 @@ ITUNES_INTERVAL = 3.1
 # Releases compared with an artist picture; an artist with more keeps the
 # older ones unchecked.
 RELEASES_CHECKED = 100
-# Asked of a catalogue per panel search; the panel shows at most 12 in all.
+# Asked of a catalogue per panel search; coversearch.OFFERS caps the total.
 OFFERS_ASKED = 12
 # Asked of Deezer's artist search; duplicate profiles share a name.
 ARTISTS_ASKED = 25
 # Deezer serves artist pictures and release covers from one image store, so
 # a picture that is a release cover carries that cover's id.
+# Deezer's error code for an id it has no data for.
+_NO_DATA = 800
 _NO_IMAGE = "d41d8cd98f00b204e9800998ecf8427e"
 _IMAGE_ID = re.compile(r"/images/(?:artist|cover)/([0-9a-f]{32})/")
 
@@ -89,12 +91,18 @@ class Throttle:
         self._lock = threading.Lock()
         self._next = 0.0
 
-    def wait(self) -> None:
+    def wait(self, left: Callable[[], float] | None = None) -> bool:
+        """left: the seconds a caller with a budget has left. When the call
+        would start at or past that, returns False at once and keeps the
+        caller's turn free; otherwise waits its turn and returns True."""
         with self._lock:
-            delay = self._next - self._clock()
+            delay = max(0.0, self._next - self._clock())
+            if left is not None and delay >= left():
+                return False
             if delay > 0:
                 self._sleep(delay)
             self._next = self._clock() + self._interval
+            return True
 
 
 def _items(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
@@ -189,7 +197,9 @@ class Catalogs:
             raise SearchError("; ".join(failures))
         return found
 
-    def deezer_offers(self, query: str, failures: list[str]) -> list[Offer]:
+    def deezer_offers(
+        self, query: str, failures: list[str], left: Callable[[], float] | None = None
+    ) -> list[Offer]:
         """Deezer's loose search, the form that also finds a song released
         under another title. No match rule: the owner judges."""
         url = f"{self._deezer_api}/search?" + urllib.parse.urlencode(
@@ -203,11 +213,13 @@ class Catalogs:
                 _text(i, "album", "title"),
                 "deezer",
             )
-            for i in _items(self._json(url, self._deezer, failures), "data")
+            for i in _items(self._json(url, self._deezer, failures, left), "data")
             if _text(i, "album", "cover_xl")
         ]
 
-    def itunes_offers(self, query: str, failures: list[str]) -> list[Offer]:
+    def itunes_offers(
+        self, query: str, failures: list[str], left: Callable[[], float] | None = None
+    ) -> list[Offer]:
         params = {"term": query, "media": "music", "entity": "song", "limit": OFFERS_ASKED}
         url = f"{self._itunes_api}?" + urllib.parse.urlencode(params)
         return [
@@ -218,20 +230,26 @@ class Catalogs:
                 _text(i, "collectionName"),
                 "itunes",
             )
-            for i in _items(self._json(url, self._itunes, failures), "results")
+            for i in _items(self._json(url, self._itunes, failures, left), "results")
             if _text(i, "artworkUrl100")
         ]
 
-    def deezer_album(self, album_id: str, failures: list[str]) -> Offer | None:
-        """album_id is digits only (coversearch.album_id)."""
-        data = self._json(f"{self._deezer_api}/album/{album_id}", self._deezer, failures)
+    def deezer_album(
+        self, album_id: str, failures: list[str], left: Callable[[], float] | None = None
+    ) -> Offer | None:
+        """album_id is digits only (coversearch.album_id). An id Deezer has
+        no album for is an answer (None), not a failure."""
+        url = f"{self._deezer_api}/album/{album_id}"
+        data = self._json(url, self._deezer, failures, left, no_data_ok=True)
         link = _text(data, "cover_xl")
         if not link:
             return None
         thumb = _text(data, "cover_medium") or link
         return Offer(link, thumb, _text(data, "artist", "name"), _text(data, "title"), "deezer")
 
-    def deezer_artists(self, name: str, failures: list[str]) -> list[ArtistOffer]:
+    def deezer_artists(
+        self, name: str, failures: list[str], left: Callable[[], float] | None = None
+    ) -> list[ArtistOffer]:
         """Profiles with a real picture, most fans first."""
         url = f"{self._deezer_api}/search/artist?" + urllib.parse.urlencode(
             {"q": name, "limit": ARTISTS_ASKED}
@@ -244,17 +262,19 @@ class Catalogs:
                 _fans(i),
                 _id(i, "id"),
             )
-            for i in _items(self._json(url, self._deezer, failures), "data")
+            for i in _items(self._json(url, self._deezer, failures, left), "data")
             if _real_picture(_text(i, "picture_xl"))
         ]
         return sorted(found, key=lambda offer: offer.fans, reverse=True)
 
-    def release_covers(self, artist_id: str, failures: list[str]) -> frozenset[str] | None:
+    def release_covers(
+        self, artist_id: str, failures: list[str], left: Callable[[], float] | None = None
+    ) -> frozenset[str] | None:
         """The image ids of an artist's release covers; None when they
         cannot be had."""
         query = urllib.parse.urlencode({"limit": RELEASES_CHECKED})
         url = f"{self._deezer_api}/artist/{artist_id}/albums?{query}"
-        data = self._json(url, self._deezer, failures)
+        data = self._json(url, self._deezer, failures, left)
         if not data:
             return None
         return frozenset(
@@ -263,9 +283,21 @@ class Catalogs:
             if (found := _image_id(_text(i, "cover_xl"))) is not None
         )
 
-    def _json(self, url: str, throttle: Throttle, failures: list[str]) -> dict[str, Any]:
-        throttle.wait()
+    def _json(
+        self,
+        url: str,
+        throttle: Throttle,
+        failures: list[str],
+        left: Callable[[], float] | None = None,
+        no_data_ok: bool = False,
+    ) -> dict[str, Any]:
+        """left: the caller's budget (Throttle.wait); a call it would not
+        start is recorded as a failure, so the catalogue counts as not
+        answering. no_data_ok: Deezer's "no data" error is an empty answer."""
         where = url.split("?")[0]
+        if not throttle.wait(left):
+            failures.append(f"{where}: out of time")
+            return {}
         try:
             data: object = json.loads(self._get(url))
         except (HttpError, ValueError) as error:
@@ -278,6 +310,8 @@ class Catalogs:
             return {}
         result = cast("dict[str, Any]", data)
         if "error" in result:
+            if no_data_ok and _error_code(result["error"]) == _NO_DATA:
+                return {}
             # Deezer reports quota and query errors with status 200 and an error object.
             failures.append(f"{where}: {result['error']}")
             event(log, logging.WARNING, "search_failed", url=where, error=str(result["error"]))
@@ -391,6 +425,13 @@ class Catalogs:
             releases[artist_id] = self.release_covers(artist_id, failures)
         covers = releases[artist_id]
         return covers is not None and picture_id not in covers
+
+
+def _error_code(error: object) -> int | None:
+    if not isinstance(error, dict):
+        return None
+    code = cast("dict[str, object]", error).get("code")
+    return code if isinstance(code, int) and not isinstance(code, bool) else None
 
 
 def is_release_cover(picture: str, covers: frozenset[str]) -> bool:
