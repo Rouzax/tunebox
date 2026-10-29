@@ -5,7 +5,7 @@ from collections.abc import Callable
 import pytest
 
 from tests.fakes import FakeHttp, make_track
-from tunebox.catalogs import Catalogs, Found, SearchError, Throttle
+from tunebox.catalogs import Catalogs, Found, Offer, SearchError, Throttle, is_release_cover
 from tunebox.http import HttpError
 
 COVER = "https://cdn-images.dzcdn.net/images/cover/abc/1000x1000-000000-80-0-0.jpg"
@@ -428,3 +428,74 @@ def test_an_artists_releases_are_asked_once_per_search() -> None:
     found = catalogs(http).artist_photo(make_track("KOTIER", "Smalltown Boy"))
     assert found == Found(dz("artist", PORTRAIT), "artist", "deezer artist: Kotiēr")
     assert sum("/albums" in url for url in http.urls) == 1
+
+
+def test_deezer_offers_ask_the_loose_query_once() -> None:
+    answer = {
+        "data": [
+            {
+                "title": "Collide",
+                "artist": {"name": "Agents of Time"},
+                "album": {"title": "Collide", "cover_xl": COVER, "cover_medium": COVER + "?m"},
+            },
+            {"title": "No cover", "artist": {"name": "X"}, "album": {"title": "Y"}},
+        ]
+    }
+    http = FakeHttp(lambda _url: body(answer))
+    failures: list[str] = []
+    offers = catalogs(http).deezer_offers("agents of time hearts collide", failures)
+    assert offers == [Offer(COVER, COVER + "?m", "Agents of Time", "Collide", "deezer")]
+    assert failures == [] and len(http.urls) == 1
+    assert "q=agents+of+time+hearts+collide" in http.urls[0]
+
+
+def test_an_album_by_id_and_a_missing_one() -> None:
+    album = {"title": "Collide", "cover_xl": COVER, "cover_medium": COVER, "artist": {"name": "A"}}
+    http = FakeHttp(
+        lambda url: body(album if url.endswith("/655089251") else {"error": {"code": 800}})
+    )
+    found = catalogs(http)
+    assert found.deezer_album("655089251", []) == Offer(COVER, COVER, "A", "Collide", "deezer")
+    failures: list[str] = []
+    assert found.deezer_album("1", failures) is None and failures
+
+
+def test_artists_most_fans_first_without_placeholders() -> None:
+    answer = {
+        "data": [
+            {"id": 1, "name": "Jessica", "nb_fan": 10, "picture_xl": dz("artist", "a" * 32)},
+            {"id": 2, "name": "Jessica", "nb_fan": 900, "picture_xl": dz("artist", "b" * 32)},
+            {"id": 3, "name": "Jessica", "nb_fan": 5000, "picture_xl": PLACEHOLDER},
+        ]
+    }
+    found = catalogs(FakeHttp(lambda _url: body(answer))).deezer_artists("Jessica", [])
+    assert [o.artist_id for o in found] == ["2", "1"]
+
+
+def test_release_covers_and_the_cover_rule() -> None:
+    answer = {"data": [{"cover_xl": dz("cover", SINGLE)}, {"cover_xl": ""}]}
+    covers = catalogs(FakeHttp(lambda _url: body(answer))).release_covers("7", [])
+    assert covers is not None and covers == frozenset({SINGLE})
+    assert is_release_cover(dz("artist", SINGLE), covers)
+    assert not is_release_cover(dz("artist", "b" * 32), covers)
+    assert not is_release_cover(PLACEHOLDER, covers)
+    failures: list[str] = []
+    down = catalogs(FakeHttp(lambda _url: body({"error": {"code": 4}})))
+    assert down.release_covers("7", failures) is None and failures
+
+
+def test_base_addresses_can_point_elsewhere() -> None:
+    http = FakeHttp(lambda _url: b'{"data": [], "results": []}')
+    found = Catalogs(
+        http,
+        0,
+        0,
+        deezer="http://catalogue.invalid/deezer",
+        itunes="http://catalogue.invalid/itunes/search",
+    )
+    found.deezer_offers("x", [])
+    found.itunes_offers("x", [])
+    assert [u.split("?")[0] for u in http.urls] == [
+        "http://catalogue.invalid/deezer/search",
+        "http://catalogue.invalid/itunes/search",
+    ]

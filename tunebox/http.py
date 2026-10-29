@@ -11,6 +11,8 @@ USER_AGENT = "tunebox/0.1 (+https://github.com/Rouzax/tunebox)"
 # Feeds and search answers are a few kB; anything this large is not one.
 MAX_BYTES = 2_000_000
 STREAM_CHUNK = 16_384
+# Per socket operation, not per call.
+TIMEOUT_S = 10.0
 
 HttpGet = Callable[[str], bytes]
 
@@ -39,7 +41,7 @@ class HttpError(Exception):
         self.unreachable = unreachable
 
 
-def get(url: str, timeout: float = 10.0) -> bytes:
+def get(url: str, timeout: float = TIMEOUT_S) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -53,7 +55,7 @@ def get(url: str, timeout: float = 10.0) -> bytes:
     return body
 
 
-def stream(url: str, timeout: float = 10.0) -> Generator[bytes]:
+def stream(url: str, timeout: float = TIMEOUT_S) -> Generator[bytes]:
     """Yields an endless response, such as an audio stream, as it arrives.
     The connection stays open until the generator is closed."""
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})

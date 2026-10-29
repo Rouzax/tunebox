@@ -34,6 +34,10 @@ ITUNES_INTERVAL = 3.1
 # Releases compared with an artist picture; an artist with more keeps the
 # older ones unchecked.
 RELEASES_CHECKED = 100
+# Asked of a catalogue per panel search; the panel shows at most 12 in all.
+OFFERS_ASKED = 12
+# Asked of Deezer's artist search; duplicate profiles share a name.
+ARTISTS_ASKED = 25
 # Deezer serves artist pictures and release covers from one image store, so
 # a picture that is a release cover carries that cover's id.
 _NO_IMAGE = "d41d8cd98f00b204e9800998ecf8427e"
@@ -45,6 +49,27 @@ class Found:
     url: str
     kind: Literal["album", "artist"]
     match: str
+
+
+@dataclass(frozen=True)
+class Offer:
+    """A cover the panel offers: the full-size link a fix stores, a small
+    one to show, and what the catalogue calls it."""
+
+    link: str
+    thumb: str
+    artist: str
+    album: str
+    source: Literal["deezer", "itunes"]
+
+
+@dataclass(frozen=True)
+class ArtistOffer:
+    link: str
+    thumb: str
+    name: str
+    fans: int
+    artist_id: str
 
 
 class SearchError(Exception):
@@ -108,16 +133,21 @@ def _text(item: dict[str, Any], *path: str) -> str:
 
 
 class Catalogs:
-    """find() is called from the one cover worker thread; the throttles are
-    still thread-safe so a second caller could not break the rate limits."""
+    """find() and artist_photo() run on the one cover worker thread, the
+    panel's searches on a request thread; the throttles are thread-safe, so
+    both keep to one rate limit per catalogue."""
 
     def __init__(
         self,
         http_get: HttpGet,
         deezer_interval: float = DEEZER_INTERVAL,
         itunes_interval: float = ITUNES_INTERVAL,
+        deezer: str = DEEZER,
+        itunes: str = ITUNES,
     ) -> None:
         self._get = http_get
+        self._deezer_api = deezer
+        self._itunes_api = itunes
         self._deezer = Throttle(deezer_interval)
         self._itunes = Throttle(itunes_interval)
 
@@ -159,6 +189,80 @@ class Catalogs:
             raise SearchError("; ".join(failures))
         return found
 
+    def deezer_offers(self, query: str, failures: list[str]) -> list[Offer]:
+        """Deezer's loose search, the form that also finds a song released
+        under another title. No match rule: the owner judges."""
+        url = f"{self._deezer_api}/search?" + urllib.parse.urlencode(
+            {"q": query, "limit": OFFERS_ASKED}
+        )
+        return [
+            Offer(
+                _text(i, "album", "cover_xl"),
+                _text(i, "album", "cover_medium") or _text(i, "album", "cover_xl"),
+                _text(i, "artist", "name"),
+                _text(i, "album", "title"),
+                "deezer",
+            )
+            for i in _items(self._json(url, self._deezer, failures), "data")
+            if _text(i, "album", "cover_xl")
+        ]
+
+    def itunes_offers(self, query: str, failures: list[str]) -> list[Offer]:
+        params = {"term": query, "media": "music", "entity": "song", "limit": OFFERS_ASKED}
+        url = f"{self._itunes_api}?" + urllib.parse.urlencode(params)
+        return [
+            Offer(
+                _text(i, "artworkUrl100").replace("100x100bb", "1000x1000bb"),
+                _text(i, "artworkUrl100").replace("100x100bb", "300x300bb"),
+                _text(i, "artistName"),
+                _text(i, "collectionName"),
+                "itunes",
+            )
+            for i in _items(self._json(url, self._itunes, failures), "results")
+            if _text(i, "artworkUrl100")
+        ]
+
+    def deezer_album(self, album_id: str, failures: list[str]) -> Offer | None:
+        """album_id is digits only (coversearch.album_id)."""
+        data = self._json(f"{self._deezer_api}/album/{album_id}", self._deezer, failures)
+        link = _text(data, "cover_xl")
+        if not link:
+            return None
+        thumb = _text(data, "cover_medium") or link
+        return Offer(link, thumb, _text(data, "artist", "name"), _text(data, "title"), "deezer")
+
+    def deezer_artists(self, name: str, failures: list[str]) -> list[ArtistOffer]:
+        """Profiles with a real picture, most fans first."""
+        url = f"{self._deezer_api}/search/artist?" + urllib.parse.urlencode(
+            {"q": name, "limit": ARTISTS_ASKED}
+        )
+        found = [
+            ArtistOffer(
+                _text(i, "picture_xl"),
+                _text(i, "picture_medium") or _text(i, "picture_xl"),
+                _text(i, "name"),
+                _fans(i),
+                _id(i, "id"),
+            )
+            for i in _items(self._json(url, self._deezer, failures), "data")
+            if _real_picture(_text(i, "picture_xl"))
+        ]
+        return sorted(found, key=lambda offer: offer.fans, reverse=True)
+
+    def release_covers(self, artist_id: str, failures: list[str]) -> frozenset[str] | None:
+        """The image ids of an artist's release covers; None when they
+        cannot be had."""
+        query = urllib.parse.urlencode({"limit": RELEASES_CHECKED})
+        url = f"{self._deezer_api}/artist/{artist_id}/albums?{query}"
+        data = self._json(url, self._deezer, failures)
+        if not data:
+            return None
+        return frozenset(
+            found
+            for i in _items(data, "data")
+            if (found := _image_id(_text(i, "cover_xl"))) is not None
+        )
+
     def _json(self, url: str, throttle: Throttle, failures: list[str]) -> dict[str, Any]:
         throttle.wait()
         where = url.split("?")[0]
@@ -198,7 +302,7 @@ class Catalogs:
         lead = lead_artist(first)
         queries.extend(dict.fromkeys((f"{lead} {base}", f"{first} {base}")))
         for q in queries:
-            url = f"{DEEZER}/search?" + urllib.parse.urlencode({"q": q, "limit": 10})
+            url = f"{self._deezer_api}/search?" + urllib.parse.urlencode({"q": q, "limit": 10})
             data = self._json(url, self._deezer, failures)
             candidates = [
                 Candidate(
@@ -227,7 +331,7 @@ class Catalogs:
         ]
         for term in terms:
             params = {"term": term, "media": "music", "entity": "song", "limit": 10}
-            url = f"{ITUNES}?" + urllib.parse.urlencode(params)
+            url = f"{self._itunes_api}?" + urllib.parse.urlencode(params)
             data = self._json(url, self._itunes, failures)
             candidates = [
                 Candidate(
@@ -248,7 +352,9 @@ class Catalogs:
         for name in track.artists:
             if not norm(name):
                 continue  # nothing to compare: any name in another script would "match"
-            url = f"{DEEZER}/search/artist?" + urllib.parse.urlencode({"q": name, "limit": 25})
+            url = f"{self._deezer_api}/search/artist?" + urllib.parse.urlencode(
+                {"q": name, "limit": ARTISTS_ASKED}
+            )
             # Deezer keeps duplicate profiles under one name; a small one often
             # has an album cover for its picture and may be listed first. The
             # profile with the most fans is the artist's own.
@@ -282,20 +388,14 @@ class Catalogs:
         if not artist_id or picture_id is None:
             return True
         if artist_id not in releases:
-            query = urllib.parse.urlencode({"limit": RELEASES_CHECKED})
-            url = f"{DEEZER}/artist/{artist_id}/albums?{query}"
-            data = self._json(url, self._deezer, failures)
-            releases[artist_id] = (
-                frozenset(
-                    found
-                    for i in _items(data, "data")
-                    if (found := _image_id(_text(i, "cover_xl"))) is not None
-                )
-                if data
-                else None
-            )
+            releases[artist_id] = self.release_covers(artist_id, failures)
         covers = releases[artist_id]
         return covers is not None and picture_id not in covers
+
+
+def is_release_cover(picture: str, covers: frozenset[str]) -> bool:
+    found = _image_id(picture)
+    return found is not None and found in covers
 
 
 def _real_picture(picture: str) -> bool:
