@@ -71,6 +71,19 @@ export function searchText(row) {
     return `${row.artist} ${row.title}`.trim();
 }
 
+// The fix a row's Back to automatic removes: on a song showing its
+// artist's photo fix, that photo fix (its key is the photo key).
+export function clearKey(row) {
+    return row.fix.key;
+}
+
+// Every song row offers the photo form: the photo is also the other side
+// of a song's cover. A photo fix's own row has no photo_key; its Fix
+// opens the photo form.
+export function offersPhoto(row) {
+    return Boolean(row.photo_key);
+}
+
 // The row of a photo fix carries the photo key as its own key.
 function photoKey(row) {
     return row.key.startsWith('photo:') ? row.key : row.photo_key;
@@ -151,11 +164,12 @@ export function render(root, ctx) {
         const photoRow = row.key.startsWith('photo:');
         const actions = el('div', {class: 'actions'},
             button('edit', 'Fix', () => open(panel, photoRow ? 'photo' : 'cover', () => photoRow ? photoForm(row) : coverForms(row)), {class: 'quiet'}));
-        if (row.kind === 'artist' && row.photo_key) {
+        if (offersPhoto(row)) {
             actions.append(el('button', {type: 'button', class: 'quiet', onclick: () => open(panel, 'photo', () => photoForm(row))}, 'This artist\'s photo is wrong'));
         }
         if (row.fix) {
-            actions.append(button('undo', 'Back to automatic', () => clear(row).catch(unreachable(ctx)), {class: 'quiet'}));
+            const label = clearKey(row) === row.key ? 'Back to automatic' : 'Back to automatic photo';
+            actions.append(button('undo', label, () => clear(row).catch(unreachable(ctx)), {class: 'quiet'}));
         }
         const heard = row.last_at === null ? null : `${row.channels.map((id) => stationName(channels, id)).join(', ')} · ${when(row.last_at / 1000)}`;
         return el('li', {class: 'cover-row', 'data-key': row.key, 'data-state': row.state},
@@ -195,8 +209,11 @@ export function render(root, ctx) {
     }
 
     async function clear(row) {
-        if (await post('covers/fix/clear', {key: row.key})) {
-            await afterChange('Back to automatic: tunebox looks the cover up again.');
+        const key = clearKey(row);
+        if (await post('covers/fix/clear', {key})) {
+            await afterChange(key === row.key
+                ? 'Back to automatic: tunebox looks the cover up again.'
+                : 'Back to automatic: tunebox looks the artist photo up again for every song by this artist.');
         }
     }
 

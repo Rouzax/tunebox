@@ -13,8 +13,11 @@
 // sideways scroll at phone and laptop sizes, and no page or CSP errors.
 //
 // Needs Google Chrome or Chromium (or CHROME=<path>) and the repo's .venv.
-// It starts its own tunebox on a free port with a temporary data folder, so
-// no network is needed:
+// It starts its own tunebox on a free port with a temporary data folder. The
+// panel's catalogue and thumbnail requests are answered locally, but the
+// spawned tunebox may contact the live station feed and, after a pick, the
+// Deezer image host when the machine has network; the check needs none to
+// pass:
 //
 //   node --experimental-websocket web/tests/browser/admin.mjs [screenshot folder]
 //

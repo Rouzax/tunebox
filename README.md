@@ -675,9 +675,11 @@ of devices you have named are always stored.
 ### Covers
 
 tunebox looks up each song's cover by itself (see
-[Covers](#update-back-up-and-reset) for where they are kept). When it picks
-the wrong one, or finds none, the **Covers** page lets you choose the right
-image. It is part of the admin panel and exists only while the panel is on.
+[Update, back up and reset](#update-back-up-and-reset) for where they are
+kept). When it picks the wrong one, or finds none, the **Covers** page lets
+you choose the right image. It is part of the admin panel and exists only
+while the panel is on; the fixes you make there keep applying when you turn
+the panel off.
 
 The page lists the songs played in the last 30 days, one row per song with
 all the stations that played it, newest first, 100 at a time (**More**
@@ -726,15 +728,18 @@ image hosts.
   or a damaged file is refused with "That file is not a JPEG, PNG or WebP
   image."
 
-**Fix an artist photo**: when a row shows an artist photo, **This artist's
-photo is wrong** searches Deezer for artists by that name. Up to 10 come
-back, most fans first. For the 5 with the most fans tunebox also checks
+**Fix an artist photo**: on any song row, **This artist's photo is wrong**
+searches Deezer for artists by that name. The artist photo is what a song
+shows when tunebox finds no cover, and the other side of a song's cover in
+the player. Up to 10 artists come back, most fans first. For the 5 with the most fans tunebox also checks
 whether the picture is really one of the artist's release covers and says
 "release cover" or "not a release cover"; the others say "not checked".
 Click a picture to save it, or **No photo** to show no photo for that
 artist. A photo fix applies to every song with exactly that artist text:
-"Jessica" and "Jessica, Other Artist" are two fixes. On the **Fixed by
-you** view, **Fix** on a photo fix opens the photo search again.
+"Jessica" and "Jessica, Other Artist" are two fixes. On a song row that
+shows a photo fix, **Back to automatic photo** removes that photo fix, for
+every song with that artist text. On the **Fixed by you** view, **Fix** on
+a photo fix opens the photo search again.
 
 What a fix does:
 

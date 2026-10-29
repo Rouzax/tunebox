@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {albumLink, listPath, releaseText, searchText, stateLine} from '../../web_admin/js/covers.js';
+import {albumLink, clearKey, listPath, offersPhoto, releaseText, searchText, stateLine} from '../../web_admin/js/covers.js';
 
 test('album links are checked as the server checks them', () => {
     assert.equal(albumLink(' https://www.deezer.com/en/album/655089251?utm_source=x '), 'https://www.deezer.com/en/album/655089251?utm_source=x');
@@ -29,4 +29,16 @@ test('release marks and the prefilled search', () => {
     assert.equal(releaseText(false), 'not a release cover');
     assert.equal(releaseText(null), 'not checked');
     assert.equal(searchText({artist: 'AGENTS OF TIME', title: 'Hearts Collide'}), 'AGENTS OF TIME Hearts Collide');
+});
+
+test('Back to automatic removes the fix the row shows', () => {
+    assert.equal(clearKey({key: 'jessica|song', fix: {key: 'photo:jessica'}}), 'photo:jessica');
+    assert.equal(clearKey({key: 'jessica|song', fix: {key: 'jessica|song'}}), 'jessica|song');
+    assert.equal(clearKey({key: 'photo:jessica', fix: {key: 'photo:jessica'}}), 'photo:jessica');
+});
+
+test('every song row offers the photo form, a photo fix row its Fix', () => {
+    assert.equal(offersPhoto({key: 'a|b', kind: 'album', photo_key: 'photo:a'}), true);
+    assert.equal(offersPhoto({key: 'a|b', kind: null, photo_key: 'photo:a'}), true);
+    assert.equal(offersPhoto({key: 'photo:a', kind: 'artist', photo_key: null}), false);
 });
