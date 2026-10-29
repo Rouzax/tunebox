@@ -20,11 +20,14 @@ from tunebox.accounts import Accounts
 from tunebox.admin import Admin
 from tunebox.blobs import Blobs
 from tunebox.bursts import Bursts
-from tunebox.catalogs import Catalogs
+from tunebox.catalogs import CALL_DEADLINE_S, Catalogs
 from tunebox.channel import Channel
 from tunebox.config import ChannelConfig, ConfigError, ConfigState, load
 from tunebox.coverfiles import MAX_COVER, CoverFiles
+from tunebox.coverfix import CoverFixes
+from tunebox.coverpanel import CoverPanel
 from tunebox.covers import CoverService
+from tunebox.coversearch import CoverSearch
 from tunebox.disk import free_bytes
 from tunebox.logos import Logos, group_key
 from tunebox.logs import add_file, configure, event
@@ -112,16 +115,22 @@ def main() -> int:
         return 2
     if removed:
         event(log, logging.INFO, "logo_blobs_collected", removed=removed)
+    # Fixes apply with the panel off too; only the page and its routes need it.
+    fixes = CoverFixes(settings)
     store = Store(config.server.data_dir / "tunebox.db")
     guard = Guard()
     cover_files = CoverFiles(config.server.data_dir / "covers", free=free_space)
-    catalogs = Catalogs(http.get)
+    # One instance for the worker and the panel: a panel search takes its
+    # turn in the same throttles.
+    catalogs = _catalogs(guard)
     covers = CoverService(
         store,
         catalogs.find,
         cover_files,
         lambda url: guard.get(url, max_bytes=MAX_COVER),
         find_photo=catalogs.artist_photo,
+        fixes=fixes,
+        blob_path=blobs.path,
     )
     logos = Logos(config.server.data_dir / "logos", guard.get, blobs)
     bursts = Bursts(guard.stream)
@@ -152,6 +161,9 @@ def main() -> int:
             lambda url: guard.probe(url, PROBE_DEADLINE_S, PROBE_BYTES),
             guarded_feed(guard),
         )
+        cover_panel = CoverPanel(
+            fixes, covers, store, cover_files, blobs, CoverSearch(catalogs, accounts.server_key)
+        )
         admin = Admin(
             accounts,
             config.admin,
@@ -163,6 +175,7 @@ def main() -> int:
             logos=logos,
             free_space=free_space,
             usage=usage,
+            covers=cover_panel,
             apply=runtime.apply,
             samples=lambda: [
                 title
@@ -241,6 +254,19 @@ class StopSignal:
     def wait(self, poll_s: float = 0.5) -> None:
         while not self.received:
             time.sleep(poll_s)
+
+
+def _catalogs(guard: Guard) -> Catalogs:
+    """Catalogue calls go through the guard, which ends each one within
+    CALL_DEADLINE_S. TUNEBOX_CATALOGS points Deezer and iTunes at one local
+    server instead: a knob for the admin browser check, which has no
+    network. The guard refuses a loopback server, so that path uses the
+    plain client."""
+    base = os.environ.get("TUNEBOX_CATALOGS")
+    if not base:
+        return Catalogs(lambda url: guard.get(url, deadline_s=CALL_DEADLINE_S))
+    event(log, logging.WARNING, "catalogs_overridden", base=base)
+    return Catalogs(http.get, deezer=f"{base}/deezer", itunes=f"{base}/itunes/search")
 
 
 def open_usage(path: Path, free_space: Callable[[], int | None]) -> Usage:

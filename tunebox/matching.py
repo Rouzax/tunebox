@@ -6,7 +6,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from tunebox.tracks import norm
+from tunebox.tracks import Track, norm
 
 _BRACKETS = re.compile(r"\s*[\(\[][^)\]]*[\)\]]")
 # A title that is a prefix of the other must cover at least this share of it.
@@ -112,3 +112,13 @@ def best_match(
     # Stable: within each rank the catalogue's own order decides.
     ranked = sorted(acceptable, key=lambda c: (compiled(c), norm(c.title) != exact))
     return ranked[0] if ranked else None
+
+
+def searchable(track: Track) -> bool:
+    """Matching compares norm() forms; a name or title with nothing left after
+    norm() (another script, punctuation only) can never be matched confidently."""
+    return (
+        track.kind == "track"
+        and bool(norm(" ".join(track.artists)))
+        and bool(norm(base_title(track.title)))
+    )

@@ -3,6 +3,7 @@
 import qrcode from '/vendor/qrcode-generator-2.0.4/qrcode.mjs';
 import {render as renderAccount} from './account.js';
 import {call, send, setCsrf} from './api.js';
+import {render as renderCovers} from './covers.js';
 import {askCode} from './dom.js';
 import {render as renderEdit} from './edit.js';
 import {render as renderHistory} from './history.js';
@@ -33,6 +34,11 @@ const ERRORS = {
     disk_low: 'The disk tunebox keeps its data on is almost full, so nothing was saved. Free some space and try again.',
     logo_store_failed: 'tunebox cannot store the image right now. Check the free disk space.',
     usage_unavailable: 'tunebox cannot read its usage data right now.',
+    search_running: 'A search is running. Wait for it and try again.',
+    too_many_searches: 'Searches are used up for this minute. Try again shortly.',
+    stale_candidate: 'That result is too old. Search again and pick it once more.',
+    bad_link: 'Paste a Deezer album link (https://www.deezer.com/album/...). Share links (deezer.page.link) are not followed.',
+    not_a_cover: 'That file is not a JPEG, PNG or WebP image.',
 };
 
 function show(id) {
@@ -126,13 +132,14 @@ const ctx = {
         }
         return answer;
     },
-    // Stores a logo image; the answer names it as blob:<sha256>. kept()
-    // gives the {state, target, done} of the form's unsaved change, which a
-    // session that ended meanwhile offers again after login, as for a save.
-    // That change never holds the image (the upload was refused before it
-    // was stored), so the offer says to upload it again.
-    async upload(file, kept) {
-        const answer = await send('POST', 'logos', file, file.type, {deadlineMs: UPLOAD_DEADLINE_MS});
+    // Stores an image: a logo (path 'logos', answered as blob:<sha256>) or
+    // a cover (path 'covers/upload?...'). kept() gives the {state, target,
+    // done} of the form's unsaved change, which a session that ended
+    // meanwhile offers again after login, as for a save. That change never
+    // holds the image (the upload was refused before it was stored), so the
+    // offer says to upload it again.
+    async upload(file, kept, path) {
+        const answer = await send('POST', path || 'logos', file, file.type, {deadlineMs: UPLOAD_DEADLINE_MS});
         if (answer.status === 401) {
             const change = kept ? kept() : null;
             const usable = change && !change.problem;
@@ -373,6 +380,8 @@ function route() {
         renderSettings(view, ctx);
     } else if (name === 'usage') {
         renderUsage(view, ctx);
+    } else if (name === 'covers') {
+        renderCovers(view, ctx);
     } else if (name === 'account') {
         renderAccount(view, ctx);
     } else if (name === 'history') {

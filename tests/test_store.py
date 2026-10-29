@@ -1,10 +1,11 @@
 import logging
+import os
 from pathlib import Path
 
 import pytest
 
 from tests.fakes import make_track
-from tunebox.store import CoverDecision, Store
+from tunebox.store import CoverDecision, HeardUnreadable, Store
 
 URL = "https://example.invalid/a.jpg"
 
@@ -104,3 +105,117 @@ def test_links_are_unknown_once_a_write_has_failed() -> None:
     store.put_cover(CoverDecision("b", "cover", "https://example.invalid/b.jpg", "m", 1.0))
     assert store.get_cover("b") is None
     assert store.cover_links() is None
+
+
+def test_heard_keeps_the_first_and_moves_the_last_play(tmp_path: Path) -> None:
+    store = Store(tmp_path / "tunebox.db")
+    store.record_heard("owr", [make_track("FISHER", "Stay", 1_000)])
+    store.record_heard("owr", [make_track("FISHER", "Stay", 5_000)])
+    store.record_heard("anthems", [make_track("FISHER", "Stay", 3_000)])
+    store.put_cover(CoverDecision("fisher|stay", "cover", URL, "m", 1.0))
+    (song,) = store.heard_songs(0) or []
+    assert (song.key, song.first_at, song.last_at) == ("fisher|stay", 1_000, 5_000)
+    assert song.channels == ("anthems", "owr")
+    assert song.photo_key == "photo:fisher" and song.artists == ("FISHER",)
+    assert song.cover == CoverDecision("fisher|stay", "cover", URL, "m", 1.0)
+
+
+def test_heard_songs_take_the_newest_row_text_and_the_window(tmp_path: Path) -> None:
+    store = Store(tmp_path / "tunebox.db")
+    store.record_heard("owr", [make_track("FISHER", "Stay", 1_000)])
+    store.record_heard("anthems", [make_track("Fisher", "Stay", 9_000)])
+    store.record_heard("owr", [make_track("JAZZY", "My People", 100)])
+    songs = store.heard_songs(500) or []
+    assert [(s.key, s.artist, s.cover) for s in songs] == [("fisher|stay", "Fisher", None)]
+
+
+def test_prune_heard_by_last_play(tmp_path: Path) -> None:
+    store = Store(tmp_path / "tunebox.db")
+    store.record_heard("owr", [make_track("FISHER", "Stay", 1_000), make_track("A", "B", 9_000)])
+    assert store.prune_heard(5_000) == 1
+    assert [s.key for s in store.heard_songs(0) or []] == ["a|b"]
+
+
+def test_the_list_is_unknown_on_the_in_memory_store() -> None:
+    store = Store(None)
+    store.record_heard("owr", [make_track()])
+    assert store.heard_songs(0) is None
+
+
+def test_the_list_reads_beside_a_held_store_lock(tmp_path: Path) -> None:
+    store = Store(tmp_path / "tunebox.db")
+    store.record_heard("owr", [make_track()])
+    # A player lookup holding the store's lock must not stall the panel.
+    with store._lock:  # pyright: ignore[reportPrivateUsage]
+        assert [s.key for s in store.heard_songs(0) or []] == ["fisher|stay"]
+
+
+def test_a_failed_heard_write_leaves_the_links_known(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = Store(tmp_path / "tunebox.db")
+    store.put_cover(CoverDecision("a", "cover", URL, "m", 1.0))
+    store._db.execute(  # pyright: ignore[reportPrivateUsage]
+        "CREATE TRIGGER refuse BEFORE INSERT ON heard BEGIN SELECT RAISE(ABORT, 'full'); END"
+    )
+    with caplog.at_level(logging.ERROR):
+        store.record_heard("owr", [make_track()])
+    assert [r.getMessage() for r in caplog.records] == ["store_unavailable"]
+    assert store.cover_links() == {URL}
+    assert store.heard_songs(0) == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a file without permissions")
+def test_an_unreadable_list_is_its_own_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "tunebox.db"
+    store = Store(path)
+    store.record_heard("owr", [make_track()])
+    path.chmod(0)
+    try:
+        with caplog.at_level(logging.WARNING), pytest.raises(HeardUnreadable):
+            store.heard_songs(0)
+    finally:
+        path.chmod(0o600)
+    assert [r.getMessage() for r in caplog.records] == ["cover_list_unreadable"]
+    assert caplog.records[0].levelno == logging.WARNING
+    # The store's own one-shot report is still there for its own connection.
+    caplog.clear()
+    store._db.execute(  # pyright: ignore[reportPrivateUsage]
+        "CREATE TRIGGER refuse BEFORE INSERT ON heard BEGIN SELECT RAISE(ABORT, 'full'); END"
+    )
+    with caplog.at_level(logging.ERROR):
+        store.record_heard("owr", [make_track("A", "B")])
+    assert [r.getMessage() for r in caplog.records] == ["store_unavailable"]
+
+
+def test_delete_cover_and_heard_track(tmp_path: Path) -> None:
+    store = Store(tmp_path / "tunebox.db")
+    store.put_cover(CoverDecision("fisher|stay", "cover", URL, "m", 1.0))
+    store.delete_cover("fisher|stay")
+    assert store.get_cover("fisher|stay") is None
+    assert store.heard_track("fisher|stay") is None
+    store.record_heard("owr", [make_track("FISHER", "Stay", 1_000)])
+    store.record_heard("owr", [make_track("FISHER", "Losing It", 2_000)])
+    track = store.heard_track("fisher|stay")
+    assert track is not None and (track.key, track.artists, track.title) == (
+        "fisher|stay",
+        ("FISHER",),
+        "Stay",
+    )
+    photo = store.heard_track("photo:fisher")
+    assert photo is not None and photo.key == "photo:fisher" and photo.title == "Losing It"
+
+
+def test_a_photo_key_lookup_uses_its_index(tmp_path: Path) -> None:
+    store = Store(tmp_path / "tunebox.db")
+    db = store._db  # pyright: ignore[reportPrivateUsage]
+    names = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert "heard_photo" in names
+    plan = db.execute(
+        "EXPLAIN QUERY PLAN SELECT artist, artists, title, last_at FROM heard"
+        " WHERE photo_key = ? ORDER BY last_at DESC LIMIT 1",
+        ("photo:fisher",),
+    ).fetchall()
+    assert any("heard_photo" in str(row[-1]) for row in plan)

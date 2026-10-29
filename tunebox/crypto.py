@@ -163,4 +163,8 @@ def unsign(key: bytes, value: str, purpose: str) -> str | None:
         given = _unb64(mac)
     except ValueError:  # bad base64 (binascii.Error) is a ValueError too
         return None
-    return payload if hmac.compare_digest(given, _mac(key, payload, purpose)) else None
+    try:
+        expected = _mac(key, payload, purpose)
+    except UnicodeEncodeError:  # a lone surrogate: never signed, since sign() encodes too
+        return None
+    return payload if hmac.compare_digest(given, expected) else None

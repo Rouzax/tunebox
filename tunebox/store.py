@@ -1,7 +1,8 @@
-"""SQLite persistence for cover decisions and recent lists."""
+"""SQLite persistence for cover decisions, recent lists and the songs the panel lists."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -38,7 +39,49 @@ CREATE TABLE IF NOT EXISTS recent (
     played_by TEXT,
     PRIMARY KEY (channel, started_at, key)
 );
+-- A cache of the songs the panel lists, outside the numbered migrations:
+-- a later change of its shape drops and recreates it.
+CREATE TABLE IF NOT EXISTS heard (
+    key TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    photo_key TEXT NOT NULL,
+    artist TEXT NOT NULL,
+    artists TEXT NOT NULL,
+    title TEXT NOT NULL,
+    first_at INTEGER NOT NULL,
+    last_at INTEGER NOT NULL,
+    PRIMARY KEY (key, channel)
+);
+CREATE INDEX IF NOT EXISTS heard_last ON heard(last_at);
+-- heard_track by photo key, newest first: an undo of a photo fix.
+CREATE INDEX IF NOT EXISTS heard_photo ON heard(photo_key, last_at);
 """
+
+# The panel lists the songs of this many days; older heard rows go daily.
+HEARD_KEEP_MS = 30 * 86_400_000
+
+_HEARD = """
+WITH kept AS (SELECT * FROM heard WHERE last_at >= ?),
+grouped AS (
+    SELECT key, MIN(first_at) AS first_at, MAX(last_at) AS last_at,
+        json_group_array(channel) AS channels
+    FROM kept GROUP BY key
+),
+newest AS (
+    SELECT key, photo_key, artist, artists, title,
+        ROW_NUMBER() OVER (PARTITION BY key ORDER BY last_at DESC, channel) AS n
+    FROM kept
+)
+SELECT g.key, n.photo_key, n.artist, n.artists, n.title, g.channels, g.first_at,
+    g.last_at, c.outcome, c.url, c.match, c.decided_at
+FROM grouped g
+JOIN newest n ON n.key = g.key AND n.n = 1
+LEFT JOIN covers c ON c.key = g.key
+"""
+
+
+class HeardUnreadable(Exception):
+    """The song list could not be read from the database file just now."""
 
 
 @dataclass(frozen=True)
@@ -48,6 +91,28 @@ class CoverDecision:
     url: str | None
     match: str | None
     decided_at: float
+
+
+_HeardRow = tuple[
+    str, str, str, str, str, str, int, int, Outcome | None, str | None, str | None, float | None
+]
+
+
+@dataclass(frozen=True)
+class HeardSong:
+    """One song of the panel's list: its text from the newest play, the
+    stations it played on, its first and last play (ms, the tracks'
+    started_at) and its automatic cover decision."""
+
+    key: str
+    photo_key: str
+    artist: str
+    artists: tuple[str, ...]
+    title: str
+    channels: tuple[str, ...]
+    first_at: int
+    last_at: int
+    cover: CoverDecision | None
 
 
 class Store:
@@ -63,6 +128,7 @@ class Store:
         # Set by the first write that fails: decisions may then be missing from
         # the database, so its list of links no longer says which files are unused.
         self._write_failed = False
+        self._path: Path | None = None
         self._db = self._open(path)
 
     def _open(self, path: Path | None) -> sqlite3.Connection:
@@ -72,6 +138,7 @@ class Store:
                 db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
                 db.execute("PRAGMA journal_mode=WAL")
                 db.executescript(_SCHEMA)
+                self._path = path
                 return db
             except (OSError, sqlite3.Error) as error:
                 self._report(error)
@@ -192,3 +259,130 @@ class Store:
                 if self._db.in_transaction:
                     self._db.execute("ROLLBACK")
                 self._write_error(error)
+
+    def record_heard(self, channel: str, tracks: Sequence[Track]) -> None:
+        """One upsert per song in one transaction: the first play stays, the
+        last moves on. A failure is reported once and does not mark the
+        decisions unknown: it says nothing about them."""
+        rows = [
+            (
+                t.key,
+                channel,
+                t.photo_key,
+                t.artist,
+                json.dumps(list(t.artists)),
+                t.title,
+                t.started_at,
+                t.started_at,
+            )
+            for t in tracks
+        ]
+        with self._lock:
+            try:
+                self._db.execute("BEGIN")
+                self._db.executemany(
+                    "INSERT INTO heard VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT (key, channel) DO UPDATE SET"
+                    " photo_key = excluded.photo_key, artist = excluded.artist,"
+                    " artists = excluded.artists, title = excluded.title,"
+                    " first_at = MIN(first_at, excluded.first_at),"
+                    " last_at = MAX(last_at, excluded.last_at)",
+                    rows,
+                )
+                self._db.execute("COMMIT")
+            except sqlite3.Error as error:
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
+                self._report(error)
+
+    def prune_heard(self, older_than_ms: int) -> int:
+        with self._lock:
+            try:
+                cursor = self._db.execute("DELETE FROM heard WHERE last_at < ?", (older_than_ms,))
+            except sqlite3.Error as error:
+                self._report(error)
+                return 0
+        return cursor.rowcount
+
+    def delete_cover(self, key: str) -> None:
+        """A failure leaves the old answer, which still names its link, so
+        the decisions stay known."""
+        with self._lock:
+            try:
+                self._db.execute("DELETE FROM covers WHERE key = ?", (key,))
+            except sqlite3.Error as error:
+                self._report(error)
+
+    def heard_track(self, key: str) -> Track | None:
+        """The newest heard song for a song key, or for a photo key the
+        newest song by those artists, as a Track under that key: what a
+        search for the key needs."""
+        column = "photo_key" if key.startswith("photo:") else "key"
+        with self._lock:
+            try:
+                row = self._db.execute(
+                    f"SELECT artist, artists, title, last_at FROM heard WHERE {column} = ?"
+                    " ORDER BY last_at DESC LIMIT 1",
+                    (key,),
+                ).fetchone()
+            except sqlite3.Error as error:
+                self._report(error)
+                return None
+        if row is None:
+            return None
+        artist, artists, title, last_at = cast("tuple[str, str, str, int]", row)
+        names = tuple(cast("list[str]", json.loads(artists)))
+        return Track("track", artist, names, title, title, None, last_at, key)
+
+    def heard_songs(self, since_ms: int) -> list[HeardSong] | None:
+        """The panel's list, on a read-only connection of its own so it
+        never waits for (or holds up) the store's lock. None on the
+        in-memory store, whose list says nothing about what was played.
+        Raises HeardUnreadable when the file cannot be read now; that is
+        logged as cover_list_unreadable on every failure and leaves the
+        one-shot store_unavailable to the store's own connection."""
+        if self._path is None:
+            return None
+        try:
+            with contextlib.closing(
+                sqlite3.connect(self._path.resolve().as_uri() + "?mode=ro", uri=True)
+            ) as db:
+                rows = db.execute(_HEARD, (since_ms,)).fetchall()
+        except sqlite3.Error as error:
+            event(log, logging.WARNING, "cover_list_unreadable", error=str(error))
+            raise HeardUnreadable from error
+        songs: list[HeardSong] = []
+        for row in rows:
+            (
+                key,
+                photo_key,
+                artist,
+                artists,
+                title,
+                channels,
+                first_at,
+                last_at,
+                outcome,
+                url,
+                match,
+                decided_at,
+            ) = cast(_HeardRow, row)
+            cover = (
+                CoverDecision(key, outcome, url, match, decided_at)
+                if outcome is not None and decided_at is not None
+                else None
+            )
+            songs.append(
+                HeardSong(
+                    key,
+                    photo_key,
+                    artist,
+                    tuple(cast("list[str]", json.loads(artists))),
+                    title,
+                    tuple(sorted(cast("list[str]", json.loads(channels)))),
+                    first_at,
+                    last_at,
+                    cover,
+                )
+            )
+        return songs

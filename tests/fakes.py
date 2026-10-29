@@ -11,6 +11,7 @@ from pathlib import Path
 
 from tunebox.blobs import Blobs
 from tunebox.config import ChannelConfig, SourceConfig, StreamConfig
+from tunebox.coverfix import Fix, FixSource
 from tunebox.http import HttpError
 from tunebox.netguard import Probe
 from tunebox.sources.base import SourceError
@@ -21,7 +22,15 @@ STATION_ID = r"^[A-Z]\d{4} \d{2} [A-Za-z]{3} \d{4}\b"
 PLAYED_BY = r"\s*\(Played by ([^)]*)\)\s*$"
 RULES = Rules(station_id=re.compile(STATION_ID), played_by=re.compile(PLAYED_BY))
 FIXTURE = Path(__file__).parent / "fixtures" / "tracks-2026-10-16.psv"
-COVER_JPG = b"\xff\xd8\xff\xe0" + b"\x01" * 64
+# SOI, a JFIF segment, a frame header, a scan header, scan data and EOI:
+# walkable as a JPEG.
+COVER_JPG = (
+    b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    + b"\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
+    + b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
+    + b"\x01" * 48
+    + b"\xff\xd9"
+)
 
 
 def fetch_cover(_url: str) -> bytes:
@@ -54,6 +63,29 @@ def blob_store(directory: Path, clock: Callable[[], float] = time.time) -> Blobs
 
 def make_track(artist: str = "FISHER", title: str = "Stay", started_at: int = 1_000_000) -> Track:
     return clean(RawEntry(artist, title, started_at), RULES, started_at)
+
+
+class FakeFixes:
+    """A fix map without a database. known=False stands for a table that
+    could not be read at start-up."""
+
+    def __init__(self, *fixes: Fix, known: bool = True) -> None:
+        self.map = {fix.key: fix for fix in fixes}
+        self.known = known
+
+    def get(self, key: str) -> Fix | None:
+        return self.map.get(key)
+
+    def values(self) -> set[str] | None:
+        if not self.known:
+            return None
+        return {fix.value for fix in self.map.values() if fix.value is not None}
+
+
+def cover_fix(
+    key: str, value: str | None, source: FixSource = "deezer", set_at: float = 0.0
+) -> Fix:
+    return Fix(key, value, f"test {source}", source, "FISHER", "Stay", set_at)
 
 
 class FakeHttp:

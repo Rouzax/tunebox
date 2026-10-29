@@ -46,11 +46,16 @@ from tunebox.config import (
     state_to_toml,
     validate_state,
 )
+from tunebox.coverfiles import MAX_COVER
+from tunebox.coverfix import VIEWS
+from tunebox.coverpanel import CoverPanel, NotACover, StaleCandidate
+from tunebox.coversearch import BadLink
 from tunebox.disk import has_room
 from tunebox.http_headers import single
 from tunebox.limits import Once, network
 from tunebox.logos import CONTENT_TYPES, Logos, group_key
 from tunebox.logs import event
+from tunebox.pacer import Busy
 from tunebox.paths import inside
 from tunebox.pin import PIN_MAX, PIN_MIN, Pin, PinError, PinStale, read_cookie
 from tunebox.rulecheck import check_new, lint_new
@@ -63,7 +68,7 @@ from tunebox.settings import (
     state_from_dict,
     state_to_json,
 )
-from tunebox.streamcheck import URL_MAX, Busy, StreamChecks
+from tunebox.streamcheck import URL_MAX, StreamChecks
 from tunebox.tomlout import dumps
 from tunebox.usage import Usage, UsageSettings, UsageUnavailable
 from tunebox.usagecore import NAME_MAX, RETENTION_MAX, RETENTION_MIN, valid_device
@@ -81,6 +86,12 @@ MAX_TARGET = 200
 # The image types a logo upload may declare; the bytes decide the kind.
 UPLOAD_TYPES = ("image/png", "image/jpeg", "image/webp", "image/svg+xml")
 JSON_ONLY = ("application/json",)
+# A cover upload: raster only, a cover is drawn on a canvas.
+COVER_TYPES = ("image/png", "image/jpeg", "image/webp")
+# A search's typed text and the list's search box.
+TEXT_MAX = 300
+# Song keys and artist text come from the feeds; no real one is this long.
+KEY_MAX = 1000
 SESSION_COOKIE = "tunebox_admin"
 KNOWN_COOKIE = "tunebox_known"
 SETUP_TOKEN_S = 900
@@ -90,7 +101,8 @@ ADMIN_CSP = "; ".join(
         "script-src 'self'",
         "style-src 'self'",
         "font-src 'self'",
-        "img-src 'self' data:",
+        # Candidate thumbnails come straight from the two catalogue image hosts.
+        "img-src 'self' data: https://*.dzcdn.net https://*.mzstatic.com",
         "media-src https:",
         "connect-src 'self'",
         "frame-ancestors 'none'",
@@ -267,6 +279,7 @@ class Admin:
         checks: StreamChecks,
         logos: Logos | None = None,
         usage: Usage | None = None,
+        covers: CoverPanel | None = None,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -274,7 +287,8 @@ class Admin:
         """pin is the listening PIN the settings page sets; apply reloads the
         running channels after a change; samples gives recent titles that
         new title rules are tried on; logos holds the downloaded group
-        images the Stations page shows."""
+        images the Stations page shows; covers serves the Covers page, and
+        None leaves its routes not found."""
         self._accounts = accounts
         self._pin = pin
         self._settings = settings
@@ -284,6 +298,7 @@ class Admin:
         self._logos = logos
         self._free = free_space
         self._usage = usage
+        self._covers = covers
         self._checks = checks
         self._origin = config.public_origin
         # Over plain http a browser drops Secure cookies and refuses the
@@ -345,6 +360,16 @@ class Admin:
             # A fresh code only when the change turns addresses on, so the
             # check is in the handler, not code=True.
             ("POST", "usage/settings"): Route(self._using(self._usage_change)),
+            # Searches reach only the catalogues and a fix changes only a
+            # picture: a session is enough, and every change is a POST.
+            ("GET", "covers"): Route(self._covering(self._covers_list)),
+            ("GET", "covers/image/{part}"): Route(self._covering(self._cover_image)),
+            ("POST", "covers/search"): Route(self._covering(self._cover_search)),
+            ("POST", "covers/fix"): Route(self._covering(self._cover_fix)),
+            ("POST", "covers/fix/clear"): Route(self._covering(self._cover_clear)),
+            ("POST", "covers/upload"): Route(
+                self._covering(self._cover_upload), body=MAX_COVER, types=COVER_TYPES
+            ),
         }
         if config.setup_page and not accounts.exists():
             self._setup_token = crypto.new_token()
@@ -820,15 +845,8 @@ class Admin:
             ref, kind = self._blobs.save(request.body)
         except BlobError:
             return _error(400, "not_an_image")
-        except BlobStoreFull as error:
-            name = "logo_store_full" if error.reason == "logo_store_full" else "admin_disk_low"
-            event(log, logging.WARNING, name, client=request.client)
-            return _error(507, error.reason)
-        except BlobUnavailable as error:
-            event(
-                log, logging.WARNING, "logo_store_failed", client=request.client, errno=error.errno
-            )
-            return _error(503, "logo_store_failed")
+        except (BlobStoreFull, BlobUnavailable) as error:
+            return self._stored_refusal(request, error)
         event(
             log,
             logging.INFO,
@@ -838,6 +856,15 @@ class Admin:
             bytes=len(request.body),
         )
         return _json(200, {"logo": ref, "kind": kind})
+
+    def _stored_refusal(self, request: Request, error: BlobStoreFull | BlobUnavailable) -> Response:
+        """An upload the store could not keep, for a logo or a cover."""
+        if isinstance(error, BlobStoreFull):
+            name = "logo_store_full" if error.reason == "logo_store_full" else "admin_disk_low"
+            event(log, logging.WARNING, name, client=request.client)
+            return _error(507, error.reason)
+        event(log, logging.WARNING, "logo_store_failed", client=request.client, errno=error.errno)
+        return _error(503, "logo_store_failed")
 
     def _blob(self, request: Request, _session: Session) -> Response:
         found = self._blobs.path(f"blob:{request.path.rsplit('/', 1)[-1]}")
@@ -1085,6 +1112,96 @@ class Admin:
 
         return run
 
+    def _covering(
+        self, handler: Callable[[Request, Session, CoverPanel], Response]
+    ) -> Callable[[Request, Session], Response]:
+        """A Covers handler as a route's run, answering not found when this
+        Admin was built without the Covers page."""
+
+        def run(request: Request, session: Session) -> Response:
+            if self._covers is None:
+                return _error(404, "not_found")
+            return handler(request, session, self._covers)
+
+        return run
+
+    def _covers_list(self, request: Request, _session: Session, covers: CoverPanel) -> Response:
+        query = _query(request)
+        if query is None:
+            return _error(400, "bad_request")
+        view = query.get("view", "problems")
+        text = query.get("q", "")
+        after = _cursor(query["after"]) if "after" in query else None
+        if view not in VIEWS or len(text) > TEXT_MAX or ("after" in query and after is None):
+            return _error(400, "bad_request")
+        return _json(200, covers.listing(view, text, after))
+
+    def _cover_image(self, request: Request, _session: Session, covers: CoverPanel) -> Response:
+        found = covers.image(request.path.rsplit("/", 1)[-1])
+        return _error(404, "not_found") if found is None else _image(found)
+
+    def _cover_search(self, request: Request, _session: Session, covers: CoverPanel) -> Response:
+        body = _body(request, ("kind", "key", "artist", "title", "text"))
+        if (
+            body is None
+            or body["kind"] not in ("cover", "link", "photo")
+            or not _cover_text(body["key"], body["artist"], body["title"])
+            or len(body["text"]) > (URL_MAX if body["kind"] == "link" else TEXT_MAX)
+            or not encodable(body["text"])
+        ):
+            return _error(400, "bad_request")
+        try:
+            answer = covers.search(
+                body["kind"],
+                body["key"],
+                body["artist"],
+                body["title"],
+                body["text"],
+            )
+        except BadLink:
+            return _error(400, "bad_link")
+        except ValueError:
+            # Blank text, or a key that does not fit the kind; refused
+            # before the search spends a slot.
+            return _error(400, "bad_request")
+        except Busy as busy:
+            return _busy(busy)
+        return _json(200, answer)
+
+    def _cover_fix(self, request: Request, _session: Session, covers: CoverPanel) -> Response:
+        body = _body(request, ("token",))
+        if body is None:
+            return _error(400, "bad_request")
+        try:
+            fix = covers.pick(body["token"])
+        except StaleCandidate:
+            return _error(400, "stale_candidate")
+        return _json(200, {"key": fix.key, "label": fix.label, "source": fix.source})
+
+    def _cover_clear(self, request: Request, _session: Session, covers: CoverPanel) -> Response:
+        body = _body(request, ("key",))
+        if body is None or not _cover_text(body["key"], "", ""):
+            return _error(400, "bad_request")
+        return Response(204) if covers.clear(body["key"]) else _error(404, "not_found")
+
+    def _cover_upload(self, request: Request, _session: Session, covers: CoverPanel) -> Response:
+        query = _query(request)
+        key = query.get("key") if query else None
+        artist = query.get("artist", "") if query else ""
+        title = query.get("title", "") if query else ""
+        if key is None or not _cover_text(key, artist, title):
+            return _error(400, "bad_request")
+        try:
+            fix = covers.upload(key, artist, title, request.body)
+        except NotACover, BlobError:
+            return _error(400, "not_a_cover")
+        except ValueError:
+            # A photo key: a photo is picked from Deezer, never uploaded.
+            return _error(400, "bad_request")
+        except (BlobStoreFull, BlobUnavailable) as error:
+            return self._stored_refusal(request, error)
+        return _json(200, {"key": fix.key, "label": fix.label, "source": fix.source})
+
     def _usage_live(self, _request: Request, _session: Session, usage: Usage) -> Response:
         return _json(200, usage.live())
 
@@ -1251,6 +1368,23 @@ def _object(request: Request) -> dict[str, object] | None:
     except ValueError, RecursionError:
         return None
     return cast("dict[str, object]", payload) if isinstance(payload, dict) else None
+
+
+def _cover_text(key: str, artist: str, title: str) -> bool:
+    """A song or photo key and its display text: present, bounded, storable."""
+    return (
+        0 < len(key) <= KEY_MAX
+        and len(artist) <= KEY_MAX
+        and len(title) <= KEY_MAX
+        and all(encodable(text) for text in (key, artist, title))
+    )
+
+
+def _cursor(text: str) -> tuple[int, str] | None:
+    """A list page's cursor, <ms>:<key>; the key may hold colons itself."""
+    at, colon, key = text.partition(":")
+    value = _uint(at)
+    return (value, key) if colon and key and value is not None else None
 
 
 def _query(request: Request) -> dict[str, str] | None:

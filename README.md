@@ -510,11 +510,13 @@ logos.
 
 Two limits keep uploads from filling the disk:
 
-- All uploads together may take 100 MB. Past that, an upload is refused
-  ("Uploaded logos have reached their 100 MB limit."). Uploading an image
-  that is already stored still works. To make room, wait for a restart to
-  remove uploads that no station and no History entry names once they are a
-  day old; uploads that a past version in the History names stay.
+- All uploads together, the covers uploaded on the [Covers](#covers) page
+  included, may take 100 MB. Past that, an upload is refused ("Uploaded
+  logos have reached their 100 MB limit."). Uploading an image that is
+  already stored still works. To make room, wait for a restart to remove
+  uploads that no station, no History entry and no cover fix names once
+  they are a day old; uploads that a past version in the History names
+  stay.
 - A save, import, restore or upload is refused while less than 256 MB
   would stay free on the disk that holds `data/` ("The disk tunebox keeps
   its data on is almost full, so nothing was saved."). This keeps room for
@@ -669,6 +671,106 @@ account, so a problem with it never affects saving stations or logging in.
 If a flood of made-up devices reaches the daily limits (10,000 new visits,
 devices and sessions a day), the rest of that day is not stored; sessions
 of devices you have named are always stored.
+
+### Covers
+
+tunebox looks up each song's cover by itself (see
+[Update, back up and reset](#update-back-up-and-reset) for where they are
+kept). When it picks the wrong one, or finds none, the **Covers** page lets
+you choose the right image. It is part of the admin panel and exists only
+while the panel is on; the fixes you make there keep applying when you turn
+the panel off.
+
+The page lists the songs played in the last 30 days, one row per song with
+all the stations that played it, newest first, 100 at a time (**More**
+shows the next ones). Each row shows the image the player gets now, the
+stations, when the song was last heard, and where the image comes from:
+
+- **Cover**: tunebox found the song's cover.
+- **Artist photo**: tunebox found no cover and shows a photo of the artist
+  instead.
+- **No image**: tunebox found neither, or the song is not looked up (a
+  title in a script the catalogues cannot match).
+- **Still looking**: tunebox has no answer yet or has not downloaded the
+  image yet, or its last lookup failed and it will try again.
+- **Your fix**: you chose the image. **Your fix · fetching** while tunebox
+  downloads it; **Fetch failed** or **Image lost** when that went wrong
+  (see [Troubleshooting](#troubleshooting)).
+
+A line at the top counts the songs of the last 30 days with a cover, with
+an artist photo, with no image, and fixed by you. Three views choose the
+rows: **Problems** (the default) shows the songs with an artist photo or no
+image, and those still looking for more than a day; **All** shows every
+song; **Fixed by you** shows every fix, also for songs not played in the
+last 30 days. The search box finds songs by artist or title within the
+view.
+
+Opening the page never contacts Deezer or Apple. Only a search does, and
+your browser then loads the thumbnails of the results straight from their
+image hosts.
+
+**Fix a cover**: press **Fix** on the row, then do one of these:
+
+- **Search Deezer and iTunes**: the box starts with the song's artist and
+  title; change it if needed (for example to the album's name) and search.
+  Up to 12 covers come back, and nothing is filtered out: you judge which
+  one is right. Click it to save.
+- **Paste a Deezer album link**, such as
+  `https://www.deezer.com/album/655089251`, when no search finds the
+  album; tunebox shows that album to click. Only links to `deezer.com`
+  work: share links (`deezer.page.link`) are not followed, so open such a
+  link in the browser first and copy the address it ends up at.
+- **Upload an image**: a JPEG, PNG or WebP file of at most 2 MB. Before
+  keeping it, tunebox removes the metadata a camera or phone stores in the
+  file (such as the place a photo was taken, the time and the device); a
+  JPEG keeps its rotation. The picture itself is not changed or resized,
+  except that an animated PNG keeps only its still image. An animated WebP
+  or a damaged file is refused with "That file is not a JPEG, PNG or WebP
+  image."
+
+**Fix an artist photo**: on any song row, **This artist's photo is wrong**
+searches Deezer for artists by that name. The artist photo is what a song
+shows when tunebox finds no cover, and the other side of a song's cover in
+the player. Up to 10 artists come back, most fans first. For the 5 with the
+most fans tunebox also checks whether the picture is really one of the
+artist's release covers and says "release cover" or "not a release cover";
+the others say "not checked". Click a picture to save it, or **No photo**
+to show no photo for that artist. A photo fix applies to every song with
+exactly that artist text: "Jessica" and "Jessica, Other Artist" are two
+fixes. On a song row that shows a photo fix, **Back to automatic photo**
+removes that photo fix, for every song with that artist text. On the
+**Fixed by you** view, **Fix** on a photo fix opens the photo search again.
+
+What a fix does:
+
+- The fix wins: tunebox never looks that song (or that artist's photo) up
+  again by itself, however old the fix gets.
+- The player shows the new image from its next update once tunebox has
+  downloaded it; until then it keeps the old one. An uploaded image needs
+  no download: tunebox copies it into place as its next job.
+- PawTunes shows it from the next time the song starts, because PawTunes
+  keeps one image per song while it plays. PawTunes never shows an
+  uploaded cover: it has no public link.
+- **Back to automatic** removes the fix: tunebox forgets its own earlier
+  answer too and looks the song up again. Until that lookup is done, the
+  song shows no image, or your photo fix for its artist if there is one.
+
+A fix stays when its song leaves the 30-day list. On **Fixed by you** such
+a row reads "not heard in 30 days". That also happens when a station's
+title rules change the song's text (for example a new badge pattern): the
+fix then belongs to the old text, and you can remove it there and fix the
+song again under its new text.
+
+Searches run one at a time, at most 10 a minute, so that tunebox's own
+lookups of the songs playing now keep their turn with Deezer and Apple. A
+search that hits either limit says so; wait a moment and search again. A
+search stops after about 8 seconds and shows what it found by then; a
+catalogue that did not answer in time is named ("iTunes did not answer;
+try again later").
+
+Fixes are stored in `data/tunebox.db`, uploaded covers in `data/blobs/`
+with the uploaded logos, where they count toward the same 100 MB. Fixes
+are not part of the station export, the change history or a restore.
 
 ## Use it with PawTunes
 
@@ -831,10 +933,8 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 - **Update** to the latest release. Copy `data/tunebox.db` first: a newer
   tunebox may upgrade the database, and an older one then refuses to start
   on it (`settings_unavailable` in the log), so going back means putting
-  the copy back. This release asks every browser for the PIN again (when
-  one is set); the PIN itself stays valid. Browsers the admin login
-  knew lose their shortcut in its pace limit until they next log in; the
-  login asks for a code as before.
+  the copy back. This release upgrades the database (it adds the table
+  for [cover fixes](#covers)), so make that copy before you pull it.
 
   ```sh
   cp data/tunebox.db data/tunebox.db.before-update
@@ -842,18 +942,20 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   ```
 
 - **Back up**: everything worth keeping is in the `data` folder:
-  `tunebox.toml`, and `tunebox.db`, which holds the stations, settings and
-  change history (with the admin panel on, the only copy of them), the
-  admin account and its sessions, the listening PIN, the cover decisions
-  and the recent lists. Copy it while tunebox is stopped, or copy
+  `tunebox.toml`, and `tunebox.db`, which holds the stations, settings
+  and change history (with the admin panel on, the only copy of them),
+  the admin account and its sessions, the listening PIN, your [cover
+  fixes](#covers), the cover decisions, the recent lists and the songs of
+  the last 30 days. Copy it while tunebox is stopped, or copy
   `tunebox.db-wal` along with it. `data/blobs/` holds the logos uploaded
-  in the panel, the only copy of those images, so back it up with the
-  database. `data/covers/` and `data/logos/` (group images included, in
-  `data/logos/groups/`) are caches that tunebox fills again by itself;
-  they need no backup. An uploaded group image, like an uploaded logo,
-  lives in `data/blobs/`. `data/usage.db` holds the
-  [usage statistics](#usage-statistics); back it up only if you want to
-  keep them (copy `usage.db-wal` with it, or stop tunebox first).
+  in the panel and the covers uploaded on the Covers page, the only copy
+  of those images, so back it up with the database. `data/covers/` and
+  `data/logos/` (group images included, in `data/logos/groups/`) are
+  caches that tunebox fills again by itself; they need no backup. An
+  uploaded group image, like an uploaded logo, lives in `data/blobs/`.
+  `data/usage.db` holds the [usage statistics](#usage-statistics); back
+  it up only if you want to keep them (copy `usage.db-wal` with it, or
+  stop tunebox first).
 - **Reset** the recent lists and covers: stop tunebox, delete
   `data/tunebox.db`, `data/tunebox.db-wal` and `data/tunebox.db-shm`, and
   start it again. History refills from the stations and covers are looked
@@ -888,7 +990,10 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   capped at 500 MB: when it grows past that, the covers played longest ago
   are removed. A cover whose last lookup is more than a year old is
   forgotten (decision and file); a song still played is looked up again at
-  least every 90 days, so only songs unplayed for most of a year go.
+  least every 90 days, so only songs unplayed for most of a year go. A
+  cover you chose on the [Covers](#covers) page is never forgotten that
+  way; if the cap removes its file, tunebox downloads it again (or copies
+  the upload again) the next time it looks at the song.
   Nothing is downloaded while less than 256 MiB would stay free on the
   disk (`cover_disk_low` in the log). Delete `data/covers/` to download
   the covers again as their songs are played; until each download is done,
@@ -907,9 +1012,13 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | `config_file_ignored` in the log | The admin panel is on, so tunebox does not read the `parts` it names from `tunebox.toml` (`channels`, `defaults`, `player`); the database has its own, and they differ. | Change stations in the panel. For `defaults` or `player`, see [Set up the admin panel](#set-up-the-admin-panel). To stop the warning, make the file match or remove those parts from it. |
 | Saving in the admin panel says "Changed elsewhere" | Someone saved in another tab or browser first. | On the station list, check the stations it now shows and make your change again if it is still needed. In the edit form, check it and save again. |
 | Saving, importing, restoring or uploading says "The disk tunebox keeps its data on is almost full" (`admin_disk_low` in the log) | Less than 256 MB would stay free on the disk that holds `data/`. Nothing was saved. | Free disk space and try again. |
-| An upload says "Uploaded logos have reached their 100 MB limit" (`logo_store_full` in the log) | The uploads in `data/blobs/` add up to 100 MB. | Wait for a restart to remove uploads that no station and no History entry names once they are a day old; see [Logos](#logos). |
+| An upload says "Uploaded logos have reached their 100 MB limit" (`logo_store_full` in the log) | The uploads in `data/blobs/` (logos, group images and covers) add up to 100 MB. | Wait for a restart to remove uploads that no station, no History entry and no cover fix names once they are a day old; see [Logos](#logos). |
 | The edit form says "tunebox cannot store the image right now" after an upload (`logo_store_failed` in the log) | `data/blobs/` cannot be written: the disk is full or the folder is not owned by user id 1000. | Free disk space or fix the owner (`sudo chown -R 1000:1000 data`), then upload the image again. |
 | A group tile shows a mosaic of logos instead of the group's image | The image is still downloading, its address did not give a PNG, JPEG, WebP or SVG (`logo_failed` or `logo_rejected` with `group=` in the log), or its upload is gone (`logo_blob_missing` with `kind` `group`). A group whose stations are all switched off has no image either. | Wait a moment and reload the player; otherwise open the group's pencil in the admin panel and set the image again. |
+| A row on the Covers page reads "Fetch failed: ..." | tunebox could not download the image you picked; the text after the colon says why (for example "the image is gone": Deezer or Apple removed it, or "the disk is almost full"). The player meanwhile keeps the song's old image. | tunebox tries again the next time it looks at the song, at most every 10 minutes. For a removed image, search again and pick another one. |
+| A row on the Covers page reads "Image lost: upload it again" (`cover_fix_blob_missing` in the log) | The uploaded cover's file is gone from `data/blobs/`, for example after that folder was deleted or the database was restored without it. | Upload the image again on that row. Back up `data/blobs/` together with `tunebox.db`. |
+| The Covers page says tunebox keeps its song list in memory only | tunebox could not open `data/tunebox.db` for its covers (`store_unavailable` in the log), so it has no song list until a restart. Fixes still apply. | See the `store_unavailable` row below. |
+| The Covers page says "tunebox could not read its song list just now" (`cover_list_unreadable` in the log) | The page could not read `data/tunebox.db` for its list, for example after a change of the file's owner or permissions, or on a full disk. The page then lists only your fixes (on **Fixed by you**). Fixes still apply. | Reload the page. If the message stays, check free disk space and that `data` is owned by user id 1000, as for `store_unavailable` below. |
 | `logo_missing` or `logo_blob_missing` in the log; a station shows no logo | The station names an uploaded logo (`blob:...`) whose file is gone from `data/blobs/`, for example after that folder was deleted or the database was restored without it. | Edit the station, upload the logo again and save. Back up `data/blobs/` together with `tunebox.db`. |
 | The Usage page says "Usage data is not being saved" (`usage_store_unavailable` in the log) | `data/usage.db` cannot be written: the disk is nearly full (`reason` `disk_low`: less than 256 MB would stay free), the folder is not owned by user id 1000 (`open_failed` or `write_failed`), or the file comes from a newer tunebox (`schema_newer`). Live listeners still show; up to 10,000 waiting visits and sessions are kept in memory. | Free disk space or fix the owner (`sudo chown -R 1000:1000 data`); tunebox tries again every minute and logs `usage_store_recovered`. After going back to an older image, update the image again, or reset the usage statistics (see [Update, back up and reset](#update-back-up-and-reset)). |
 | The Usage page says "tunebox cannot read its usage data right now" (`usage_store_unavailable` with `reason` `read_failed`) | The page could not read `data/usage.db`: the same causes as above, since reading the history needs the file too. | As above. |
@@ -920,7 +1029,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | `store_unavailable` in the log | tunebox could open its database but the cover store could not, or a later write failed (a full disk, for example). | Check free disk space and that `data` is owned by user id 1000, then restart. Until then tunebox plays, but forgets covers and recent titles on restart. |
 | Check stream says "tunebox cannot check this address: its name is unknown, or it is not a public address" | The name does not resolve, or it points into your own network (a private address). tunebox only connects to public addresses for these checks, and answers both cases alike so that a check cannot be used to find out which names exist on your network. | Look for a typo in the address. A stream on your own network cannot be checked this way; the player itself is not affected by this rule. |
 | Check feed says "refused, ... has a non-public address" (for example for `np.tritondigital.com`) | The feed's name resolves to a private address on the tunebox host, which is what a DNS blocker (Pi-hole, AdGuard Home) answers for a name on its block list. Feed hosts are fixed per source type, so this is about the host's DNS, not the settings in the form. | Allow the feed's host in the DNS blocker that tunebox uses. The player's own titles come from the same feed, so they are missing too until it is allowed. |
-| The status page shows no covers for some songs | The song is in neither Deezer nor iTunes (common for unreleased tracks), or the catalogues could not be reached. | Nothing to do for unreleased tracks. A failed lookup is retried after 10 minutes, a song that was not found after 3 days. Look for `search_failed` in the log. |
+| The status page shows no covers for some songs | The song is in neither Deezer nor iTunes (common for unreleased tracks), or the catalogues could not be reached. | A failed lookup is retried after 10 minutes, a song that was not found after 3 days. Look for `search_failed` in the log. To choose the image yourself, use the [Covers](#covers) page. |
 | A station's name on the status page says "(feed unreachable)" | The station's now-playing feed does not answer. | Nothing to do: tunebox keeps showing the last known songs and keeps trying, at most every 2 minutes. |
 | The title changes too early or too late | The delay does not fit this station or player. Stations other than the Tomorrowland channels start at the default and often need their own value. | See [Fine-tune when titles change](#fine-tune-when-titles-change). |
 | No sound, and the ring around the stop button keeps spinning ("Reconnecting...") | The stream cannot be reached from this device or network, or the browser cannot play it. | The player keeps trying. Try another quality on the stations page; open `/check.html` on the device to see which formats it plays. To see why, open the player with `?debug=1` added to its address (for example `https://radio.example.com/?debug=1`) and press play: a panel lists what the browser reports about the stream, with its own error text and the player's reconnect decisions. Copy puts the list on the clipboard. The panel stays in that browser; nothing is sent to tunebox. |

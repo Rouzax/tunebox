@@ -14,19 +14,35 @@ from typing import Any
 
 import pytest
 
-from tests.fakes import FakeHttp, offline_checks
+from tests.fakes import FakeHttp, fetch_cover, offline_checks
 from tunebox import blobs as blobs_module
 from tunebox import crypto, usagedb
 from tunebox.accounts import REAUTH_S, AccountError, Accounts, Session, SessionEnded
-from tunebox.admin import ADMIN_HEADERS, MAX_BODY, MAX_STATE_BODY, Admin, Request, Response, Route
+from tunebox.admin import (
+    ADMIN_CSP,
+    ADMIN_HEADERS,
+    MAX_BODY,
+    MAX_STATE_BODY,
+    Admin,
+    Request,
+    Response,
+    Route,
+)
 from tunebox.blobs import MAX_BLOB, Blobs
+from tunebox.catalogs import Catalogs
 from tunebox.config import AdminConfig, SourceConfig
+from tunebox.coverfiles import CoverFiles
+from tunebox.coverfix import CoverFixes
+from tunebox.coverpanel import CoverPanel
+from tunebox.covers import CoverService
+from tunebox.coversearch import CoverSearch
 from tunebox.disk import MIN_FREE
 from tunebox.logos import Logos, group_key
 from tunebox.netguard import Probe
 from tunebox.pin import Pin
 from tunebox.rulecheck import MAX_NEW_PATTERNS
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError, state_from_dict
+from tunebox.store import Store
 from tunebox.streamcheck import PER_MINUTE, StreamChecks
 from tunebox.tracks import RawEntry
 from tunebox.usage import Usage
@@ -55,6 +71,7 @@ class World:
         usage: bool = False,
         checks: StreamChecks | None = None,
         logos: bool = True,
+        covers: bool = False,
     ) -> None:
         self.origin = origin
         self.clock = Clock()
@@ -90,6 +107,37 @@ class World:
         self.samples_asked = 0
         self.apply_result: int | None = None
         self.pin = Pin(self.settings, self.accounts.server_key, clock=self.clock)
+        self.catalogue: dict[str, object] = {}
+        self.cover_store: Store | None = None
+        self.cover_files: CoverFiles | None = None
+        self.cover_service: CoverService | None = None
+        panel = None
+        if covers:
+            self.cover_store = Store(tmp_path / "t.db")
+            self.cover_files = CoverFiles(tmp_path / "covers", free=lambda: None)
+            fixes = CoverFixes(self.settings)
+            self.cover_service = CoverService(
+                self.cover_store,
+                lambda _t: None,
+                self.cover_files,
+                fetch_cover,
+                clock=self.clock,
+                fixes=fixes,
+                blob_path=self.blobs.path,
+            )
+            catalogs = Catalogs(FakeHttp(self._catalogue_answer), 0, 0)
+            search = CoverSearch(
+                catalogs, self.accounts.server_key, clock=self.clock, monotonic=self.clock
+            )
+            panel = CoverPanel(
+                fixes,
+                self.cover_service,
+                self.cover_store,
+                self.cover_files,
+                self.blobs,
+                search,
+                clock=self.clock,
+            )
         self.admin = Admin(
             self.accounts,
             AdminConfig(True, setup_page, origin),
@@ -103,11 +151,18 @@ class World:
             apply=self.apply,
             samples=self.samples,
             usage=self.usage,
+            covers=panel,
             clock=self.clock,
             monotonic=self.clock,
             sleep=lambda _s: None,
         )
         self.cookies: dict[str, str] = {}
+
+    def _catalogue_answer(self, url: str) -> bytes:
+        for part, answer in self.catalogue.items():
+            if part in url:
+                return json.dumps(answer).encode()
+        return b'{"data": [], "results": []}'
 
     def close(self) -> None:
         if self.usage is not None:
@@ -375,6 +430,9 @@ def test_admin_answers_carry_the_admin_headers(world: World) -> None:
         for name, value in ADMIN_HEADERS.items():
             assert headers[name] == value
     assert "frame-ancestors 'none'" in ADMIN_HEADERS["Content-Security-Policy"]
+    assert "img-src 'self' data: https://*.dzcdn.net https://*.mzstatic.com" in ADMIN_CSP.split(
+        "; "
+    )
 
 
 def test_static_files_are_limited_to_known_types_inside_the_folder(world: World) -> None:

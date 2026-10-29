@@ -1,3 +1,4 @@
+import contextlib
 import dataclasses
 import json
 import logging
@@ -10,6 +11,7 @@ from typing import Any
 import pytest
 
 from tunebox.config import ChannelRow, ConfigError, ConfigState
+from tunebox.migrate import migrate
 from tunebox.settings import (
     MIGRATIONS,
     HistoryEntry,
@@ -232,7 +234,43 @@ def test_schema_3_adds_the_pin_table_and_the_reauth_column(settings: Settings) -
         version = db.execute("SELECT version FROM schema_version").fetchone()[0]
     assert "listener_pin" in tables
     assert "reauth_at" in columns
-    assert version == len(MIGRATIONS) == 3
+    assert version == len(MIGRATIONS) == 4
+
+
+def test_schema_4_adds_cover_fixes_to_a_schema_3_database(tmp_path: Path) -> None:
+    path = tmp_path / "tunebox.db"
+    with contextlib.closing(sqlite3.connect(path, isolation_level=None)) as db:
+        migrate(db, MIGRATIONS[:3], "settings")
+        db.execute("INSERT INTO settings VALUES ('defaults', '{}')")
+    opened = Settings(path)
+    with opened.read() as db:
+        version = db.execute("SELECT version FROM schema_version").fetchone()[0]
+        columns = [row[1] for row in db.execute("PRAGMA table_info(cover_fixes)")]
+        kept = db.execute("SELECT value_json FROM settings").fetchall()
+    opened.close()
+    assert version == 4
+    assert columns == ["key", "value", "label", "source", "artist", "title", "set_at"]
+    assert kept == [("{}",)]
+
+
+def test_no_photo_is_refused_for_a_song_key(settings: Settings) -> None:
+    with pytest.raises(SettingsWriteError), settings.transaction() as db:
+        db.execute("INSERT INTO cover_fixes VALUES ('fisher|stay', NULL, 'x', 'none', 'F', 'S', 1)")
+
+
+def test_referenced_blobs_include_uploaded_covers(settings: Settings) -> None:
+    ref = "blob:" + "d" * 64
+    with settings.transaction() as db:
+        db.execute(
+            "INSERT INTO cover_fixes VALUES ('fisher|stay', ?, 'Uploaded image', 'upload',"
+            " 'FISHER', 'Stay', 1)",
+            (ref,),
+        )
+        db.execute(
+            "INSERT INTO cover_fixes VALUES ('photo:fisher', NULL, 'No photo', 'none',"
+            " 'FISHER', '', 1)"
+        )
+    assert settings.referenced_blobs() == {ref}
 
 
 def test_an_unchanged_state_is_not_stored_again(settings: Settings) -> None:

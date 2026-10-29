@@ -8,15 +8,23 @@ from pathlib import Path
 
 import pytest
 
-from tests.fakes import OWR_RULES, FakeSource, NoJitter, channel_config, fetch_cover
+from tests.fakes import (
+    OWR_RULES,
+    FakeFixes,
+    FakeSource,
+    NoJitter,
+    channel_config,
+    cover_fix,
+    fetch_cover,
+)
 from tunebox.catalogs import Found
 from tunebox.channel import ACTIVE_MS, FIRST_FETCH, STEADY_FETCH, Channel
 from tunebox.config import ChannelConfig, SourceConfig
-from tunebox.coverfiles import CoverFiles
+from tunebox.coverfiles import CoverFiles, name_for
 from tunebox.covers import CoverService
 from tunebox.sources.base import SourceError
 from tunebox.store import Store
-from tunebox.tracks import RawEntry, Track
+from tunebox.tracks import RawEntry, Track, clean
 
 OLD = RawEntry("FISHER", "Stay", 1_000_000)
 NEW = RawEntry("JAZZY", "My People", 1_200_000)
@@ -49,9 +57,12 @@ class Finder:
     def __init__(self) -> None:
         self.covers: dict[str, str] = {}
         self.calls: list[str] = []
+        self.artist = False
 
     def __call__(self, track: Track) -> Found | None:
         self.calls.append(track.title)
+        if self.artist:
+            return Found(S_URL, "artist", "deezer artist: x")
         url = self.covers.get(track.title)
         return Found(url, "album", "test") if url else None
 
@@ -63,6 +74,7 @@ def make(
     store: Store | None = None,
     carry: Channel | None = None,
     photo: str | None = None,
+    fixes: FakeFixes | None = None,
 ) -> tuple[Channel, CoverService, Finder]:
     finder = Finder()
     store = store or Store(None)
@@ -78,6 +90,7 @@ def make(
         fetch_cover,
         clock=lambda: clock.ms / 1000,
         find_photo=find_photo if photo else None,
+        fixes=fixes,
     )
     channel = Channel(
         config or channel_config(),
@@ -94,6 +107,91 @@ def make(
 def drain(covers: CoverService) -> None:
     while covers.run_once():
         pass
+
+
+def test_heard_records_only_the_new_songs_a_poll_requested(tmp_path: Path) -> None:
+    source = FakeSource()
+    entries = [RawEntry(f"ARTIST {i}", f"Song {i}", 1_000_000 + i * 1000) for i in range(40)]
+    source.responses = [list(reversed(entries))]
+    store = Store(tmp_path / "t.db")
+    channel, _, _ = make(source, Clock(1_000_000 + 39 * 1000 + 3000), store=store)
+    channel.poll_once()
+    songs = {s.key: s for s in store.heard_songs(0) or []}
+    # The same tracks the cover lookups asked for: not heard, audible, PawTunes'
+    # audible and the newest 20 history entries; never the older catch-up.
+    assert len(songs) == 4 + 1 + 1 + 20
+    assert "artist 0|song 0" not in songs
+    newest = songs["artist 39|song 39"]
+    assert (newest.first_at, newest.last_at, newest.channels) == (1_039_000, 1_039_000, ("owr",))
+
+
+def test_heard_lists_a_song_in_another_script(tmp_path: Path) -> None:
+    source = FakeSource()
+    source.responses = [[RawEntry("東京", "歌", 1_000_000)]]
+    store = Store(tmp_path / "t.db")
+    channel, _, _ = make(source, Clock(1_010_000), store=store)
+    channel.poll_once()
+    assert [s.artist for s in store.heard_songs(0) or []] == ["東京"]
+
+
+def test_station_ids_are_not_listed(tmp_path: Path) -> None:
+    source = FakeSource()
+    source.responses = [[NEW, ID, OLD]]
+    store = Store(tmp_path / "t.db")
+    channel, _, _ = make(source, Clock(1_300_000), store=store)
+    channel.poll_once()
+    assert sorted(s.title for s in store.heard_songs(0) or []) == ["My People", "Stay"]
+
+
+def test_a_poll_without_new_songs_records_nothing(tmp_path: Path) -> None:
+    source = FakeSource()
+    source.responses = [[NEW, OLD], [NEW, OLD]]
+    store = Store(tmp_path / "t.db")
+    channel, _, _ = make(source, Clock(1_300_000), store=store)
+    channel.poll_once()
+    store.prune_heard(10**15)
+    channel.poll_once()
+    assert store.heard_songs(0) == []
+
+
+def test_now_shows_a_photo_fix_as_the_artist_image_without_a_second_side() -> None:
+    source = FakeSource()
+    # The first poll's search settles the artist answer; the second poll's
+    # request fetches the photo fix that stands in for it.
+    source.responses = [[NEW, OLD], [NEW, OLD]]
+    track = clean(NEW, channel_config().rules, 0)
+    fix_link = (
+        "https://cdn-images.dzcdn.net/images/artist/" + "e" * 32 + "/1000x1000-000000-80-0-0.jpg"
+    )
+    fixes = FakeFixes(cover_fix(track.photo_key, fix_link))
+    channel, covers, finder = make(source, Clock(1_300_000), fixes=fixes)
+    finder.artist = True  # the song's own search ends in an artist photo
+    for _ in range(2):
+        channel.poll_once()
+        drain(covers)
+    current = channel.now_view()[0]["current"]
+    assert current["cover_kind"] == "artist" and current["cover"].startswith("/covers/")
+    assert current["artist_photo"] is None
+
+
+def test_now_shows_a_photo_fix_for_a_song_without_a_cover() -> None:
+    source = FakeSource()
+    source.responses = [[NEW, OLD], [NEW, OLD]]
+    track = clean(NEW, channel_config().rules, 0)
+    fix_link = (
+        "https://cdn-images.dzcdn.net/images/artist/" + "e" * 32 + "/1000x1000-000000-80-0-0.jpg"
+    )
+    photo = "https://example.invalid/images/artist/p/1000x1000-000000-80-0-0.jpg"
+    fixes = FakeFixes(cover_fix(track.photo_key, fix_link))
+    # The finder knows no cover for the song: its search ends in a miss.
+    channel, covers, _ = make(source, Clock(1_300_000), photo=photo, fixes=fixes)
+    for _ in range(2):
+        channel.poll_once()
+        drain(covers)
+    current = channel.now_view()[0]["current"]
+    assert current["cover_kind"] == "artist"
+    assert current["cover"].startswith(f"/covers/{name_for(fix_link)}.")
+    assert current["artist_photo"] is None
 
 
 def test_first_poll_fetches_more_than_later_polls() -> None:

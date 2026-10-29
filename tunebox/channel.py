@@ -199,7 +199,15 @@ class Channel:
         if recovered_from is not None:
             stale_ms = now - recovered_from
             event(log, logging.INFO, "source_recovered", channel=self.config.id, stale_ms=stale_ms)
-        self._request_covers(recent, now)
+        requested = self._request_covers(recent, now)
+        if added and not self._retired:
+            # The panel lists what was really looked up: a catch-up's older
+            # entries no request touches stay out, and a song in another
+            # script stays in, so it can be fixed by hand.
+            fresh = {track.ident for track in added}
+            heard = {t.ident: t for t in requested if t.ident in fresh and t.kind == "track"}
+            if heard:
+                self._store.record_heard(self.config.id, list(heard.values()))
         event(
             log,
             logging.DEBUG,
@@ -240,17 +248,19 @@ class Channel:
         backoff = min(MAX_BACKOFF_S, self.config.poll_interval_s * 2**failures)
         return backoff + self._rng.uniform(0, JITTER_S)
 
-    def _request_covers(self, recent: list[Track], now: int) -> None:
+    def _request_covers(self, recent: list[Track], now: int) -> list[Track]:
+        """Asks covers for what plays and what is near; returns those tracks."""
         timeline = build(recent, now, self.config.delay_s)
-        for track in timeline.not_heard:
-            self._covers.request(track, NOW)
-        if timeline.audible is not None:
-            self._covers.request(timeline.audible, NOW)
         pawtunes = build(recent, now, self.config.pawtunes_delay_s)
+        asked: list[tuple[Track, int]] = [(track, NOW) for track in timeline.not_heard]
+        if timeline.audible is not None:
+            asked.append((timeline.audible, NOW))
         if pawtunes.audible is not None:
-            self._covers.request(pawtunes.audible, NOW)
-        for track in timeline.history[:HISTORY_LOOKUPS]:
-            self._covers.request(track, HISTORY)
+            asked.append((pawtunes.audible, NOW))
+        asked.extend((track, HISTORY) for track in timeline.history[:HISTORY_LOOKUPS])
+        for track, priority in asked:
+            self._covers.request(track, priority)
+        return [track for track, _ in asked]
 
     def info(self) -> dict[str, Any]:
         return {

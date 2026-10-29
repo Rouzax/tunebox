@@ -18,11 +18,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from tests.fakes import make_track
 from tunebox import app
 from tunebox.accounts import Accounts
 from tunebox.app import WEB_ADMIN_DIR, StopSignal, main, open_settings, shut_down
+from tunebox.catalogs import CALL_DEADLINE_S, Catalogs
 from tunebox.config import Config, state_from_toml
 from tunebox.logos import group_key
+from tunebox.netguard import Guard
 from tunebox.pin import Pin
 from tunebox.runtime import EMPTY, Runtime
 from tunebox.server import TuneboxServer
@@ -513,6 +516,68 @@ def test_with_the_panel_on_usage_records_and_stops_cleanly(
     # The final round at stop wrote the visit before the file was let go.
     with contextlib.closing(sqlite3.connect(tmp_path / "usage.db")) as db:
         assert [row[0] for row in db.execute("SELECT device FROM visits")] == [device]
+
+
+@pytest.mark.parametrize("given", [None, "http://catalogue.invalid"])
+def test_the_catalogue_knob_points_both_catalogues_or_leaves_them(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, given: str | None
+) -> None:
+    if given is None:
+        monkeypatch.delenv("TUNEBOX_CATALOGS", raising=False)
+    else:
+        monkeypatch.setenv("TUNEBOX_CATALOGS", given)
+    made: list[dict[str, Any]] = []
+    real = app.Catalogs
+
+    def recording(http_get: Any, **kwargs: Any) -> Catalogs:
+        made.append(kwargs)
+        return real(http_get, **kwargs)
+
+    monkeypatch.setattr(app, "Catalogs", recording)
+    assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
+    expected = (
+        {}
+        if given is None
+        else {
+            "deezer": "http://catalogue.invalid/deezer",
+            "itunes": "http://catalogue.invalid/itunes/search",
+        }
+    )
+    # One instance: the panel's searches take their turn in the worker's throttles.
+    assert made == [expected]
+
+
+class RecordingGuard:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, float]] = []
+
+    def get(self, url: str, deadline_s: float = 15.0) -> bytes:
+        self.calls.append((url, deadline_s))
+        return b'{"data": [], "results": []}'
+
+
+def test_catalogue_calls_go_through_the_guard_with_a_whole_call_deadline(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("TUNEBOX_CATALOGS", raising=False)
+    guard = RecordingGuard()
+    catalogs = app._catalogs(cast("Guard", guard))  # pyright: ignore[reportPrivateUsage]
+    assert catalogs.find(make_track("A", "B")) is None
+    assert guard.calls and all(deadline == CALL_DEADLINE_S for _url, deadline in guard.calls)
+    assert "catalogs_overridden" not in caplog.messages
+
+
+def test_the_catalogue_knob_is_logged_and_skips_the_guard(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("TUNEBOX_CATALOGS", "http://catalogue.invalid")
+    guard = RecordingGuard()
+    caplog.set_level(logging.WARNING)
+    app._catalogs(cast("Guard", guard))  # pyright: ignore[reportPrivateUsage]
+    (record,) = [r for r in caplog.records if r.getMessage() == "catalogs_overridden"]
+    assert record.levelno == logging.WARNING
+    assert record.__dict__["fields"] == {"base": "http://catalogue.invalid"}
+    assert guard.calls == []
 
 
 def usages_made(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:

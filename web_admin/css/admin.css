@@ -629,6 +629,112 @@ button.link {
     padding-top: 0.5rem;
 }
 
+/* The Covers page. */
+
+.covers-page {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+}
+
+.cover-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.4rem;
+}
+
+/* Picture and text side by side; the actions and the fix forms take the
+   whole width on a phone and sit beside the text on a wider screen. */
+.cover-row {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 0.5rem 0.75rem;
+    align-items: start;
+    padding: 0.5rem 0.75rem;
+    background: var(--field);
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+}
+
+.cover-row > .actions,
+.cover-fix {
+    grid-column: 1 / -1;
+}
+
+@media (min-width: 40rem) {
+    .cover-row {
+        grid-template-columns: 64px minmax(0, 1fr) auto;
+    }
+
+    .cover-row > .actions {
+        grid-column: auto;
+        justify-content: flex-end;
+    }
+}
+
+.cover-row img,
+.cover-empty {
+    display: block;
+    width: 64px;
+    height: 64px;
+    border-radius: 0.25rem;
+    object-fit: cover;
+    background: var(--field);
+    border: 1px solid var(--line);
+}
+
+.cover-text {
+    display: grid;
+    gap: 0.15rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.cover-state.state-artist,
+.cover-state.state-nothing,
+.cover-state.state-looking,
+.cover-state.state-failed,
+.cover-state.state-lost {
+    color: var(--warn);
+}
+
+.cover-fix,
+.cover-search {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.cover-choices {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+    gap: 0.5rem;
+}
+
+button.cover-choice {
+    display: grid;
+    align-content: start;
+    gap: 0.25rem;
+    justify-self: stretch;
+    min-width: 0;
+    padding: 0.4rem;
+    color: var(--fg);
+    background: transparent;
+    border: 1px solid var(--line);
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+
+.cover-choice img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 0.25rem;
+}
+
 /* The station form's folding sections: the header is the whole tap
    target, and a folded one says what it holds. */
 details.section {
