@@ -6,6 +6,7 @@ from typing import cast
 import pytest
 
 from tests.fakes import COVER_JPG, FakeHttp, blob_store, fetch_cover, make_track
+from tests.test_imagemeta import GPS, phone_jpeg
 from tunebox.catalogs import Catalogs
 from tunebox.coverfiles import MAX_COVER, CoverFiles, name_for
 from tunebox.coverfix import CoverFixes, View
@@ -130,12 +131,26 @@ def test_an_upload_is_stored_as_a_blob_and_copied_into_the_cover_store(tmp_path:
     made.close()
 
 
+def test_an_upload_keeps_no_camera_metadata(tmp_path: Path) -> None:
+    made = Panel(tmp_path)
+    fix = made.panel.upload("a|b", "A", "B", phone_jpeg())
+    assert fix.value is not None
+    blob = made.blobs.path(fix.value)
+    assert blob is not None and GPS not in blob.read_bytes()
+    made.drain()
+    cover = made.files.path_for(fix.value)
+    assert cover is not None and cover.read_bytes() == blob.read_bytes()
+    made.close()
+
+
 def test_an_upload_must_be_a_raster_cover_for_a_song(tmp_path: Path) -> None:
     made = Panel(tmp_path)
     with pytest.raises(NotACover):
         made.panel.upload("a|b", "A", "B", b"<svg xmlns='http://www.w3.org/2000/svg'/>")
     with pytest.raises(NotACover):
         made.panel.upload("a|b", "A", "B", b"\xff\xd8\xff" + b"\x00" * MAX_COVER)
+    with pytest.raises(NotACover):
+        made.panel.upload("a|b", "A", "B", b"\xff\xd8\xff\xe1\x00\x40Exif")
     with pytest.raises(ValueError):
         made.panel.upload("photo:a", "A", "", COVER_JPG)
     assert made.fixes.all() == []

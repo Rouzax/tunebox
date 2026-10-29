@@ -179,6 +179,8 @@ def test_an_upload_must_be_a_raster_cover_for_a_song(world: World) -> None:
     assert raw_upload(world, csrf, f"key={KEY}", svg, "image/svg+xml").status == 415
     refused = raw_upload(world, csrf, f"key={KEY}", svg, "image/png")
     assert json_of(refused) == {"error": "not_a_cover"}
+    cut = raw_upload(world, csrf, f"key={KEY}", b"\xff\xd8\xff\xe1\x00\x40Exif")
+    assert cut.status == 400 and json_of(cut) == {"error": "not_a_cover"}
     photo = raw_upload(world, csrf, "key=photo%3Aa", COVER_JPG)
     assert json_of(photo) == {"error": "bad_request"}
     assert raw_upload(world, csrf, "", COVER_JPG).status == 400

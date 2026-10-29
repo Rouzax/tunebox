@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from tunebox import imagemeta
 from tunebox.blobs import Blobs
 from tunebox.coverfiles import MAX_COVER, CoverFiles, sniff_cover
 from tunebox.coverfix import CoverFixes, Fix, Row, View, is_photo_key, song_list
@@ -94,14 +95,21 @@ class CoverPanel:
         return fix
 
     def upload(self, key: str, artist: str, title: str, body: bytes) -> Fix:
-        """A song's cover from the owner's file. Raises ValueError for a
-        photo key (a photo is picked from Deezer only), NotACover, or what
-        Blobs.save raises when the upload store is full or cannot be
-        written."""
+        """A song's cover from the owner's file, without the metadata a
+        camera or phone stores in it. Raises ValueError for a photo key (a
+        photo is picked from Deezer only), NotACover, or what Blobs.save
+        raises when the upload store is full or cannot be written."""
         if is_photo_key(key):
             raise ValueError("an upload is for a song key")
-        if len(body) > MAX_COVER or sniff_cover(body) is None:
+        kind = sniff_cover(body) if len(body) <= MAX_COVER else None
+        if kind is None:
             raise NotACover
+        # The upload store and the cover file keep the stripped image only:
+        # covers are served to every listener without a session.
+        try:
+            body = imagemeta.strip(body, kind)
+        except ValueError:
+            raise NotACover from None
         ref, _kind = self._blobs.save(body)
         fix = Fix(key, ref, "Uploaded image", "upload", artist, title, self._clock())
         self._set(fix)
