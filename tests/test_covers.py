@@ -10,6 +10,7 @@ from tests.fakes import FakeFixes, cover_fix, make_track
 from tunebox import covers as covers_module
 from tunebox.catalogs import Found, SearchError
 from tunebox.coverfiles import CoverFiles, SaveResult, name_for
+from tunebox.coverfix import Fix
 from tunebox.covers import HISTORY, NOW, CoverService
 from tunebox.http import HttpError
 from tunebox.store import CoverDecision, Store
@@ -1201,6 +1202,35 @@ def test_a_fetch_whose_fix_was_cleared_while_it_waited_does_nothing() -> None:
     fixes.map.clear()
     assert covers.run_once()
     assert fetch.urls == [] and not covers.run_once()
+
+
+def test_going_back_to_automatic_forgets_the_fix_fetch_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fetch = Fetch(HttpError("gone", 404))
+    gone = cover_fix(SONG.key, FIX_URL)
+    refused = cover_fix(SONG.key, "https://example.invalid/x.jpg")
+    fixes = FakeFixes(gone)
+    covers = service(Finder(), [0.0], fetch=fetch, fixes=fixes)
+
+    def again(fix: Fix) -> None:
+        """Clear the fix, then set the same value without fix_set."""
+        fixes.map.clear()
+        covers.fix_cleared(SONG.key, None)
+        fixes.map[SONG.key] = fix
+        covers.request(SONG, NOW)
+        drain(covers)
+
+    covers.request(SONG, NOW)
+    drain(covers)
+    again(gone)
+    # No pause left from the earlier failure of the same value.
+    assert len(fetch.urls) == 2
+    with caplog.at_level(logging.WARNING):
+        again(refused)
+        again(refused)
+    # Told once per fix: a cleared fix set again is told again.
+    assert [r.getMessage() for r in caplog.records] == ["cover_fix_refused"] * 2
 
 
 @pytest.mark.parametrize(

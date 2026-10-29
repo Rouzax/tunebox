@@ -314,7 +314,11 @@ class CoverService:
         self._store.delete_cover(key)
         with self._lock:
             self._decisions.pop(key, None)
-            self._failed.pop(key, None)
+            # The search's pause is held under the key, each fix fetch's
+            # under (key, value).
+            for failed in [k for k in self._failed if k == key or k[0] == key]:
+                del self._failed[failed]
+            self._told = {told for told in self._told if told[0] != key}
         if track is not None:
             self.request(track, HISTORY)
 

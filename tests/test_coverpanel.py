@@ -8,7 +8,7 @@ import pytest
 from tests.fakes import COVER_JPG, FakeHttp, blob_store, fetch_cover, make_track
 from tunebox.catalogs import Catalogs
 from tunebox.coverfiles import MAX_COVER, CoverFiles, name_for
-from tunebox.coverfix import CoverFixes
+from tunebox.coverfix import CoverFixes, View
 from tunebox.coverpanel import IMAGE_PATH, CoverPanel, NotACover, StaleCandidate
 from tunebox.covers import CoverService
 from tunebox.coversearch import CoverSearch
@@ -58,8 +58,8 @@ class Panel:
         choices = self.panel.search("cover", key, "A", "B", "a b")["choices"]
         return cast("list[dict[str, str]]", choices)[0]["token"]
 
-    def rows(self, view: str = "fixed") -> list[dict[str, object]]:
-        listing = self.panel.listing("fixed" if view == "fixed" else "all", "", None)
+    def rows(self, view: View = "fixed") -> list[dict[str, object]]:
+        listing = self.panel.listing(view, "", None)
         return cast("list[dict[str, object]]", listing["rows"])
 
     def drain(self) -> None:

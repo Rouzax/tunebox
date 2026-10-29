@@ -396,3 +396,45 @@ def test_the_list_does_not_touch_access_times(tmp_path: Path) -> None:
     listing = song_list([song], {}, image, lambda _k: None, NOW_MS, "all", "", None)
     assert listing.rows[0].image == path.name
     assert path.stat().st_atime_ns == 1_000_000_000
+
+
+def test_an_error_decision_shows_its_kept_image_while_the_file_is_there() -> None:
+    kept = heard(
+        "A",
+        "Kept",
+        NOW_MS - 1,
+        decision(make_track("A", "Kept").key, "error", URL_A),
+        first_at=NOW_MS - 2 * DAY_MS,
+    )
+    photo = heard(
+        "B",
+        "Photo",
+        NOW_MS - 2,
+        decision(make_track("B", "Photo").key, "error", URL_B, "deezer artist: B"),
+        first_at=NOW_MS - 2 * DAY_MS,
+    )
+    gone = heard(
+        "C",
+        "Gone",
+        NOW_MS - 3,
+        decision(make_track("C", "Gone").key, "error", URL_C),
+        first_at=NOW_MS - 2 * DAY_MS,
+    )
+    listing = listed([kept, photo, gone], files={URL_A, URL_B})
+    assert [(r.state, r.kind, r.link) for r in listing.rows] == [
+        ("cover", "album", URL_A),
+        ("artist", "artist", URL_B),
+        ("looking", None, None),
+    ]
+    assert listing.rows[0].image == f"{name_for(URL_A)}.jpg"
+    assert listing.totals == Totals(songs=3, cover=1, artist=1, nothing=0, fixed=0)
+    problems = listed([kept, photo, gone], files={URL_A, URL_B}, view="problems").rows
+    assert [r.key for r in problems] == [photo.key, gone.key]
+
+
+def test_a_photo_fix_under_fixed_lists_the_stations_of_its_songs() -> None:
+    one = replace(heard("JESSICA", "One", NOW_MS - 1), channels=("owr",))
+    two = replace(heard("JESSICA", "Two", NOW_MS - 2), channels=("anthems", "owr"))
+    photo = Fix(one.photo_key, None, "No photo", "none", "JESSICA", "", 6.0)
+    rows = listed([one, two], {photo.key: photo}, view="fixed").rows
+    assert [(r.key, r.channels) for r in rows] == [(photo.key, ("anthems", "owr"))]

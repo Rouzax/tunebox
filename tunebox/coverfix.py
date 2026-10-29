@@ -281,7 +281,10 @@ def song_list(
         rows = [r for r in rows if (r.sort_at, r.key) < after]
     page = rows[:limit]
     shown = [
-        replace(r, image=image(r.link)) if r.link is not None and r.fix is None else r for r in page
+        replace(r, image=image(r.link))
+        if r.image is None and r.link is not None and r.fix is None
+        else r
+        for r in page
     ]
     more = len(rows) > limit
     return Listing(shown, (page[-1].sort_at, page[-1].key) if more else None, totals)
@@ -313,15 +316,21 @@ def _song_row(
     if shown.fix is not None:
         state, reason, file = _fix_state(shown, image, failure)
         return Row(*base, state, shown.kind, shown.url, shown.fix, reason, file)
-    automatic: State
     if song.cover is not None and song.cover.outcome == "error":
-        # An upstream failure is retried soon: still looking, not a miss.
-        automatic = "looking"
-    elif shown.url is None:
-        automatic = "nothing"
-    else:
-        automatic = "artist" if shown.kind == "artist" else "cover"
-    return Row(*base, automatic, shown.kind if shown.url else None, shown.url, None)
+        # A failed search or download keeps the previous image, which lookup
+        # still serves while its file is there; without it the song is
+        # retried soon: still looking, not a miss.
+        file = image(shown.url) if shown.url is not None else None
+        if file is None:
+            return Row(*base, "looking", None, None, None)
+        return Row(*base, _kind_state(shown), shown.kind, shown.url, None, None, file)
+    if shown.url is None:
+        return Row(*base, "nothing", None, None, None)
+    return Row(*base, _kind_state(shown), shown.kind, shown.url, None)
+
+
+def _kind_state(shown: Shown) -> State:
+    return "artist" if shown.kind == "artist" else "cover"
 
 
 def _fix_state(
@@ -354,8 +363,10 @@ def _fixed_rows(
     key a title-rule change replaced) still has a row, from its stored text."""
     by_key = {row.key: row for row in heard}
     last_by_photo: dict[str, int] = {}
+    channels_by_photo: dict[str, set[str]] = {}
     for song in songs:
         last_by_photo[song.photo_key] = max(last_by_photo.get(song.photo_key, 0), song.last_at)
+        channels_by_photo.setdefault(song.photo_key, set()).update(song.channels)
     rows: list[Row] = []
     for fix in fixes.values():
         set_ms = round(fix.set_at * 1000)
@@ -373,7 +384,7 @@ def _fixed_rows(
                 fix.artist,
                 fix.title,
                 None,
-                (),
+                tuple(sorted(channels_by_photo.get(fix.key, ()))) if photo else (),
                 None,
                 last,
                 max(last or 0, set_ms),
