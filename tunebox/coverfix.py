@@ -10,14 +10,16 @@ import re
 import sqlite3
 import threading
 import urllib.parse
-from collections.abc import Mapping
-from dataclasses import astuple, dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import astuple, dataclass, replace
 from types import MappingProxyType
 from typing import Literal, Protocol, cast
 
 from tunebox.logs import event
+from tunebox.matching import searchable
 from tunebox.settings import Settings, SettingsUnavailable
-from tunebox.store import CoverDecision
+from tunebox.store import CoverDecision, HeardSong
+from tunebox.tracks import Track, norm
 
 log = logging.getLogger(__name__)
 
@@ -192,3 +194,215 @@ def allowed_image(link: str) -> bool:
         and parts.username is None
         and _CATALOGUE_HOST.fullmatch(parts.hostname or "") is not None
     )
+
+
+View = Literal["problems", "all", "fixed"]
+VIEWS: tuple[View, ...] = ("problems", "all", "fixed")
+State = Literal["cover", "artist", "nothing", "looking", "fix", "fetching", "failed", "lost"]
+PAGE = 100
+# A song unresolved for longer than this is a problem; a younger one is most
+# likely waiting its turn in the cover queue.
+LOOKING_GRACE_MS = 86_400_000
+
+
+@dataclass(frozen=True)
+class Row:
+    """One row of the panel's list. photo_key is None on the row of a photo
+    fix (its key is the photo key). first_at and last_at are None for a fix
+    not heard in the window. link is the image the row shows; image is its
+    cover-store file name, looked up for fix rows and the page's rows only."""
+
+    key: str
+    artist: str
+    title: str
+    photo_key: str | None
+    channels: tuple[str, ...]
+    first_at: int | None
+    last_at: int | None
+    sort_at: int
+    state: State
+    kind: Literal["album", "artist"] | None
+    link: str | None
+    fix: Fix | None
+    reason: str | None = None
+    image: str | None = None
+
+
+@dataclass(frozen=True)
+class Totals:
+    """Per song key over the heard songs."""
+
+    songs: int
+    cover: int
+    artist: int
+    nothing: int
+    fixed: int
+
+
+@dataclass(frozen=True)
+class Listing:
+    rows: list[Row]
+    next: tuple[int, str] | None
+    totals: Totals
+
+
+def song_list(
+    songs: Sequence[HeardSong],
+    fixes: Mapping[str, Fix],
+    image: Callable[[str], str | None],
+    failure: Callable[[str], str | None],
+    now_ms: int,
+    view: View,
+    query: str,
+    after: tuple[int, str] | None,
+    limit: int = PAGE,
+) -> Listing:
+    """The panel's page: filter, search, newest first, keyset paging on
+    (sort_at, key). image names the cover-store file of a link (a stat, no
+    access-time touch); failure the reason of a key's failed fetch."""
+    heard = [_song_row(song, fixes, image, failure) for song in songs]
+    totals = Totals(
+        len(heard),
+        sum(1 for r in heard if r.link is not None and r.kind == "album"),
+        sum(1 for r in heard if r.link is not None and r.kind == "artist"),
+        sum(1 for r in heard if r.link is None and r.state != "looking"),
+        sum(1 for r in heard if r.fix is not None),
+    )
+    if view == "fixed":
+        rows = _fixed_rows(heard, songs, fixes, image, failure)
+    elif view == "problems":
+        rows = [r for r in heard if _problem(r, now_ms)]
+    else:
+        rows = heard
+    rows = sorted(
+        (r for r in rows if _matches(r, query)), key=lambda r: (r.sort_at, r.key), reverse=True
+    )
+    if after is not None:
+        rows = [r for r in rows if (r.sort_at, r.key) < after]
+    page = rows[:limit]
+    shown = [
+        replace(r, image=image(r.link)) if r.link is not None and r.fix is None else r for r in page
+    ]
+    more = len(rows) > limit
+    return Listing(shown, (page[-1].sort_at, page[-1].key) if more else None, totals)
+
+
+def _song_row(
+    song: HeardSong,
+    fixes: Mapping[str, Fix],
+    image: Callable[[str], str | None],
+    failure: Callable[[str], str | None],
+) -> Row:
+    fix = fixes.get(song.key)
+    shown = effective(fix, song.cover, fixes.get(song.photo_key))
+    base = (
+        song.key,
+        song.artist,
+        song.title,
+        song.photo_key,
+        song.channels,
+        song.first_at,
+        song.last_at,
+        song.last_at,
+    )
+    if shown is None:
+        track = Track(
+            "track", song.artist, song.artists, song.title, song.title, None, song.last_at, song.key
+        )
+        return Row(*base, "looking" if searchable(track) else "nothing", None, None, None)
+    if shown.fix is not None:
+        state, reason, file = _fix_state(shown, image, failure)
+        return Row(*base, state, shown.kind, shown.url, shown.fix, reason, file)
+    automatic: State
+    if song.cover is not None and song.cover.outcome == "error":
+        # An upstream failure is retried soon: still looking, not a miss.
+        automatic = "looking"
+    elif shown.url is None:
+        automatic = "nothing"
+    else:
+        automatic = "artist" if shown.kind == "artist" else "cover"
+    return Row(*base, automatic, shown.kind if shown.url else None, shown.url, None)
+
+
+def _fix_state(
+    shown: Shown, image: Callable[[str], str | None], failure: Callable[[str], str | None]
+) -> tuple[State, str | None, str | None]:
+    """A fix's state, reason and file: shown once its image is in the cover
+    store, else fetching, failed (with the reason) or lost (an upload
+    without its blob). A "no photo" fix has nothing to fetch."""
+    assert shown.fix is not None
+    if shown.url is None:
+        return "fix", None, None
+    file = image(shown.url)
+    if file is not None:
+        return "fix", None, file
+    reason = failure(shown.fix.key)
+    if reason == FETCH_LOST:
+        return "lost", reason, None
+    return ("failed", reason, None) if reason else ("fetching", None, None)
+
+
+def _fixed_rows(
+    heard: list[Row],
+    songs: Sequence[HeardSong],
+    fixes: Mapping[str, Fix],
+    image: Callable[[str], str | None],
+    failure: Callable[[str], str | None],
+) -> list[Row]:
+    """Every fix, ordered by the later of its last play and when it was
+    set. A cover fix no heard song has (not heard in the window, or a song
+    key a title-rule change replaced) still has a row, from its stored text."""
+    by_key = {row.key: row for row in heard}
+    last_by_photo: dict[str, int] = {}
+    for song in songs:
+        last_by_photo[song.photo_key] = max(last_by_photo.get(song.photo_key, 0), song.last_at)
+    rows: list[Row] = []
+    for fix in fixes.values():
+        set_ms = round(fix.set_at * 1000)
+        photo = is_photo_key(fix.key)
+        row = None if photo else by_key.get(fix.key)
+        if row is not None:
+            rows.append(replace(row, sort_at=max(row.last_at or 0, set_ms)))
+            continue
+        last = last_by_photo.get(fix.key) if photo else None
+        shown = Shown(fix.value, "artist" if photo else "album", fix)
+        state, reason, file = _fix_state(shown, image, failure)
+        rows.append(
+            Row(
+                fix.key,
+                fix.artist,
+                fix.title,
+                None,
+                (),
+                None,
+                last,
+                max(last or 0, set_ms),
+                state,
+                shown.kind,
+                fix.value,
+                fix,
+                reason,
+                file,
+            )
+        )
+    return rows
+
+
+def _problem(row: Row, now_ms: int) -> bool:
+    if row.state in ("artist", "nothing"):
+        return True
+    return (
+        row.state == "looking"
+        and row.first_at is not None
+        and row.first_at < now_ms - LOOKING_GRACE_MS
+    )
+
+
+def _matches(row: Row, query: str) -> bool:
+    """Case-insensitive substring on the normalized text; a query with
+    nothing left after norm() (another script) compares the text as typed."""
+    wanted = norm(query)
+    if wanted:
+        return wanted in norm(row.artist) or wanted in norm(row.title)
+    raw = query.strip().casefold()
+    return not raw or raw in row.artist.casefold() or raw in row.title.casefold()
