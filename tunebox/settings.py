@@ -1,8 +1,8 @@
 """The configuration the admin panel edits: stations, groups and settings,
 with a version that every change bumps and a history of every change. The
 same database holds the admin account, its sessions and recovery codes,
-the listening PIN, and the server's signing key (used by accounts.py and
-pin.py).
+the listening PIN, the server's signing key (used by accounts.py and
+pin.py) and the cover fixes the panel sets (coverfix.py).
 
 Unlike the cover store this never falls back to memory: edits that vanish
 on the next restart are worse than a tunebox that refuses to start."""
@@ -89,6 +89,18 @@ MIGRATIONS: tuple[str, ...] = (
         mode TEXT NOT NULL,
         digest TEXT,
         generation INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE cover_fixes (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        label TEXT NOT NULL,
+        source TEXT NOT NULL,
+        artist TEXT NOT NULL,
+        title TEXT NOT NULL,
+        set_at REAL NOT NULL,
+        CHECK (value IS NOT NULL OR key LIKE 'photo:%')
     )
     """,
 )
@@ -292,7 +304,8 @@ class Settings:
 
     def referenced_blobs(self) -> set[str]:
         """Every uploaded-logo reference in the stored stations, the group
-        images and all history, which keeps a restore able to find its logos."""
+        images, the cover fixes and all history, which keeps a restore able
+        to find its logos."""
         found: set[str] = set()
         with self.read() as db:
             for table, columns in (
@@ -304,6 +317,10 @@ class Settings:
                     f"SELECT {columns} FROM {table} WHERE {columns} LIKE '%blob:%'"
                 ):
                     found.update(f"blob:{sha}" for sha in BLOB_REF.findall(cast(str, text)))
+            # An uploaded cover's only copy is its blob, like a logo's.
+            for (value,) in db.execute("SELECT value FROM cover_fixes WHERE value LIKE 'blob:%'"):
+                if BLOB_REF.fullmatch(cast(str, value)):
+                    found.add(cast(str, value))
         return found
 
     def commit(
