@@ -265,10 +265,13 @@ async function startTunebox(folder, port, streamUrl, setup = false, catalogueUrl
         throw new Error(`could not create the account: ${made.stderr}`);
     }
     // Two songs for the Covers page: one first heard over a day ago with
-    // no cover found yet, and one showing an artist photo.
+    // no cover found yet, and one showing an artist photo, whose file is in
+    // place as after its download (a row reads "Still looking" without it).
     const seeded = setup ? {status: 0} : spawnSync(PYTHON, ['-c', [
         'import sys, time',
         'from pathlib import Path',
+        'from tunebox import png',
+        'from tunebox.coverfiles import CoverFiles',
         'from tunebox.store import CoverDecision, Store',
         'from tunebox.tracks import RawEntry, Rules, clean',
         'now = int(time.time() * 1000)',
@@ -276,7 +279,9 @@ async function startTunebox(folder, port, streamUrl, setup = false, catalogueUrl
         'songs = [clean(RawEntry("AGENTS OF TIME", "Hearts Collide", now - 90000000), Rules(), now),',
         '         clean(RawEntry("JESSICA", "Summer Song", now - 60000), Rules(), now)]',
         'store.record_heard("first", songs)',
-        'store.put_cover(CoverDecision(songs[1].key, "artist", "https://cdn-images.dzcdn.net/images/artist/' + '0'.repeat(32) + '/1000x1000-000000-80-0-0.jpg", "deezer artist: Jessica", time.time()))',
+        'photo = "https://cdn-images.dzcdn.net/images/artist/' + '0'.repeat(32) + '/1000x1000-000000-80-0-0.jpg"',
+        'store.put_cover(CoverDecision(songs[1].key, "artist", photo, "deezer artist: Jessica", time.time()))',
+        'CoverFiles(Path(sys.argv[1]) / "covers").save(photo, png.write(png.Image(1, 1, bytes([128, 128, 128, 255]))))',
         'store.close()',
     ].join('\n'), folder], {cwd: ROOT, encoding: 'utf8'});
     if (seeded.status !== 0) {
