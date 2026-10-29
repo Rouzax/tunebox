@@ -8,6 +8,7 @@ from tunebox.matching import (
     compiled,
     lead_artist,
     search_names,
+    searchable,
     titles_match,
 )
 
@@ -220,3 +221,10 @@ def test_a_song_named_like_a_compilation_keeps_its_own_release() -> None:
     hits = Candidate("The Rolling Stones", "Mixed Emotions", cover("hits"), "Greatest Hits")
     found = best_match(("THE ROLLING STONES",), "Mixed Emotions", [hits, own])
     assert found is not None and found.image == cover("own")
+
+
+def test_searchable_needs_latin_text_in_artist_and_title() -> None:
+    assert searchable(make_track("FISHER", "Stay"))
+    assert not searchable(make_track("", "E1700 16 Oct 2026 M19 VO"))
+    assert not searchable(make_track("FISHER", "(Intro)"))
+    assert not searchable(make_track("東京", "Stay"))

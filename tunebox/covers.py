@@ -15,12 +15,13 @@ from typing import Literal
 
 from tunebox.catalogs import Found, SearchError
 from tunebox.coverfiles import MAX_COVER, CleanReport, CoverFiles, SaveResult, name_for, sized
+from tunebox.coverfix import is_artist_photo
 from tunebox.disk import has_room
 from tunebox.http import HttpError, HttpGet
 from tunebox.logs import bound, event
-from tunebox.matching import base_title
+from tunebox.matching import searchable
 from tunebox.store import CoverDecision, Outcome, Store
-from tunebox.tracks import Track, norm
+from tunebox.tracks import Track
 
 log = logging.getLogger(__name__)
 
@@ -54,22 +55,6 @@ JobKind = Literal["search", "download"]
 class Cover:
     url: str
     kind: Literal["album", "artist"]
-
-
-def _is_artist_photo(decision: CoverDecision) -> bool:
-    # An error decision keeps the previous URL and match, so the match text,
-    # not the outcome, says what kind of image it is.
-    return decision.outcome == "artist" or (decision.match or "").startswith("deezer artist:")
-
-
-def searchable(track: Track) -> bool:
-    """Matching compares norm() forms; a name or title with nothing left after
-    norm() (another script, punctuation only) can never be matched confidently."""
-    return (
-        track.kind == "track"
-        and bool(norm(" ".join(track.artists)))
-        and bool(norm(base_title(track.title)))
-    )
 
 
 class CoverService:
@@ -143,7 +128,7 @@ class CoverService:
             return None
         path, address = found
         self._files.touch(path)
-        return Cover(address, "artist" if _is_artist_photo(decision) else "album")
+        return Cover(address, "artist" if is_artist_photo(decision) else "album")
 
     def photo(self, track: Track) -> str | None:
         """The local address of the artists' photo, the other side of a
@@ -182,7 +167,7 @@ class CoverService:
         """Caller holds the lock. A song whose only image is its artists'
         photo has no other side to show."""
         decision = self._known(track.key)
-        return decision is not None and decision.url is not None and not _is_artist_photo(decision)
+        return decision is not None and decision.url is not None and not is_artist_photo(decision)
 
     def _queue_job(self, track: Track, priority: int) -> None:
         """Caller holds the lock."""

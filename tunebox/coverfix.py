@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import urllib.parse
 from collections.abc import Mapping
 from dataclasses import astuple, dataclass
 from types import MappingProxyType
@@ -15,10 +16,15 @@ from typing import Literal, Protocol, cast
 
 from tunebox.logs import event
 from tunebox.settings import Settings, SettingsUnavailable
+from tunebox.store import CoverDecision
 
 log = logging.getLogger(__name__)
 
 FixSource = Literal["deezer", "itunes", "link", "upload", "none"]
+
+CATALOGUE_HOSTS = ("dzcdn.net", "mzstatic.com")
+# The failure reason of an uploaded cover whose blob is gone.
+FETCH_LOST = "lost"
 
 _Row = tuple[str, str | None, str, FixSource, str, str, float]
 
@@ -124,3 +130,62 @@ class CoverFixes:
         if row is None:
             return None
         return Fix(*cast("_Row", row))
+
+
+@dataclass(frozen=True)
+class Shown:
+    """What a song or photo key shows: its image link (None for no image),
+    the image's kind, and the fix it comes from, if any."""
+
+    url: str | None
+    kind: Literal["album", "artist"]
+    fix: Fix | None = None
+
+
+def is_photo_key(key: str) -> bool:
+    return key.startswith("photo:")
+
+
+def is_artist_photo(decision: CoverDecision) -> bool:
+    # An error decision keeps the previous URL and match, so the match text,
+    # not the outcome, says what kind of image it is.
+    return decision.outcome == "artist" or (decision.match or "").startswith("deezer artist:")
+
+
+def effective(
+    fix: Fix | None, automatic: CoverDecision | None, photo_fix: Fix | None
+) -> Shown | None:
+    """The one rule for what a key shows. fix is the key's own fix,
+    automatic its decision from the covers table (callers skip reading it
+    when fix is set), photo_fix the fix of the song's photo key. A song
+    whose automatic image is its artists' photo shows the photo fix in its
+    place; a song with a cover of its own keeps that cover."""
+    if fix is not None:
+        return Shown(fix.value, "artist" if is_photo_key(fix.key) else "album", fix)
+    if automatic is None:
+        return None
+    if is_artist_photo(automatic):
+        if photo_fix is not None:
+            return Shown(photo_fix.value, "artist", photo_fix)
+        return Shown(automatic.url, "artist")
+    return Shown(automatic.url, "album")
+
+
+def allowed_image(link: str) -> bool:
+    """An image link a fix may name: https on a catalogue image host, no
+    port and no user. Checked when a candidate is signed and again before
+    the worker fetches it."""
+    if not link.isascii() or not link.isprintable() or " " in link:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(link)
+        port = parts.port
+    except ValueError:
+        return False
+    host = parts.hostname or ""
+    return (
+        parts.scheme == "https"
+        and port is None
+        and parts.username is None
+        and any(host == name or host.endswith("." + name) for name in CATALOGUE_HOSTS)
+    )
