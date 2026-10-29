@@ -731,15 +731,15 @@ image hosts.
 **Fix an artist photo**: on any song row, **This artist's photo is wrong**
 searches Deezer for artists by that name. The artist photo is what a song
 shows when tunebox finds no cover, and the other side of a song's cover in
-the player. Up to 10 artists come back, most fans first. For the 5 with the most fans tunebox also checks
-whether the picture is really one of the artist's release covers and says
-"release cover" or "not a release cover"; the others say "not checked".
-Click a picture to save it, or **No photo** to show no photo for that
-artist. A photo fix applies to every song with exactly that artist text:
-"Jessica" and "Jessica, Other Artist" are two fixes. On a song row that
-shows a photo fix, **Back to automatic photo** removes that photo fix, for
-every song with that artist text. On the **Fixed by you** view, **Fix** on
-a photo fix opens the photo search again.
+the player. Up to 10 artists come back, most fans first. For the 5 with the
+most fans tunebox also checks whether the picture is really one of the
+artist's release covers and says "release cover" or "not a release cover";
+the others say "not checked". Click a picture to save it, or **No photo**
+to show no photo for that artist. A photo fix applies to every song with
+exactly that artist text: "Jessica" and "Jessica, Other Artist" are two
+fixes. On a song row that shows a photo fix, **Back to automatic photo**
+removes that photo fix, for every song with that artist text. On the
+**Fixed by you** view, **Fix** on a photo fix opens the photo search again.
 
 What a fix does:
 
@@ -942,19 +942,20 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
   ```
 
 - **Back up**: everything worth keeping is in the `data` folder:
-  `tunebox.toml`, and `tunebox.db`, which holds the stations, settings and
-  change history (with the admin panel on, the only copy of them), the
-  admin account and its sessions, the listening PIN, your
-  [cover fixes](#covers), the cover decisions, the recent lists and the
-  songs of the last 30 days. Copy it while tunebox is stopped, or copy
+  `tunebox.toml`, and `tunebox.db`, which holds the stations, settings
+  and change history (with the admin panel on, the only copy of them),
+  the admin account and its sessions, the listening PIN, your [cover
+  fixes](#covers), the cover decisions, the recent lists and the songs of
+  the last 30 days. Copy it while tunebox is stopped, or copy
   `tunebox.db-wal` along with it. `data/blobs/` holds the logos uploaded
   in the panel and the covers uploaded on the Covers page, the only copy
-  of those images, so back it up with the database. `data/covers/` and `data/logos/` (group images included, in
-  `data/logos/groups/`) are caches that tunebox fills again by itself;
-  they need no backup. An uploaded group image, like an uploaded logo,
-  lives in `data/blobs/`. `data/usage.db` holds the
-  [usage statistics](#usage-statistics); back it up only if you want to
-  keep them (copy `usage.db-wal` with it, or stop tunebox first).
+  of those images, so back it up with the database. `data/covers/` and
+  `data/logos/` (group images included, in `data/logos/groups/`) are
+  caches that tunebox fills again by itself; they need no backup. An
+  uploaded group image, like an uploaded logo, lives in `data/blobs/`.
+  `data/usage.db` holds the [usage statistics](#usage-statistics); back
+  it up only if you want to keep them (copy `usage.db-wal` with it, or
+  stop tunebox first).
 - **Reset** the recent lists and covers: stop tunebox, delete
   `data/tunebox.db`, `data/tunebox.db-wal` and `data/tunebox.db-shm`, and
   start it again. History refills from the stations and covers are looked
