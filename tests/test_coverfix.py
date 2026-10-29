@@ -125,10 +125,19 @@ def test_a_photo_fix_shows_for_a_photo_key_and_behind_an_artist_answer() -> None
     assert effective(None, ARTIST, NO_PHOTO) == Shown(None, "artist", NO_PHOTO)
 
 
-def test_a_photo_fix_does_not_touch_a_song_with_its_own_cover_or_none() -> None:
+def test_a_photo_fix_does_not_touch_a_song_with_its_own_cover() -> None:
     assert effective(None, AUTO, PHOTO) == Shown(AUTO.url, "album")
-    assert effective(None, MISS, PHOTO) == Shown(None, "album")
-    assert effective(None, None, PHOTO) is None
+    # A failed search keeps its earlier album cover.
+    assert effective(None, replace(AUTO, outcome="error"), PHOTO) == Shown(AUTO.url, "album")
+
+
+def test_a_song_without_an_album_cover_shows_the_photo_fix() -> None:
+    failed = CoverDecision("k", "error", None, None, 1.0)
+    for automatic in (None, MISS, failed):
+        assert effective(None, automatic, PHOTO) == Shown(LINK, "artist", PHOTO)
+        assert effective(None, automatic, NO_PHOTO) == Shown(None, "artist", NO_PHOTO)
+    assert effective(None, MISS, None) == Shown(None, "album")
+    assert effective(None, None, None) is None
 
 
 def test_the_automatic_answer_without_fixes() -> None:
@@ -474,3 +483,25 @@ def test_a_photo_fix_under_fixed_lists_the_stations_of_its_songs() -> None:
     photo = Fix(one.photo_key, None, "No photo", "none", "JESSICA", "", 6.0)
     rows = listed([one, two], {photo.key: photo}, view="fixed").rows
     assert [(r.key, r.channels) for r in rows] == [(photo.key, ("anthems", "owr"))]
+
+
+def test_a_song_without_an_album_cover_lists_its_photo_fix() -> None:
+    new = heard("A", "New", NOW_MS - 1)
+    miss = heard("B", "Miss", NOW_MS - 2, decision(make_track("B", "Miss").key, "miss", None))
+    failed = heard(
+        "C", "Failed", NOW_MS - 3, decision(make_track("C", "Failed").key, "error", None)
+    )
+    songs = [new, miss, failed]
+    fixes = {s.photo_key: cover_fix(s.photo_key, URL_A) for s in songs}
+    # While the photo is fetched the row shows nothing, as lookup does.
+    rows = listed(songs, fixes).rows
+    assert [(r.state, r.kind, r.image) for r in rows] == [("fetching", "artist", None)] * 3
+    rows = listed(songs, fixes, files={URL_A}).rows
+    image = f"{name_for(URL_A)}.jpg"
+    assert [(r.state, r.kind, r.link, r.image) for r in rows] == [
+        ("fix", "artist", URL_A, image)
+    ] * 3
+    assert all(r.fix is fixes[r.photo_key or ""] for r in rows)
+    none = {s.photo_key: cover_fix(s.photo_key, None, "none") for s in songs}
+    rows = listed(songs, none).rows
+    assert [(r.state, r.link, r.image) for r in rows] == [("fix", None, None)] * 3

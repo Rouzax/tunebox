@@ -20,7 +20,7 @@ from tests.fakes import (
 from tunebox.catalogs import Found
 from tunebox.channel import ACTIVE_MS, FIRST_FETCH, STEADY_FETCH, Channel
 from tunebox.config import ChannelConfig, SourceConfig
-from tunebox.coverfiles import CoverFiles
+from tunebox.coverfiles import CoverFiles, name_for
 from tunebox.covers import CoverService
 from tunebox.sources.base import SourceError
 from tunebox.store import Store
@@ -171,6 +171,26 @@ def test_now_shows_a_photo_fix_as_the_artist_image_without_a_second_side() -> No
         drain(covers)
     current = channel.now_view()[0]["current"]
     assert current["cover_kind"] == "artist" and current["cover"].startswith("/covers/")
+    assert current["artist_photo"] is None
+
+
+def test_now_shows_a_photo_fix_for_a_song_without_a_cover() -> None:
+    source = FakeSource()
+    source.responses = [[NEW, OLD], [NEW, OLD]]
+    track = clean(NEW, channel_config().rules, 0)
+    fix_link = (
+        "https://cdn-images.dzcdn.net/images/artist/" + "e" * 32 + "/1000x1000-000000-80-0-0.jpg"
+    )
+    photo = "https://example.invalid/images/artist/p/1000x1000-000000-80-0-0.jpg"
+    fixes = FakeFixes(cover_fix(track.photo_key, fix_link))
+    # The finder knows no cover for the song: its search ends in a miss.
+    channel, covers, _ = make(source, Clock(1_300_000), photo=photo, fixes=fixes)
+    for _ in range(2):
+        channel.poll_once()
+        drain(covers)
+    current = channel.now_view()[0]["current"]
+    assert current["cover_kind"] == "artist"
+    assert current["cover"].startswith(f"/covers/{name_for(fix_link)}.")
     assert current["artist_photo"] is None
 
 

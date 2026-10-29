@@ -920,6 +920,33 @@ def test_no_photo_shows_no_image_for_an_artist_answer() -> None:
     assert covers.lookup(SONG) is None
 
 
+@pytest.mark.parametrize("finder", [Finder(), Finder(SearchError("down"))])
+def test_a_song_without_an_album_cover_shows_the_photo_fix(finder: Finder) -> None:
+    fetch = Fetch()
+    photos = Finder(PHOTO)
+    fixes = FakeFixes(cover_fix(SONG.photo_key, FIX_PHOTO))
+    covers = service(finder, [0.0], fetch=fetch, photos=photos, fixes=fixes)
+    covers.request(SONG, NOW)
+    # Until the photo fix is stored the song shows what its search shows.
+    assert covers.lookup(SONG) is None
+    drain(covers)
+    assert fetch.urls == [FIX_PHOTO.replace("/1000x1000-", "/600x600-")]
+    cover = covers.lookup(SONG)
+    assert cover is not None and cover.kind == "artist"
+    assert cover.url.startswith(f"/covers/{name_for(FIX_PHOTO)}.jpg")
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert photos.calls == []
+
+
+def test_no_photo_shows_no_image_for_a_song_without_a_cover() -> None:
+    fixes = FakeFixes(cover_fix(SONG.photo_key, None, "none"))
+    covers = service(Finder(), [0.0], fixes=fixes)
+    covers.request(SONG, NOW)
+    drain(covers)
+    assert covers.lookup(SONG) is None
+
+
 def test_a_photo_fix_is_the_other_side_of_an_own_cover() -> None:
     photos = Finder(PHOTO)
     fixes = FakeFixes(cover_fix(SONG.photo_key, FIX_PHOTO))

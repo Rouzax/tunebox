@@ -160,18 +160,20 @@ def effective(
 ) -> Shown | None:
     """The one rule for what a key shows. fix is the key's own fix,
     automatic its decision from the covers table (ignored when fix is
-    set), photo_fix the fix of the song's photo key. A song
-    whose automatic image is its artists' photo shows the photo fix in its
-    place; a song with a cover of its own keeps that cover."""
+    set), photo_fix the fix of the song's photo key. A song with an album
+    cover of its own keeps that cover; any other song (its automatic image
+    the artists' photo, no decision yet, a miss, a failed search without an
+    earlier cover) shows the photo fix instead."""
     if fix is not None:
         return Shown(fix.value, "artist" if is_photo_key(fix.key) else "album", fix)
+    own_cover = (
+        automatic is not None and automatic.url is not None and not is_artist_photo(automatic)
+    )
+    if photo_fix is not None and not own_cover:
+        return Shown(photo_fix.value, "artist", photo_fix)
     if automatic is None:
         return None
-    if is_artist_photo(automatic):
-        if photo_fix is not None:
-            return Shown(photo_fix.value, "artist", photo_fix)
-        return Shown(automatic.url, "artist")
-    return Shown(automatic.url, "album")
+    return Shown(automatic.url, "artist" if is_artist_photo(automatic) else "album")
 
 
 def allowed_image(link: str) -> bool:

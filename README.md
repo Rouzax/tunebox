@@ -753,7 +753,7 @@ What a fix does:
   uploaded cover: it has no public link.
 - **Back to automatic** removes the fix: tunebox forgets its own earlier
   answer too and looks the song up again. Until that lookup is done, the
-  song shows no image.
+  song shows no image, or your photo fix for its artist if there is one.
 
 A fix stays when its song leaves the 30-day list. On **Fixed by you** such
 a row reads "not heard in 30 days". That also happens when a station's
