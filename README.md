@@ -697,6 +697,10 @@ stations, when the song was last heard, and where the image comes from:
   downloads it; **Fetch failed** or **Image lost** when that went wrong
   (see [Troubleshooting](#troubleshooting)).
 
+A row with a cover also shows, smaller and labelled **Artist photo**, the
+photo of the artist the player shows when the cover is tapped, once tunebox
+has downloaded it.
+
 A line at the top counts the songs of the last 30 days with a cover, with
 an artist photo, with no image, and fixed by you. Three views choose the
 rows: **Problems** (the default) shows the songs with an artist photo or no
@@ -728,8 +732,10 @@ image hosts.
   or a damaged file is refused with "That file is not a JPEG, PNG or WebP
   image."
 
-**Fix an artist photo**: on any song row, **This artist's photo is wrong**
-searches Deezer for artists by that name. The artist photo is what a song
+**Fix an artist photo**: **This artist's photo is wrong** searches Deezer
+for artists by that name. It appears on a song row that shows an artist
+photo (as its image or beside its cover) or no image at all; a row with a
+cover and no photo beside it has no photo to judge. The artist photo is what a song
 shows when tunebox finds no cover, and the other side of a song's cover in
 the player. Up to 10 artists come back, most fans first. For the 5 with the
 most fans tunebox also checks whether the picture is really one of the

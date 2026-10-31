@@ -208,6 +208,7 @@ def heard(
         first_at if first_at is not None else last_at,
         last_at,
         cover,
+        None,
     )
 
 
@@ -535,3 +536,92 @@ def test_a_fix_not_yet_stored_lists_the_image_the_player_still_shows(
         ("album", URL_A, f"{name_for(URL_A)}.jpg"),
         ("artist", link(4), f"{name_for(link(4))}.jpg"),
     ]
+
+
+def with_photo(song: HeardSong, url: str | None, match: str = "deezer artist: A") -> HeardSong:
+    outcome = "artist" if url is not None else "miss"
+    return replace(song, photo=decision(song.photo_key, outcome, url, match))
+
+
+def test_a_row_with_an_album_cover_lists_the_photo_behind_it() -> None:
+    cover = heard("A", "Cover", NOW_MS - 1, decision(make_track("A", "Cover").key, "cover", URL_A))
+    (row,) = listed([with_photo(cover, URL_B)], files={URL_A, URL_B}).rows
+    assert row.photo_image == f"{name_for(URL_B)}.jpg"
+    # Not downloaded yet, or no photo found: the player shows none either.
+    (row,) = listed([with_photo(cover, URL_B)], files={URL_A}).rows
+    assert row.image is not None and row.photo_image is None
+    (row,) = listed([with_photo(cover, None)], files={URL_A}).rows
+    assert row.photo_image is None
+    (row,) = listed([cover], files={URL_A}).rows
+    assert row.photo_image is None
+
+
+def test_the_photo_fix_wins_behind_a_cover_and_no_photo_means_none() -> None:
+    cover = with_photo(
+        heard("A", "Cover", NOW_MS - 1, decision(make_track("A", "Cover").key, "cover", URL_A)),
+        URL_B,
+    )
+    fixed = {cover.photo_key: cover_fix(cover.photo_key, URL_C)}
+    (row,) = listed([cover], fixed, files={URL_A, URL_B, URL_C}).rows
+    assert row.photo_image == f"{name_for(URL_C)}.jpg"
+    # A fixed photo still fetched leaves the automatic one, as photo() does.
+    (row,) = listed([cover], fixed, files={URL_A, URL_B}).rows
+    assert row.photo_image == f"{name_for(URL_B)}.jpg"
+    none = {cover.photo_key: cover_fix(cover.photo_key, None, "none")}
+    (row,) = listed([cover], none, files={URL_A, URL_B}).rows
+    assert row.photo_image is None
+
+
+def test_a_row_without_an_album_cover_lists_no_second_photo() -> None:
+    artist = with_photo(
+        heard(
+            "B",
+            "Photo",
+            NOW_MS - 1,
+            decision(make_track("B", "Photo").key, "artist", URL_B, "deezer artist: B"),
+        ),
+        URL_B,
+    )
+    waiting = with_photo(
+        heard("C", "Waiting", NOW_MS - 2, decision(make_track("C", "Waiting").key, "cover", URL_A)),
+        URL_B,
+    )
+    nothing = with_photo(
+        heard("D", "Miss", NOW_MS - 3, decision(make_track("D", "Miss").key, "miss", None)), URL_B
+    )
+    photo_fix = {nothing.photo_key: cover_fix(nothing.photo_key, URL_C)}
+    rows = listed([artist, waiting, nothing], files={URL_B}).rows
+    assert [(r.state, r.photo_image) for r in rows] == [
+        ("artist", None),
+        ("looking", None),
+        ("nothing", None),
+    ]
+    rows = listed([nothing], photo_fix, files={URL_B, URL_C}, view="fixed").rows
+    assert [(r.key, r.photo_image) for r in rows] == [(nothing.photo_key, None)]
+
+
+def test_the_photo_is_looked_up_for_the_rows_of_the_page_only() -> None:
+    songs = [
+        with_photo(
+            heard(
+                f"A{n}",
+                "Cover",
+                NOW_MS - n,
+                decision(make_track(f"A{n}", "Cover").key, "cover", URL_A),
+            ),
+            link(10 + n),
+        )
+        for n in range(1, 4)
+    ]
+    asked: list[str] = []
+
+    def image(found: str) -> str | None:
+        asked.append(found)
+        return f"{name_for(found)}.jpg"
+
+    listing = song_list(songs, {}, image, lambda _k, _v: None, NOW_MS, "all", "", None, 2)
+    assert [r.photo_image for r in listing.rows] == [
+        f"{name_for(link(11))}.jpg",
+        f"{name_for(link(12))}.jpg",
+    ]
+    assert link(13) not in asked

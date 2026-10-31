@@ -649,7 +649,7 @@ button.link {
    whole width on a phone and sit beside the text on a wider screen. */
 .cover-row {
     display: grid;
-    grid-template-columns: 64px minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
     gap: 0.5rem 0.75rem;
     align-items: start;
     padding: 0.5rem 0.75rem;
@@ -665,7 +665,7 @@ button.link {
 
 @media (min-width: 40rem) {
     .cover-row {
-        grid-template-columns: 64px minmax(0, 1fr) auto;
+        grid-template-columns: auto minmax(0, 1fr) auto;
     }
 
     .cover-row > .actions {
@@ -683,6 +683,31 @@ button.link {
     object-fit: cover;
     background: var(--field);
     border: 1px solid var(--line);
+}
+
+.cover-pictures {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+}
+
+.cover-photo {
+    margin: 0;
+    display: grid;
+    justify-items: center;
+    gap: 0.15rem;
+    width: 48px;
+}
+
+.cover-row .cover-photo img {
+    width: 40px;
+    height: 40px;
+}
+
+.cover-photo figcaption {
+    font-size: 0.7rem;
+    line-height: 1.1;
+    text-align: center;
 }
 
 .cover-text {

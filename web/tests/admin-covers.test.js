@@ -37,8 +37,13 @@ test('Back to automatic removes the fix the row shows', () => {
     assert.equal(clearKey({key: 'photo:jessica', fix: {key: 'photo:jessica'}}), 'photo:jessica');
 });
 
-test('every song row offers the photo form, a photo fix row its Fix', () => {
-    assert.equal(offersPhoto({key: 'a|b', kind: 'album', photo_key: 'photo:a'}), true);
-    assert.equal(offersPhoto({key: 'a|b', kind: null, photo_key: 'photo:a'}), true);
-    assert.equal(offersPhoto({key: 'photo:a', kind: 'artist', photo_key: null}), false);
+test('a song row offers the photo form where it shows the photo, a photo fix row its Fix', () => {
+    const song = {key: 'a|b', photo_key: 'photo:a'};
+    assert.equal(offersPhoto({...song, kind: 'album', image: '/c.jpg', photo_image: '/p.jpg'}), true);
+    assert.equal(offersPhoto({...song, kind: 'artist', image: '/p.jpg', photo_image: null}), true);
+    assert.equal(offersPhoto({...song, kind: null, image: null, photo_image: null}), true);
+    assert.equal(offersPhoto({...song, kind: 'album', image: null, photo_image: null}), true);
+    // A cover with no photo behind it has no photo to judge.
+    assert.equal(offersPhoto({...song, kind: 'album', image: '/c.jpg', photo_image: null}), false);
+    assert.equal(offersPhoto({key: 'photo:a', kind: 'artist', image: '/p.jpg', photo_key: null}), false);
 });

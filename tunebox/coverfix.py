@@ -189,6 +189,12 @@ def choices(
     ]
 
 
+def photo_choices(photo_fix: Fix | None, automatic: CoverDecision | None) -> list[Shown | None]:
+    """What a photo key shows behind a song's own album cover, then what
+    it shows while a fixed photo is not in the cover store yet."""
+    return [effective(photo_fix, automatic, None), effective(None, automatic, None)]
+
+
 def first_stored[T](
     options: Sequence[Shown | None], find: Callable[[str], T | None]
 ) -> tuple[T, Shown] | None:
@@ -244,7 +250,8 @@ class Row:
     fix (its key is the photo key). first_at and last_at are None for a fix
     not heard in the window. link is the image the row shows; image is its
     cover-store file name. A row shows an image only once that file is
-    there."""
+    there. photo_image is the file of the artists' photo the player shows
+    behind the row's album cover, set on the rows of a page only."""
 
     key: str
     artist: str
@@ -260,6 +267,7 @@ class Row:
     fix: Fix | None
     reason: str | None = None
     image: str | None = None
+    photo_image: str | None = None
 
 
 @dataclass(frozen=True)
@@ -317,8 +325,9 @@ def song_list(
     )
     if after is not None:
         rows = [r for r in rows if (r.sort_at, r.key) < after]
-    page = rows[:limit]
     more = len(rows) > limit
+    photos = {song.key: song.photo for song in songs}
+    page = [_with_photo(r, photos, fixes, image) for r in rows[:limit]]
     return Listing(page, (page[-1].sort_at, page[-1].key) if more else None, totals)
 
 
@@ -370,6 +379,21 @@ def _song_row(
     if file is None:
         return Row(*base, "looking", None, None, None)
     return Row(*base, _kind_state(shown), shown.kind, shown.url, None, None, file)
+
+
+def _with_photo(
+    row: Row,
+    photos: Mapping[str, CoverDecision | None],
+    fixes: Mapping[str, Fix],
+    image: Callable[[str], str | None],
+) -> Row:
+    """The photo /now sends as artist_photo: only behind an album cover the
+    row shows, never on the row of a photo fix (no photo_key)."""
+    if row.photo_key is None or row.image is None or row.kind != "album":
+        return row
+    options = photo_choices(fixes.get(row.photo_key), photos.get(row.key))
+    stored = first_stored(options, image)
+    return replace(row, photo_image=stored[0]) if stored is not None else row
 
 
 def _kind_state(shown: Shown) -> State:

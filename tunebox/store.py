@@ -73,10 +73,12 @@ newest AS (
     FROM kept
 )
 SELECT g.key, n.photo_key, n.artist, n.artists, n.title, g.channels, g.first_at,
-    g.last_at, c.outcome, c.url, c.match, c.decided_at
+    g.last_at, c.outcome, c.url, c.match, c.decided_at,
+    p.outcome, p.url, p.match, p.decided_at
 FROM grouped g
 JOIN newest n ON n.key = g.key AND n.n = 1
 LEFT JOIN covers c ON c.key = g.key
+LEFT JOIN covers p ON p.key = n.photo_key
 """
 
 
@@ -94,7 +96,22 @@ class CoverDecision:
 
 
 _HeardRow = tuple[
-    str, str, str, str, str, str, int, int, Outcome | None, str | None, str | None, float | None
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    int,
+    int,
+    Outcome | None,
+    str | None,
+    str | None,
+    float | None,
+    Outcome | None,
+    str | None,
+    str | None,
+    float | None,
 ]
 
 
@@ -102,7 +119,8 @@ _HeardRow = tuple[
 class HeardSong:
     """One song of the panel's list: its text from the newest play, the
     stations it played on, its first and last play (ms, the tracks'
-    started_at) and its automatic cover decision."""
+    started_at), its automatic cover decision and the automatic decision
+    of its photo key."""
 
     key: str
     photo_key: str
@@ -113,6 +131,7 @@ class HeardSong:
     first_at: int
     last_at: int
     cover: CoverDecision | None
+    photo: CoverDecision | None
 
 
 class Store:
@@ -366,12 +385,11 @@ class Store:
                 url,
                 match,
                 decided_at,
+                photo_outcome,
+                photo_url,
+                photo_match,
+                photo_decided_at,
             ) = cast(_HeardRow, row)
-            cover = (
-                CoverDecision(key, outcome, url, match, decided_at)
-                if outcome is not None and decided_at is not None
-                else None
-            )
             songs.append(
                 HeardSong(
                     key,
@@ -382,7 +400,21 @@ class Store:
                     tuple(sorted(cast("list[str]", json.loads(channels)))),
                     first_at,
                     last_at,
-                    cover,
+                    _decision(key, outcome, url, match, decided_at),
+                    _decision(photo_key, photo_outcome, photo_url, photo_match, photo_decided_at),
                 )
             )
         return songs
+
+
+def _decision(
+    key: str,
+    outcome: Outcome | None,
+    url: str | None,
+    match: str | None,
+    decided_at: float | None,
+) -> CoverDecision | None:
+    """A LEFT JOIN's decision, or None where the key has no row."""
+    if outcome is None or decided_at is None:
+        return None
+    return CoverDecision(key, outcome, url, match, decided_at)
