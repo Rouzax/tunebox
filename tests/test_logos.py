@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.fakes import FakeHttp, blob_store, channel_config
+from tests.fakes import FakeHttp, blob_store, channel_config, tiny_png
 from tunebox.http import HttpError
 from tunebox.logos import (
     GROUP_SMALL_PX,
@@ -297,7 +297,7 @@ def test_a_blob_that_is_not_its_kind_is_not_copied(
 ) -> None:
     caplog.set_level(logging.WARNING)
     blobs = blob_store(tmp_path / "blobs")
-    ref, _ = blobs.save(PNG)
+    ref, _ = blobs.save(tiny_png())
     stored = blobs.path(ref)
     assert stored is not None
     stored.write_bytes(b"")
@@ -652,7 +652,7 @@ def test_a_rename_downloads_when_there_is_nothing_to_copy(tmp_path: Path) -> Non
 
 def test_a_group_image_from_an_upload_is_copied(tmp_path: Path) -> None:
     blobs = blob_store(tmp_path / "b")
-    ref, _ = blobs.save(PNG)
+    ref, _ = blobs.save(tiny_png())
     http = FakeHttp(lambda _url: b"")
     logos = Logos(tmp_path / "logos", http, blobs)
     key = group_key("G")

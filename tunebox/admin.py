@@ -1193,7 +1193,7 @@ class Admin:
             return _error(400, "bad_request")
         try:
             fix = covers.upload(key, artist, title, request.body)
-        except NotACover, BlobError:
+        except NotACover:
             return _error(400, "not_a_cover")
         except ValueError:
             # A photo key: a photo is picked from Deezer, never uploaded.

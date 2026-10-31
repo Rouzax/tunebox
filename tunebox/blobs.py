@@ -3,7 +3,12 @@ apart from the logo cache in logos/ (which can be deleted). The file is
 the record: a station's logo names blob:<sha256>, and the blob exists when
 its file does, also after the database was reset (export, reset, import).
 Unreferenced blobs are removed at start-up (tidy) once they are a day old,
-so an upload whose station has not been saved yet survives a restart."""
+so an upload whose station has not been saved yet survives a restart.
+
+A JPEG, PNG or WebP upload is stored without its metadata (imagemeta), so
+the copies served at /logos/ never carry a phone's location; the reference
+is the hash of the stored bytes, and imagemeta's output is its own fixed
+point, so the same original uploaded again names the same blob."""
 
 from __future__ import annotations
 
@@ -15,6 +20,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from tunebox import imagemeta
 from tunebox.config import BLOB_REF, ConfigState
 from tunebox.disk import free_bytes, has_room
 from tunebox.logos import EXTENSIONS, sniff
@@ -85,12 +91,19 @@ class Blobs:
 
     def save(self, body: bytes) -> tuple[str, str]:
         """Store the image and answer (reference, kind). The kind comes from
-        the first bytes, never from what the uploader declared."""
+        the first bytes, never from what the uploader declared. A raster
+        image that cannot be stripped (animated WebP, damaged, no picture)
+        is no image either."""
         if not body or len(body) > MAX_BLOB:
             raise BlobError("empty or too large")
         kind = sniff(body)
         if kind is None:
             raise BlobError("not an image")
+        if kind != "svg":
+            try:
+                body = imagemeta.strip(body, kind)
+            except ValueError as error:
+                raise BlobError("not an image") from error
         digest = hashlib.sha256(body).hexdigest()
         target = self._dir / f"{digest}.{kind}"
         if _holds(target, body):

@@ -369,7 +369,8 @@ seconds), without a restart.
   first station, and the message says so.
 - A group can be deleted once it has no stations.
 - A group's pencil opens its form: its name and an image, either a link
-  (tunebox downloads it after you save) or a file you upload there. The
+  (tunebox downloads it after you save) or a file you upload there,
+  stored like an uploaded station logo (see [Logos](#logos)). The
   image shows beside the group's heading once it is downloaded, from the
   next save or a reload of the page on; tunebox only keeps
   the image of a group with at least one station switched on. In the
@@ -495,10 +496,14 @@ its edit form:
 - **Upload**: a PNG, JPEG, WebP or SVG image of at most 2 MB (2,000,000
   bytes). tunebox judges the type by the file's contents, not its name, and
   refuses anything else ("That file is not a PNG, JPEG, WebP or SVG
-  image."). After the upload the form shows the logo at full size and at
-  the size of the station list, and the Logo field holds the upload's name
-  (`blob:` followed by 64 characters). The station uses it after you press
-  Save, like any other change in the form.
+  image."). A JPEG, PNG or WebP logo is stored without the metadata a
+  camera or phone writes into it, such as the place a photo was taken; a
+  JPEG keeps its rotation, an animated PNG keeps only its still image, and
+  an animated WebP or a damaged file is refused with the same message. An
+  SVG is stored as uploaded. After the upload the form shows the logo at
+  full size and at the size of the station list, and the Logo field holds
+  the upload's name (`blob:` followed by 64 characters). The station uses
+  it after you press Save, like any other change in the form.
 
 Uploads are kept in `data/blobs/`, named by their contents, as long as the
 stations or any entry in the History name them, so restoring an older

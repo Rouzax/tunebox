@@ -325,3 +325,20 @@ def test_a_webp_without_a_picture_is_refused(body: bytes) -> None:
 def test_an_unknown_kind_is_refused() -> None:
     with pytest.raises(ValueError):
         strip(b"GIF89a", "gif")
+
+
+def test_stripping_twice_changes_nothing() -> None:
+    body, _kept = small_png(chunk(b"tEXt", b"Location\x00" + GPS))
+    webp = riff(
+        webp_chunk(b"VP8X", bytes([0x08]) + b"\x00" * 9),
+        webp_chunk(b"VP8L", b"\x2f\x00\x00\x00\x00"),
+        webp_chunk(b"EXIF", exif(6)[6:]),
+    )
+    for image, kind in (
+        (phone_jpeg(), "jpg"),
+        (phone_jpeg(None), "jpg"),
+        (body, "png"),
+        (webp, "webp"),
+    ):
+        once = strip(image, kind)
+        assert strip(once, kind) == once

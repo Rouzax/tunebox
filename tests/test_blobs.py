@@ -5,13 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from tests.fakes import blob_store
+from tests.fakes import blob_store, tiny_png
+from tests.test_imagemeta import GPS, chunk, exif, phone_jpeg, riff, small_png, webp_chunk
 from tunebox import blobs as blobs_module
 from tunebox.blobs import BLOB_GRACE_S, MAX_BLOB, BlobError, Blobs, BlobStoreFull, BlobUnavailable
 from tunebox.config import ChannelRow, ConfigState
 from tunebox.disk import MIN_FREE
+from tunebox.imagemeta import strip
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+PNG = tiny_png()
 
 
 def test_save_is_content_addressed_and_idempotent(tmp_path: Path) -> None:
@@ -62,8 +64,8 @@ def test_collect_keeps_referenced_and_young_blobs(tmp_path: Path) -> None:
     clock = [1_000_000.0]
     blobs = blob_store(tmp_path, clock=lambda: clock[0])
     kept, _ = blobs.save(PNG)
-    young, _ = blobs.save(PNG + b"y")
-    old, _ = blobs.save(PNG + b"o")
+    young, _ = blobs.save(tiny_png((1, 2, 3, 255)))
+    old, _ = blobs.save(tiny_png((4, 5, 6, 255)))
     for ref in (kept, old):
         path = blobs.path(ref)
         assert path is not None
@@ -156,8 +158,11 @@ def test_saving_an_image_again_repairs_a_short_file(tmp_path: Path, left: bytes)
 
 
 def png(size: int) -> bytes:
-    """A PNG-signed body of the given size (the store sniffs only the start)."""
-    return PNG + b"\x00" * (size - len(PNG))
+    """A PNG of the given size that the store keeps byte for byte: the
+    padding is a colour profile chunk, which stripping keeps."""
+    base, _kept = small_png()
+    body, _kept = small_png(chunk(b"iCCP", b"\x00" * (size - len(base) - 12)))
+    return body
 
 
 def test_an_upload_past_the_store_cap_is_refused(
@@ -227,3 +232,67 @@ def test_missing_names_a_group_image(tmp_path: Path) -> None:
     assert store.missing(state) == f"group_images.G: no uploaded logo {ref}"
     (tmp_path / f"{'b' * 64}.png").write_bytes(b"x")
     assert store.missing(state) is None
+
+
+def test_an_uploaded_png_is_stored_without_its_text_and_exif(tmp_path: Path) -> None:
+    body, kept = small_png(chunk(b"tEXt", b"Location\x00" + GPS), chunk(b"eXIf", exif(6)[6:]))
+    blobs = blob_store(tmp_path)
+    ref, kind = blobs.save(body)
+    stored = blobs.path(ref)
+    assert kind == "png" and stored is not None
+    assert stored.read_bytes() == b"\x89PNG\r\n\x1a\n" + b"".join(kept)
+    assert ref == f"blob:{hashlib.sha256(stored.read_bytes()).hexdigest()}"
+
+
+def test_an_uploaded_webp_is_stored_without_its_exif(tmp_path: Path) -> None:
+    vp8l = webp_chunk(b"VP8L", b"\x2f\x00\x00\x00\x00")
+    body = riff(
+        webp_chunk(b"VP8X", bytes([0x08]) + b"\x00" * 9),
+        vp8l,
+        webp_chunk(b"EXIF", exif(6)[6:]),
+    )
+    blobs = blob_store(tmp_path)
+    ref, kind = blobs.save(body)
+    stored = blobs.path(ref)
+    assert kind == "webp" and stored is not None
+    assert stored.read_bytes() == riff(webp_chunk(b"VP8X", b"\x00" * 10), vp8l)
+
+
+def test_an_uploaded_jpeg_keeps_its_rotation_only(tmp_path: Path) -> None:
+    blobs = blob_store(tmp_path)
+    ref, _ = blobs.save(phone_jpeg())
+    stored = blobs.path(ref)
+    assert stored is not None
+    assert stored.read_bytes() == strip(phone_jpeg(), "jpg")
+    assert GPS not in stored.read_bytes()
+
+
+def test_the_same_original_uploaded_again_is_the_same_blob(tmp_path: Path) -> None:
+    blobs = blob_store(tmp_path)
+    ref, _ = blobs.save(phone_jpeg())
+    assert blobs.save(phone_jpeg())[0] == ref
+    assert blobs.save(strip(phone_jpeg(), "jpg"))[0] == ref
+    assert len(list(tmp_path.iterdir())) == 1
+
+
+def test_an_svg_is_stored_as_sent(tmp_path: Path) -> None:
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"><desc>' + GPS + b"</desc></svg>"
+    blobs = blob_store(tmp_path)
+    ref, kind = blobs.save(svg)
+    stored = blobs.path(ref)
+    assert kind == "svg" and stored is not None and stored.read_bytes() == svg
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        riff(webp_chunk(b"ANIM", b"\x00" * 6), webp_chunk(b"ANMF", b"\x00" * 16)),
+        b"\x89PNG\r\n\x1a\n" + b"\x00" * 32,
+        b"\xff\xd8\xff\xe1\x00\x40Exif",
+    ],
+    ids=["animated-webp", "damaged-png", "damaged-jpeg"],
+)
+def test_an_image_that_cannot_be_stripped_is_refused(tmp_path: Path, body: bytes) -> None:
+    with pytest.raises(BlobError):
+        blob_store(tmp_path).save(body)
+    assert not tmp_path.exists() or list(tmp_path.iterdir()) == []
