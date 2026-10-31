@@ -14,6 +14,7 @@ from tunebox.config import ChannelConfig, SourceConfig, StreamConfig
 from tunebox.coverfix import Fix, FixSource
 from tunebox.http import HttpError
 from tunebox.netguard import Probe
+from tunebox.png import Image, write
 from tunebox.sources.base import SourceError
 from tunebox.streamcheck import StreamChecks
 from tunebox.tracks import RawEntry, Rules, Track, clean
@@ -31,6 +32,11 @@ COVER_JPG = (
     + b"\x01" * 48
     + b"\xff\xd9"
 )
+
+
+def tiny_png(rgba: tuple[int, int, int, int] = (200, 30, 30, 255)) -> bytes:
+    """A 1x1 PNG with no chunk an upload would strip: stored as sent."""
+    return write(Image(1, 1, bytes(rgba)))
 
 
 def fetch_cover(_url: str) -> bytes:

@@ -1,12 +1,13 @@
 """Removes what a camera or phone writes into an image besides the picture.
 
-An uploaded cover is served at /covers/ to every listener, and a phone photo
-carries the place it was taken, the time and the device. The runtime has no
-image library to re-encode with, so the file's segments or chunks are walked
-and only those needed to draw the picture are kept, byte for byte; anything
-else, known or not, is dropped. A structure that cannot be walked raises
-ValueError: an image tunebox cannot read is not kept, nor one whose structure
-holds no picture at all."""
+An uploaded logo or cover is served at /logos/ or /covers/ to every
+listener, and a phone photo carries the place it was taken, the time and
+the device. The runtime has no image library to re-encode with, so the
+file's segments or chunks are walked and only those needed to draw the
+picture are kept, byte for byte; anything else, known or not, is dropped.
+A structure that cannot be walked raises ValueError: an image tunebox
+cannot read is not kept, nor one whose structure holds no picture at
+all."""
 
 from __future__ import annotations
 
@@ -39,7 +40,8 @@ _SHORT = 3
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _IHDR_LENGTH = 13
 # What draws a still picture and its colours. Animation chunks (acTL, fcTL,
-# fdAT) go too: browsers then show the default image, and a cover is a still.
+# fdAT) go too: browsers then show the default image, and a logo or cover
+# is a still.
 _PNG_KEEP = frozenset(
     {
         b"IHDR",
@@ -59,7 +61,8 @@ _PNG_KEEP = frozenset(
 
 _WEBP_KEEP = frozenset({b"VP8 ", b"VP8L", b"VP8X", b"ALPH", b"ICCP"})
 # An animation frame (ANMF) holds sub-chunks of its own, metadata among
-# them; a cover is a still, so an animated WebP is refused, not walked.
+# them; a logo or cover is a still, so an animated WebP is refused, not
+# walked.
 _WEBP_ANIMATION = frozenset({b"ANIM", b"ANMF"})
 _VP8X_ANIMATION = 0x02
 _VP8X_METADATA = 0x08 | 0x04  # the EXIF and XMP flags
@@ -67,9 +70,11 @@ _WEBP_PICTURE = frozenset({b"VP8 ", b"VP8L"})
 
 
 def strip(body: bytes, kind: str) -> bytes:
-    """The image without its metadata; kind is what coverfiles.sniff_cover
-    answered. A JPEG keeps its rotation in an Exif segment that holds
-    nothing else, since browsers turn the picture by it."""
+    """The image without its metadata; kind is what logos.sniff or
+    coverfiles.sniff_cover answered. A JPEG keeps its rotation in an Exif
+    segment that holds nothing else, since browsers turn the picture by
+    it. The output strips to itself unchanged: Blobs names an upload by
+    the hash of what this returns."""
     if kind == "jpg":
         return _jpeg(body)
     if kind == "png":

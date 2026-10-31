@@ -10,8 +10,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from tunebox import imagemeta
-from tunebox.blobs import Blobs
+from tunebox.blobs import BlobError, Blobs
 from tunebox.coverfiles import MAX_COVER, CoverFiles, sniff_cover
 from tunebox.coverfix import CoverFixes, Fix, Row, View, is_photo_key, song_list
 from tunebox.covers import CoverService
@@ -110,13 +109,12 @@ class CoverPanel:
         kind = sniff_cover(body) if len(body) <= MAX_COVER else None
         if kind is None:
             raise NotACover
-        # The upload store and the cover file keep the stripped image only:
-        # covers are served to every listener without a session.
+        # Blobs.save strips the metadata; the cover file is copied from the
+        # stored blob, so it holds the stripped image too.
         try:
-            body = imagemeta.strip(body, kind)
-        except ValueError:
+            ref, _kind = self._blobs.save(body)
+        except BlobError:
             raise NotACover from None
-        ref, _kind = self._blobs.save(body)
         fix = Fix(key, ref, "Uploaded image", "upload", artist, title, self._clock())
         self._set(fix)
         return fix

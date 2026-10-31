@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from tests.fakes import FakeHttp, fetch_cover, offline_checks
+from tests.fakes import FakeHttp, fetch_cover, offline_checks, tiny_png
+from tests.test_imagemeta import GPS, phone_jpeg, riff, webp_chunk
 from tunebox import blobs as blobs_module
 from tunebox import crypto, usagedb
 from tunebox.accounts import REAUTH_S, AccountError, Accounts, Session, SessionEnded
@@ -37,6 +38,7 @@ from tunebox.coverpanel import CoverPanel
 from tunebox.covers import CoverService
 from tunebox.coversearch import CoverSearch
 from tunebox.disk import MIN_FREE
+from tunebox.imagemeta import strip
 from tunebox.logos import Logos, group_key
 from tunebox.netguard import Probe
 from tunebox.pin import Pin
@@ -2102,7 +2104,7 @@ def test_an_ended_session_spends_no_reauth_slot(world: World) -> None:
     assert world.call("POST", "/admin/api/account/reauth", good, csrf=csrf).status == 204
 
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+PNG = tiny_png()
 
 
 def upload(
@@ -2138,6 +2140,27 @@ def test_an_uploaded_logo_answers_its_reference(
 def test_an_upload_that_is_not_an_image_is_refused(world: World) -> None:
     csrf = world.login()
     answer = upload(world, csrf, b"<html><script>alert(1)</script>", "image/png")
+    assert answer.status == 400 and json_of(answer) == {"error": "not_an_image"}
+    assert not (world.tmp / "blobs").exists()
+
+
+def test_an_uploaded_phone_photo_is_stored_without_its_metadata(world: World) -> None:
+    csrf = world.login()
+    answer = upload(world, csrf, phone_jpeg(), "image/jpeg")
+    assert answer.status == 200 and json_of(answer)["kind"] == "jpg"
+    ref = json_of(answer)["logo"]
+    stored = world.blobs.path(ref)
+    assert stored is not None
+    assert GPS not in stored.read_bytes()
+    # The rotation stays: an Exif segment holding the Orientation only.
+    assert stored.read_bytes() == strip(phone_jpeg(), "jpg")
+    assert json_of(upload(world, csrf, phone_jpeg(), "image/jpeg"))["logo"] == ref
+
+
+def test_an_animated_webp_logo_is_refused(world: World) -> None:
+    csrf = world.login()
+    animated = riff(webp_chunk(b"ANIM", b"\x00" * 6), webp_chunk(b"ANMF", b"\x00" * 16))
+    answer = upload(world, csrf, animated, "image/webp")
     assert answer.status == 400 and json_of(answer) == {"error": "not_an_image"}
     assert not (world.tmp / "blobs").exists()
 
@@ -2388,7 +2411,7 @@ def test_history_keeps_its_blobs(world: World) -> None:
     csrf = world.login()
     old = json_of(upload(world, csrf, PNG))["logo"]
     assert save(world, csrf, 0, state_of(station("owr", logo=old))).status == 200
-    new = json_of(upload(world, csrf, PNG + b"new"))["logo"]
+    new = json_of(upload(world, csrf, tiny_png((1, 2, 3, 255))))["logo"]
     assert save(world, csrf, 1, state_of(station("owr", logo=new))).status == 200
     assert old in world.settings.referenced_blobs()
     world.blobs.collect(keep=world.settings.referenced_blobs(), older_than_s=0)
