@@ -14,7 +14,7 @@ from tunebox.coverpanel import IMAGE_PATH, CoverPanel, NotACover, StaleCandidate
 from tunebox.covers import CoverService
 from tunebox.coversearch import CoverSearch
 from tunebox.settings import Settings
-from tunebox.store import HeardSong, HeardUnreadable, Store
+from tunebox.store import CoverDecision, HeardSong, HeardUnreadable, Store
 
 LINK = "https://cdn-images.dzcdn.net/images/cover/" + "c" * 32 + "/1000x1000-000000-80-0-0.jpg"
 
@@ -199,4 +199,24 @@ def test_the_page_cursor_is_ms_and_key(tmp_path: Path) -> None:
     listing = made.panel.listing("all", "", None)
     assert listing["next"] == f"900001:{make_track('A', 'Song 1').key}"
     assert listing["totals"] == {"songs": 101, "cover": 0, "artist": 0, "nothing": 0, "fixed": 0}
+    made.close()
+
+
+def test_a_row_with_a_cover_names_the_photo_the_player_shows_behind_it(tmp_path: Path) -> None:
+    made = Panel(tmp_path)
+    photo = LINK.replace("c" * 32, "d" * 32)
+    cover, artist = make_track("A", "B", 900_000), make_track("C", "D", 800_000)
+    made.store.record_heard("owr", [cover, artist])
+    made.store.put_cover(CoverDecision(cover.key, "cover", LINK, "deezer: A - B", 1.0))
+    made.store.put_cover(CoverDecision(cover.photo_key, "artist", photo, "deezer artist: A", 1.0))
+    made.store.put_cover(CoverDecision(artist.key, "artist", photo, "deezer artist: C", 1.0))
+    made.files.save(LINK, COVER_JPG)
+    made.files.save(photo, COVER_JPG)
+    rows = {str(row["key"]): row for row in made.rows("all")}
+    name = f"{name_for(photo)}.jpg"
+    assert rows[cover.key]["photo_image"] == IMAGE_PATH + name
+    assert rows[artist.key]["image"] == IMAGE_PATH + name
+    assert rows[artist.key]["photo_image"] is None
+    # The same image /now sends as artist_photo.
+    assert (made.service.photo(cover) or "").split("?")[0].endswith(name)
     made.close()

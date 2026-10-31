@@ -77,11 +77,13 @@ export function clearKey(row) {
     return row.fix.key;
 }
 
-// Every song row offers the photo form: the photo is also the other side
-// of a song's cover. A photo fix's own row has no photo_key; its Fix
+// A song row offers the photo form where the row shows the photo: as
+// its image, behind its cover (photo_image), or where the row shows no
+// image and a photo fix would stand in. A cover without a photo behind it
+// has none to judge. A photo fix's own row has no photo_key; its Fix
 // opens the photo form.
 export function offersPhoto(row) {
-    return Boolean(row.photo_key);
+    return Boolean(row.photo_key) && Boolean(row.photo_image || row.kind === 'artist' || !row.image);
 }
 
 // The row of a photo fix carries the photo key as its own key.
@@ -172,8 +174,16 @@ export function render(root, ctx) {
             actions.append(button('undo', label, () => clear(row).catch(unreachable(ctx)), {class: 'quiet'}));
         }
         const heard = row.last_at === null ? null : `${row.channels.map((id) => stationName(channels, id)).join(', ')} · ${when(row.last_at / 1000)}`;
+        // The photo the player shows when the cover is tapped.
+        const photo = row.photo_image
+            ? el('figure', {class: 'cover-photo'},
+                el('img', {src: row.photo_image, alt: '', loading: 'lazy', width: '40', height: '40'}),
+                el('figcaption', {class: 'hint'}, 'Artist photo'))
+            : null;
         return el('li', {class: 'cover-row', 'data-key': row.key, 'data-state': row.state},
-            row.image ? el('img', {src: row.image, alt: '', loading: 'lazy', width: '64', height: '64'}) : el('span', {class: 'cover-empty'}),
+            el('div', {class: 'cover-pictures'},
+                row.image ? el('img', {src: row.image, alt: '', loading: 'lazy', width: '64', height: '64'}) : el('span', {class: 'cover-empty'}),
+                photo),
             el('div', {class: 'cover-text'},
                 el('span', {class: 'name'}, row.title ? `${row.artist} - ${row.title}` : row.artist),
                 heard ? el('span', {class: 'hint'}, heard) : null,

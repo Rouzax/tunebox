@@ -161,6 +161,7 @@ def _row(row: Row) -> dict[str, object]:
         "kind": row.kind,
         "reason": row.reason,
         "image": IMAGE_PATH + row.image if row.image else None,
+        "photo_image": IMAGE_PATH + row.photo_image if row.photo_image else None,
         "fix": None
         if fix is None
         else {"key": fix.key, "label": fix.label, "source": fix.source, "set_at": fix.set_at},

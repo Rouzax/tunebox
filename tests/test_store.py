@@ -8,6 +8,7 @@ from tests.fakes import make_track
 from tunebox.store import CoverDecision, HeardUnreadable, Store
 
 URL = "https://example.invalid/a.jpg"
+PHOTO_URL = "https://example.invalid/p.jpg"
 
 
 def test_cover_decisions_round_trip_and_replace(tmp_path: Path) -> None:
@@ -118,6 +119,11 @@ def test_heard_keeps_the_first_and_moves_the_last_play(tmp_path: Path) -> None:
     assert song.channels == ("anthems", "owr")
     assert song.photo_key == "photo:fisher" and song.artists == ("FISHER",)
     assert song.cover == CoverDecision("fisher|stay", "cover", URL, "m", 1.0)
+    assert song.photo is None
+    photo = CoverDecision("photo:fisher", "artist", PHOTO_URL, "deezer artist: FISHER", 2.0)
+    store.put_cover(photo)
+    (song,) = store.heard_songs(0) or []
+    assert song.photo == photo
 
 
 def test_heard_songs_take_the_newest_row_text_and_the_window(tmp_path: Path) -> None:

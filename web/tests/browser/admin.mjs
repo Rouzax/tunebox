@@ -264,9 +264,10 @@ async function startTunebox(folder, port, streamUrl, setup = false, catalogueUrl
     if (made.status !== 0) {
         throw new Error(`could not create the account: ${made.stderr}`);
     }
-    // Two songs for the Covers page: one first heard over a day ago with
-    // no cover found yet, and one showing an artist photo, whose file is in
-    // place as after its download (a row reads "Still looking" without it).
+    // Three songs for the Covers page: one first heard over a day ago with
+    // no cover found yet, one showing an artist photo, and one with an
+    // album cover and its artist's photo behind it. Their files are in
+    // place as after the download (a row reads "Still looking" without it).
     const seeded = setup ? {status: 0} : spawnSync(PYTHON, ['-c', [
         'import sys, time',
         'from pathlib import Path',
@@ -277,11 +278,18 @@ async function startTunebox(folder, port, streamUrl, setup = false, catalogueUrl
         'now = int(time.time() * 1000)',
         'store = Store(Path(sys.argv[1]) / "tunebox.db")',
         'songs = [clean(RawEntry("AGENTS OF TIME", "Hearts Collide", now - 90000000), Rules(), now),',
-        '         clean(RawEntry("JESSICA", "Summer Song", now - 60000), Rules(), now)]',
+        '         clean(RawEntry("JESSICA", "Summer Song", now - 60000), Rules(), now),',
+        '         clean(RawEntry("FISHER", "Stay", now - 120000), Rules(), now)]',
         'store.record_heard("first", songs)',
         'photo = "https://cdn-images.dzcdn.net/images/artist/' + '0'.repeat(32) + '/1000x1000-000000-80-0-0.jpg"',
         'store.put_cover(CoverDecision(songs[1].key, "artist", photo, "deezer artist: Jessica", time.time()))',
-        'CoverFiles(Path(sys.argv[1]) / "covers").save(photo, png.write(png.Image(1, 1, bytes([128, 128, 128, 255]))))',
+        'cover = "https://cdn-images.dzcdn.net/images/cover/' + '1'.repeat(32) + '/1000x1000-000000-80-0-0.jpg"',
+        'fisher = "https://cdn-images.dzcdn.net/images/artist/' + '2'.repeat(32) + '/1000x1000-000000-80-0-0.jpg"',
+        'store.put_cover(CoverDecision(songs[2].key, "cover", cover, "deezer: FISHER - Stay", time.time()))',
+        'store.put_cover(CoverDecision(songs[2].photo_key, "artist", fisher, "deezer artist: FISHER", time.time()))',
+        'files = CoverFiles(Path(sys.argv[1]) / "covers")',
+        'for link in (photo, cover, fisher):',
+        '    files.save(link, png.write(png.Image(1, 1, bytes([128, 128, 128, 255]))))',
         'store.close()',
     ].join('\n'), folder], {cwd: ROOT, encoding: 'utf8'});
     if (seeded.status !== 0) {
@@ -2343,6 +2351,22 @@ async function run() {
             const states = `${await rowState(agents)} ${await rowState(jessica)}`;
             await noSideways('covers');
             return states === 'looking artist' ? null : `the rows are ${states}`;
+        });
+
+        await step('a song with a cover also shows the artist photo behind it', async () => {
+            const fisher = `document.querySelector('.cover-row[data-key="fisher|stay"]')`;
+            await coverView('all');
+            const shown = `(() => { const img = ${fisher} && ${fisher}.querySelector('.cover-photo img'); return img && img.naturalWidth > 0; })()`;
+            if (!(await until(`${fisher} && ${jessica}`)) || !(await until(`(${fisher}.scrollIntoView(), ${shown})`))) {
+                return `the fisher row is ${await rowState(fisher)} and shows ${await evaluate(`${fisher} ? ${fisher}.querySelectorAll('img').length : 0`)} image(s)`;
+            }
+            const seen = await evaluate(`JSON.stringify({
+                caption: ${fisher}.querySelector('.cover-photo figcaption').textContent,
+                button: [...${fisher}.querySelectorAll('button')].some((b) => b.textContent.trim() === "This artist's photo is wrong"),
+                jessica: ${jessica}.querySelectorAll('img').length,
+            })`);
+            await noSideways('covers photo');
+            return seen === JSON.stringify({caption: 'Artist photo', button: true, jessica: 1}) ? null : `the rows show ${seen}`;
         });
 
         await step('a cover search offers candidates and a pick shows as your fix', async () => {

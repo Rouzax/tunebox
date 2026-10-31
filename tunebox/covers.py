@@ -26,8 +26,8 @@ from tunebox.coverfix import (
     Shown,
     allowed_image,
     choices,
-    effective,
     first_stored,
+    photo_choices,
 )
 from tunebox.disk import has_room
 from tunebox.http import HttpError, HttpGet
@@ -175,7 +175,7 @@ class CoverService:
         with self._lock:
             fix = self._fixes.get(track.photo_key)
             automatic = self._known(track.photo_key)
-        local = self._local([effective(fix, automatic, None), effective(None, automatic, None)])
+        local = self._local(photo_choices(fix, automatic))
         return local[0] if local is not None else None
 
     def remote_link(self, track: Track) -> str | None:
