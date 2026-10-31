@@ -735,17 +735,18 @@ image hosts.
 **Fix an artist photo**: **This artist's photo is wrong** searches Deezer
 for artists by that name. It appears on a song row that shows an artist
 photo (as its image or beside its cover) or no image at all; a row with a
-cover and no photo beside it has no photo to judge. The artist photo is what a song
-shows when tunebox finds no cover, and the other side of a song's cover in
-the player. Up to 10 artists come back, most fans first. For the 5 with the
-most fans tunebox also checks whether the picture is really one of the
-artist's release covers and says "release cover" or "not a release cover";
-the others say "not checked". Click a picture to save it, or **No photo**
-to show no photo for that artist. A photo fix applies to every song with
-exactly that artist text: "Jessica" and "Jessica, Other Artist" are two
-fixes. On a song row that shows a photo fix, **Back to automatic photo**
-removes that photo fix, for every song with that artist text. On the
-**Fixed by you** view, **Fix** on a photo fix opens the photo search again.
+cover and no photo beside it has no photo to judge. The artist photo is
+what a song shows when tunebox finds no cover, and the other side of a
+song's cover in the player. Up to 10 artists come back, most fans first.
+For the 5 with the most fans tunebox also checks whether the picture is
+really one of the artist's release covers and says "release cover" or "not
+a release cover"; the others say "not checked". Click a picture to save it,
+or **No photo** to show no photo for that artist. A photo fix applies to
+every song with exactly that artist text: "Jessica" and "Jessica, Other
+Artist" are two fixes. On a song row that shows a photo fix, **Back to
+automatic photo** removes that photo fix, for every song with that artist
+text. On the **Fixed by you** view, **Fix** on a photo fix opens the photo
+search again.
 
 What a fix does:
 
