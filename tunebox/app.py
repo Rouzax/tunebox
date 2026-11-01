@@ -389,7 +389,8 @@ def shut_down(
         usage.stop_and_join(min(deadline, time.monotonic() + 3.0))
     runtime.stop_and_join(deadline)
     if health is not None:
-        # Before the store closes: a check in flight still writes its row.
+        # Joined before the store closes, so the worker is never inside a
+        # store call when its connection goes.
         health.stop_and_join(deadline)
     for worker in workers:
         worker.join(max(0.0, deadline - time.monotonic()))

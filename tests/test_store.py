@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import os
 import sqlite3
@@ -295,14 +296,14 @@ def test_a_start_keeps_the_last_finish(tmp_path: Path) -> None:
 
 def test_an_older_health_table_shape_is_dropped(tmp_path: Path) -> None:
     path = tmp_path / "t.db"
-    db = sqlite3.connect(path)
-    db.execute("CREATE TABLE health (channel TEXT, x INTEGER)")
-    db.commit()
-    db.close()
+    with contextlib.closing(sqlite3.connect(path)) as db:
+        db.execute("CREATE TABLE health (channel TEXT, x INTEGER)")
+        db.commit()
     store = Store(path)
     store.health_write(row(True, 1))
     assert len(store.health_rows() or []) == 1
-    names = {r[0] for r in sqlite3.connect(path).execute("SELECT name FROM sqlite_master")}
+    with contextlib.closing(sqlite3.connect(path)) as db:
+        names = {r[0] for r in db.execute("SELECT name FROM sqlite_master")}
     assert "health" not in names
 
 
