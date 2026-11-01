@@ -797,18 +797,20 @@ It checks one thing at a time, with a short pause in between, so a full
 check takes about 10 minutes for 50 stations, and up to 30 when some hosts
 are slow to answer. A failed check is tried once more at the end of the
 run before it counts. tunebox also checks once 5 minutes after it starts,
-when the last full check is more than a day old. **Check all now** starts a
-full check at once; after a check you can start the next one 5 minutes
+when the last full check is more than a day old and no check started in the
+last 6 hours (so a container that keeps restarting does not check every
+station each time). **Check all now** starts a full check at once; after a check you can start the next one 5 minutes
 later. Switched-off stations are not checked.
 
 Each station gets a status:
 
-- **Broken**: none of its streams works, its feed does not answer, or the
-  feed of a station someone is listening to has failed for more than 10
-  minutes. The player cannot play the station, or shows no song titles.
+- **Broken**: none of its streams works, its feed failed the last check and
+  has not answered since, or the feed of a station someone is listening to
+  has failed for more than 10 minutes. The player cannot play the station, or shows no song titles.
 - **Warning**: one of several streams does not work, a stream plays over
   plain http (browsers block it on the player's https page), the feed
-  lists no songs, or the feed answers but has not changed song for more
+  lists no songs, the last feed check failed but the feed has answered
+  since, or the feed answers but has not changed song for more
   than 2 hours while someone listens (a stuck feed).
 - **OK**: everything checked works. A stream or feed you just added or
   changed reads "Not checked yet" until the next check.
