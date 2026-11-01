@@ -14,12 +14,17 @@ from tunebox.streamcheck import (
     FEED_DEADLINE_S,
     FEED_FETCH,
     FEED_MAX_BYTES,
+    HEALTH_PROBE_BYTES,
     PER_MINUTE,
     STREAM_BOUND_S,
     UNREACHABLE,
+    UNREADABLE,
     StreamChecks,
+    check_feed,
+    check_stream,
     codec_of,
     describe,
+    error_code,
     guarded_feed,
     kbps_of,
     name_of,
@@ -75,7 +80,11 @@ def test_describe_refuses_a_playlist_and_a_page() -> None:
     page = describe(
         Probe("text/html; charset=utf-8", {}, b"<html></html>"), "https://example.test/"
     )
-    assert page == {"ok": False, "reason": "No AAC or MP3 audio came back (text/html)."}
+    assert page == {
+        "ok": False,
+        "reason": "No AAC or MP3 audio came back (text/html).",
+        "code": "no_audio",
+    }
     silent = describe(Probe("audio/mpeg", {}, b""), "https://example.test/live")
     assert not silent["ok"] and "no audio" in silent["reason"]
 
@@ -108,6 +117,7 @@ def test_a_failed_fetch_is_an_answer_not_an_error() -> None:
     assert answer.stream("http://example.test/") == {
         "ok": False,
         "reason": "example.test: HTTP 404",
+        "code": "http_404",
     }
 
 
@@ -122,7 +132,7 @@ def test_a_failed_fetch_is_an_answer_not_an_error() -> None:
 def test_an_unknown_name_and_a_home_address_read_the_same(error: HttpError) -> None:
     # Two different texts would tell which names exist inside the network.
     answer = checks(error).stream("http://nas.lan/")
-    assert answer == {"ok": False, "reason": UNREACHABLE}
+    assert answer == {"ok": False, "reason": UNREACHABLE, "code": "unreachable"}
     assert "lan" not in UNREACHABLE
 
 
@@ -185,6 +195,7 @@ def test_feed_failure_and_empty_feed() -> None:
     assert checks(entries=SourceError("HTTP 404")).feed(TRITON) == {
         "ok": False,
         "reason": "HTTP 404",
+        "code": "feed_error",
     }
     empty = checks(entries=[]).feed(TRITON)
     assert not empty["ok"] and "no songs" in empty["reason"]
@@ -218,6 +229,7 @@ def test_a_playlist_names_the_stream_inside(content_type: str, body: bytes, insi
     assert answer == {
         "ok": False,
         "reason": "This is a playlist file, not a stream.",
+        "code": "playlist",
         "inside": inside,
     }
 
@@ -226,7 +238,11 @@ def test_a_playlist_without_an_address_names_none() -> None:
     answer = describe(
         Probe("audio/x-mpegurl", {}, b"#EXTM3U\n# nothing here\n"), "https://example.test/a.m3u"
     )
-    assert answer == {"ok": False, "reason": "This is a playlist file, not a stream."}
+    assert answer == {
+        "ok": False,
+        "reason": "This is a playlist file, not a stream.",
+        "code": "playlist",
+    }
 
 
 def test_a_plain_http_stream_plays_with_a_warning() -> None:
@@ -263,7 +279,11 @@ def test_a_playlist_full_of_blank_lines_is_read_at_once(content_type: str, body:
     started = time.perf_counter()
     answer = describe(Probe(content_type, {}, body), "https://example.test/list")
     assert time.perf_counter() - started < 0.5
-    assert answer == {"ok": False, "reason": "This is a playlist file, not a stream."}
+    assert answer == {
+        "ok": False,
+        "reason": "This is a playlist file, not a stream.",
+        "code": "playlist",
+    }
 
 
 def test_a_pls_entry_with_spaces_around_the_equals_sign() -> None:
@@ -332,7 +352,11 @@ def test_feed_leaves_out_station_ids_and_jingles() -> None:
 def test_a_feed_answer_the_parser_trips_on_is_a_reason(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO):
         answer = checks(entries=ValueError("\u00b2 is no digit")).feed(TRITON)
-    assert answer == {"ok": False, "reason": "The feed answered something tunebox cannot read."}
+    assert answer == {
+        "ok": False,
+        "reason": "The feed answered something tunebox cannot read.",
+        "code": "unreadable",
+    }
     (record,) = [r for r in caplog.records if r.getMessage() == "feed_checked"]
     assert record.__dict__["fields"]["outcome"] == "error"
     assert record.__dict__["fields"]["error"] == "ValueError"
@@ -413,3 +437,61 @@ def test_a_check_refused_with_the_minute_full_is_not_told_one_runs() -> None:
     clock.second.join(5)
     assert first.value.running is False
     assert [b.running for b in clock.refused] == [False]
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (HttpError("x: name lookup failed", unreachable=True), "unreachable"),
+        (HttpError("x: took too long"), "timeout"),
+        (HttpError("x: took longer than 6 s"), "timeout"),
+        (HttpError("x: HTTP 404", 404), "http_404"),
+        (HttpError("x: ICY 200 OK is no status line"), "icy_plain_http"),
+        (HttpError("x: [Errno 111] Connection refused"), "connect_failed"),
+        (SourceError("unexpected answer: no data list"), "feed_error"),
+        (ValueError("anything"), "unreadable"),
+    ],
+)
+def test_every_failure_has_a_fixed_code(error: Exception, code: str) -> None:
+    assert error_code(error) == code
+
+
+def test_a_feed_error_caused_by_the_network_keeps_the_networks_code() -> None:
+    try:
+        try:
+            raise HttpError("x: name lookup failed", unreachable=True)
+        except HttpError as cause:
+            raise SourceError(str(cause)) from cause
+    except SourceError as wrapped:
+        assert error_code(wrapped) == "unreachable"
+
+
+def test_check_stream_answers_with_codes() -> None:
+    def fails(url: str) -> Probe:
+        raise HttpError(f"{url}: HTTP 503", 503)
+
+    answer = check_stream(fails, "https://example.invalid/s")
+    assert answer["ok"] is False and answer["code"] == "http_503"
+    good = check_stream(lambda _u: Probe("audio/aac", {}, ADTS), "https://example.invalid/s")
+    assert good["ok"] is True and "code" not in good
+    plain = check_stream(lambda _u: Probe("audio/aac", {}, ADTS), "http://example.invalid/s")
+    assert plain["ok"] is True and plain["code"] == "plain_http"
+    hls = check_stream(
+        lambda _u: Probe("", {}, b"#EXTM3U\n#EXT-X-VERSION:3\n"), "https://e.invalid/"
+    )
+    assert hls["code"] == "hls"
+
+
+def test_check_feed_answers_with_codes_and_hands_back_a_crash() -> None:
+    def broken(_source: SourceConfig) -> list[RawEntry]:
+        raise KeyError("x")
+
+    answer, crash = check_feed(broken, TRITON)
+    assert answer == {"ok": False, "reason": UNREADABLE, "code": "unreadable"}
+    assert isinstance(crash, KeyError)
+    empty, none = check_feed(lambda _s: [], TRITON)
+    assert empty["code"] == "no_songs" and none is None
+
+
+def test_health_probes_read_less_than_the_panel() -> None:
+    assert HEALTH_PROBE_BYTES == 16_384
