@@ -23,14 +23,16 @@ from tunebox import app
 from tunebox.accounts import Accounts
 from tunebox.app import WEB_ADMIN_DIR, StopSignal, main, open_settings, shut_down
 from tunebox.catalogs import CALL_DEADLINE_S, Catalogs
-from tunebox.config import Config, state_from_toml
+from tunebox.config import Config, SourceConfig, state_from_toml
+from tunebox.health import HealthChecks
 from tunebox.logos import group_key
-from tunebox.netguard import Guard
+from tunebox.netguard import Guard, Probe
 from tunebox.pin import Pin
 from tunebox.runtime import EMPTY, Runtime
 from tunebox.server import TuneboxServer
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError
 from tunebox.store import CoverDecision, Store
+from tunebox.tracks import RawEntry
 from tunebox.usage import Usage
 from tunebox.usagecore import FLUSH_S
 
@@ -491,6 +493,7 @@ def run_main(
         connection.close()
         seen.update({k.lower(): v for k, v in response.getheaders()})
         seen["status"] = str(response.status)
+        seen["threads"] = ",".join(sorted(t.name for t in threading.enumerate()))
 
     monkeypatch.setattr(StopSignal, "wait", load_the_page)
     return main(), seen
@@ -502,6 +505,7 @@ def test_with_the_panel_off_usage_is_never_opened(
     code, seen = run_main(monkeypatch, tmp_path, panel=False)
     assert code == 0
     assert seen["status"] == "200"
+    assert "health" not in seen["threads"].split(",")
     assert "set-cookie" not in seen
     assert not (tmp_path / "usage.db").exists()
 
@@ -511,6 +515,8 @@ def test_with_the_panel_on_usage_records_and_stops_cleanly(
 ) -> None:
     code, seen = run_main(monkeypatch, tmp_path, panel=True)
     assert code == 0
+    assert "health" in seen["threads"].split(",")
+    assert "health" not in [t.name for t in threading.enumerate()]
     assert seen["set-cookie"].startswith("tunebox_device=")
     device = seen["set-cookie"].split(";")[0].split("=")[1]
     # The final round at stop wrote the visit before the file was let go.
@@ -615,27 +621,95 @@ def test_usage_counts_days_in_tz_or_else_utc(
 
 
 @pytest.mark.parametrize(
-    ("given", "warned"),
-    [("Europe/Amsterdam", []), (None, []), ("Nowhere/Atlantis", ["Nowhere/Atlantis"])],
+    ("given", "zone", "name"),
+    [
+        (None, ZoneInfo("UTC"), "UTC"),
+        ("", ZoneInfo("UTC"), "UTC"),
+        ("Europe/Amsterdam", ZoneInfo("Europe/Amsterdam"), "Europe/Amsterdam"),
+    ],
 )
-def test_an_unknown_tz_is_logged_once(
+def test_the_local_zone_is_tz_or_else_utc(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
     given: str | None,
-    warned: list[str],
+    zone: object,
+    name: str,
 ) -> None:
     if given is None:
         monkeypatch.delenv("TZ", raising=False)
     else:
         monkeypatch.setenv("TZ", given)
     caplog.set_level(logging.WARNING, "tunebox")
-    app.open_usage(tmp_path / "usage.db", lambda: None)
+    assert app.local_zone() == (zone, name)
+    assert "usage_zone_unknown" not in caplog.messages
+
+
+def test_an_unknown_zone_is_utc_with_one_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("TZ", "Nowhere/Land")
+    caplog.set_level(logging.WARNING, "tunebox")
+    assert app.local_zone() == (UTC, "UTC")
+    warned = [r for r in caplog.records if r.getMessage() == "usage_zone_unknown"]
+    assert [(r.levelno, r.__dict__["fields"]) for r in warned] == [
+        (logging.WARNING, {"zone": "Nowhere/Land"})
+    ]
+
+
+@pytest.mark.parametrize(
+    ("given", "warned"),
+    [("Europe/Amsterdam", []), (None, []), ("Nowhere/Atlantis", ["Nowhere/Atlantis"])],
+)
+def test_an_unknown_tz_is_logged_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    given: str | None,
+    warned: list[str],
+) -> None:
+    # Usage and the health check both count local days; start-up reads the
+    # zone once for the two.
+    if given is None:
+        monkeypatch.delenv("TZ", raising=False)
+    else:
+        monkeypatch.setenv("TZ", given)
+    seen: list[tuple[int, str, dict[str, object]]] = []
+    real_event = app.event
+
+    def record(logger: logging.Logger, level: int, name: str, **fields: object) -> None:
+        seen.append((level, name, fields))
+        real_event(logger, level, name, **fields)
+
+    monkeypatch.setattr(app, "event", record)
+    assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
     assert [
-        r.__dict__["fields"]["zone"]
-        for r in caplog.records
-        if r.getMessage() == "usage_zone_unknown" and r.levelno == logging.WARNING
+        fields["zone"]
+        for level, name, fields in seen
+        if name == "usage_zone_unknown" and level == logging.WARNING
     ] == warned
+
+
+@pytest.mark.parametrize(("given", "value"), [("0.5", 0.5), ("soon", 3.0), (None, 3.0)])
+def test_a_health_timing_knob_is_taken_and_logged_or_else_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    given: str | None,
+    value: float,
+) -> None:
+    if given is None:
+        monkeypatch.delenv("TUNEBOX_HEALTH_PAUSE_S", raising=False)
+    else:
+        monkeypatch.setenv("TUNEBOX_HEALTH_PAUSE_S", given)
+    caplog.set_level(logging.WARNING, "tunebox")
+    assert app._knob("TUNEBOX_HEALTH_PAUSE_S", 3.0) == value  # pyright: ignore[reportPrivateUsage]
+    logged = [
+        (r.levelno, r.__dict__["fields"])
+        for r in caplog.records
+        if r.getMessage() == "health_timing_overridden"
+    ]
+    taken = given == "0.5"
+    assert logged == (
+        [(logging.WARNING, {"knob": "TUNEBOX_HEALTH_PAUSE_S", "value": 0.5})] if taken else []
+    )
 
 
 @pytest.mark.parametrize(("given", "flush_s"), [("0.5", 0.5), ("soon", FLUSH_S), (None, FLUSH_S)])
@@ -649,6 +723,14 @@ def test_the_flush_knob_is_passed_on_or_else_the_default(
     made = usages_made(monkeypatch)
     assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
     assert [m["flush_s"] for m in made] == [flush_s]
+
+
+def no_probe(_url: str) -> Probe:
+    raise AssertionError("the health worker never started")
+
+
+def no_feed(_source: SourceConfig) -> list[RawEntry]:
+    raise AssertionError("the health worker never started")
 
 
 @pytest.mark.parametrize(("timeout_s", "share_s"), [(0.5, 0.5), (8.0, 3.0)])
@@ -668,6 +750,16 @@ def test_shutdown_joins_usage_first_within_its_share(
             calls.append("runtime")
             super().stop_and_join(deadline)
 
+    class SpyHealth(HealthChecks):
+        def stop_and_join(self, deadline: float) -> None:
+            calls.append("health")
+            super().stop_and_join(deadline)
+
+    class SpyWorker(threading.Thread):
+        def join(self, timeout: float | None = None) -> None:
+            calls.append("worker")
+            super().join(timeout)
+
     settings = Settings(tmp_path / "t.db")
     runtime = SpyRuntime(settings, lambda _config, _carry: pytest.fail("no channels expected"))
     usage = SpyUsage(tmp_path / "usage.db", zone=UTC, zone_name="UTC", free=lambda: None)
@@ -676,7 +768,14 @@ def test_shutdown_joins_usage_first_within_its_share(
     threading.Thread(
         target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
     ).start()
-    shut_down(server, [], Store(None), runtime, settings, usage=usage, timeout_s=timeout_s)
-    assert calls == ["usage", "runtime"]
+    store = Store(None)
+    health = SpyHealth(no_probe, no_feed, store, dict, UTC)
+    worker = SpyWorker(target=lambda: None)
+    worker.start()
+    shut_down(
+        server, [worker], store, runtime, settings, usage=usage, health=health, timeout_s=timeout_s
+    )
+    # Health writes to the store, so it ends before the store closes.
+    assert calls == ["usage", "runtime", "health", "worker"]
     # At most the share from now, and not far under it either.
     assert 0 <= slack[0] < 0.25

@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 import tomllib
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -38,12 +38,15 @@ from tunebox.coverpanel import CoverPanel
 from tunebox.covers import CoverService
 from tunebox.coversearch import CoverSearch
 from tunebox.disk import MIN_FREE
+from tunebox.health import HealthChecks, LiveChannel
+from tunebox.http import HttpError
 from tunebox.imagemeta import strip
 from tunebox.logos import Logos, group_key
 from tunebox.netguard import Probe
 from tunebox.pin import Pin
 from tunebox.rulecheck import MAX_NEW_PATTERNS
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError, state_from_dict
+from tunebox.sources.base import SourceError
 from tunebox.store import Store
 from tunebox.streamcheck import PER_MINUTE, StreamChecks
 from tunebox.tracks import RawEntry
@@ -63,6 +66,14 @@ class Clock:
         return self.now
 
 
+def unreachable_probe(_url: str) -> Probe:
+    raise HttpError("x", unreachable=True)
+
+
+def unreachable_feed(_source: SourceConfig) -> list[RawEntry]:
+    raise SourceError("x")
+
+
 class World:
     def __init__(
         self,
@@ -74,6 +85,8 @@ class World:
         checks: StreamChecks | None = None,
         logos: bool = True,
         covers: bool = False,
+        health: bool = False,
+        probe: Callable[[str], Probe] | None = None,
     ) -> None:
         self.origin = origin
         self.clock = Clock()
@@ -140,6 +153,21 @@ class World:
                 search,
                 clock=self.clock,
             )
+        # The health worker reaches nothing: every probe and feed fails as
+        # unreachable unless a test hands in its own probe.
+        self.health: HealthChecks | None = None
+        self.health_channels: dict[str, LiveChannel] = {}
+        if health:
+            self.health = HealthChecks(
+                probe or unreachable_probe,
+                unreachable_feed,
+                self.cover_store or Store(tmp_path / "t.db"),
+                lambda: self.health_channels,
+                UTC,
+                wall=self.clock,
+                pause_s=0,
+            )
+            self.health.start(self.stop)
         self.admin = Admin(
             self.accounts,
             AdminConfig(True, setup_page, origin),
@@ -154,6 +182,7 @@ class World:
             samples=self.samples,
             usage=self.usage,
             covers=panel,
+            health=self.health,
             clock=self.clock,
             monotonic=self.clock,
             sleep=lambda _s: None,
@@ -170,6 +199,9 @@ class World:
         if self.usage is not None:
             self.stop.set()
             self.usage.stop_and_join(time.monotonic() + 5)
+        if self.health is not None:
+            self.stop.set()
+            self.health.stop_and_join(time.monotonic() + 5)
         self.settings.close()
 
     def call(
