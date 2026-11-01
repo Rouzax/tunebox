@@ -258,6 +258,9 @@ class Route:
     types: tuple[str, ...] = JSON_ONLY
     # A fresh code (re-auth) before the handler runs.
     code: bool = False
+    # False for a page's background poll: it reads the session without
+    # keeping it alive, so an open tab still ends at the idle limit.
+    touch: bool = True
 
     def __post_init__(self) -> None:
         if (self.run is None) == (self.open is None):
@@ -353,7 +356,7 @@ class Admin:
             # not enough.
             ("POST", "stream/check"): Route(self._stream_check, code=True),
             ("POST", "source/check"): Route(self._source_check, code=True),
-            ("GET", "usage/live"): Route(self._using(self._usage_live)),
+            ("GET", "usage/live"): Route(self._using(self._usage_live), touch=False),
             ("GET", "usage/summary"): Route(self._using(self._usage_summary)),
             ("GET", "usage/devices"): Route(self._using(self._usage_devices)),
             ("GET", "usage/device"): Route(self._using(self._usage_device)),
@@ -376,7 +379,7 @@ class Admin:
             # The button reaches only saved addresses and answers fixed reason
             # codes, never another server's words: a session is enough.
             ("GET", "health"): Route(self._checking(self._health_page)),
-            ("GET", "health/count"): Route(self._checking(self._health_count)),
+            ("GET", "health/count"): Route(self._checking(self._health_count), touch=False),
             ("GET", "health/covers"): Route(self._checking(self._health_covers)),
             ("POST", "health/check"): Route(self._checking(self._health_check)),
         }
@@ -490,7 +493,7 @@ class Admin:
         refused = self._screen(request, route)
         if refused is not None:
             return refused
-        session = self._session(request)
+        session = self._session(request, touch=route.touch)
         if session is None:
             return _error(401, "login_required")
         given = request.header("X-Tunebox-CSRF") or ""
@@ -504,9 +507,9 @@ class Admin:
         attributes = f"Path=/admin; Max-Age={max_age}; HttpOnly;{secure} SameSite=Strict"
         return ("Set-Cookie", f"{name}={value}; {attributes}")
 
-    def _session(self, request: Request) -> Session | None:
+    def _session(self, request: Request, *, touch: bool = True) -> Session | None:
         token = request.cookie(self.session_cookie)
-        return self._accounts.session(token) if token else None
+        return self._accounts.session(token, touch=touch) if token else None
 
     def _state(self, request: Request) -> Response:
         session = self._session(request)

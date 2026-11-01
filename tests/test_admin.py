@@ -1805,7 +1805,7 @@ def test_a_large_body_while_sessions_cannot_be_read_is_read_only(
 ) -> None:
     csrf = world.login()
 
-    def unreadable(_token: str) -> None:
+    def unreadable(_token: str, *, touch: bool = True) -> None:
         raise SettingsUnavailable("down")
 
     monkeypatch.setattr(world.accounts, "session", unreadable)
@@ -2091,9 +2091,9 @@ def test_a_session_route_reads_the_session_once(
     calls: list[str] = []
     real = world.accounts.session
 
-    def counted(token: str) -> Session | None:
+    def counted(token: str, *, touch: bool = True) -> Session | None:
         calls.append(token)
-        return real(token)
+        return real(token, touch=touch)
 
     monkeypatch.setattr(world.accounts, "session", counted)
     assert world.call("GET", "/admin/api/account").status == 200
@@ -2828,6 +2828,16 @@ def test_reads_answer_503_while_the_store_is_unavailable(
     live = usage_world.call("GET", "/admin/api/usage/live")
     assert live.status == 200
     assert json_of(live)["saved"] is True
+
+
+def test_the_live_poll_does_not_keep_the_session_alive(usage_world: World) -> None:
+    usage_world.login()
+    answers: list[int] = []
+    for _ in range(31):
+        usage_world.clock.now += 60
+        answers.append(usage_world.call("GET", "/admin/api/usage/live").status)
+    assert answers[0] == 200 and answers[-1] == 401
+    assert usage_world.call("GET", "/admin/api/config").status == 401
 
 
 def test_live_answers_from_memory_while_the_store_is_unavailable(

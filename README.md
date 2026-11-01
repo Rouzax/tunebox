@@ -643,6 +643,8 @@ The page has three parts:
 
 - **Now**: who is listening, to which station and stream, and for how long,
   refreshed every 10 seconds; when nobody is, the last session that ended.
+  The refresh does not keep you signed in: after 30 minutes without using
+  the panel you are asked to sign in again.
 - **Over time**: listening hours and visits per day (7 or 30 days) or per
   month (12 months, All), the top stations and streams, browsers and
   systems, and the most listeners at once. Days are local days in the time
@@ -823,7 +825,9 @@ page also shows when the station last changed song and how many of its
 songs of the last 30 days have no image (see [Covers](#covers)).
 
 The **Health** menu entry shows the number of broken stations, for example
-"Health (2)", so you notice without opening the page. The log gets one
+"Health (2)", so you notice without opening the page. It is updated every
+minute but, like the Usage page's Now view, does not keep you signed in;
+after you are signed out it waits until you open a page. The log gets one
 `health_failing` warning when something starts failing and one
 `health_recovered` line when it works again, not one every day.
 

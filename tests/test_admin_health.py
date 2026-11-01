@@ -145,3 +145,21 @@ def test_no_health_means_not_found(tmp_path: Path, method: str, path: str) -> No
     answer = plain.call(method, f"/admin/api/{path}", {} if method == "POST" else None, csrf=csrf)
     assert answer.status == 404 and json_of(answer)["error"] == "not_found"
     plain.close()
+
+
+def test_the_menu_count_does_not_keep_the_session_alive(world: World) -> None:
+    world.login()
+    answers: list[int] = []
+    for _ in range(31):
+        world.clock.now += 60
+        answers.append(world.call("GET", "/admin/api/health/count").status)
+    assert answers[0] == 200 and answers[-1] == 401
+    assert world.call("GET", "/admin/api/config").status == 401
+
+
+def test_a_page_request_still_keeps_the_session_alive(world: World) -> None:
+    world.login()
+    for _ in range(31):
+        world.clock.now += 60
+        assert world.call("GET", "/admin/api/health").status == 200
+    assert world.call("GET", "/admin/api/config").status == 200

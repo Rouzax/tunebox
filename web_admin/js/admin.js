@@ -396,12 +396,17 @@ function route() {
 }
 
 const HEALTH_EVERY_MS = 60000;
+// Set by a 401: the timer stops asking once the session has ended, so an
+// open tab does not keep reaching the server; the next page shown asks
+// again.
+let healthLoggedOut = false;
 
 // The menu's count of broken stations. Through call, not ctx.request: a
 // count must never send the owner to the login form, and any answer but a
 // count leaves the menu as it is.
 async function askHealth() {
     const {status, data} = await call('GET', 'health/count');
+    healthLoggedOut = status === 401;
     if (status !== 200) {
         return;
     }
@@ -417,7 +422,7 @@ function refreshHealth() {
 ctx.healthChanged = refreshHealth;
 
 setInterval(() => {
-    if (!document.hidden && ctx.config) {
+    if (!document.hidden && ctx.config && !healthLoggedOut) {
         refreshHealth();
     }
 }, HEALTH_EVERY_MS);
