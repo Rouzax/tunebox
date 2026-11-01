@@ -211,19 +211,28 @@ open the player with `?lab=1` added to its address (for example
 then runs on a test signal the page makes itself: no stream is needed and
 nothing comes out of the speakers (the play button is off in lab mode).
 The bar at the top shows the style, the frame rate the browser manages,
-and buttons to step through the styles (**Previous**, **Next**) and to
-switch **Low power** on and off.
+and buttons to step through the styles (**Previous**, **Next**), to
+switch **Low power** on and off, and to hold the cover glow still
+(**Still glow**; normally it swells with the bass).
 
-**Run test** shows every style for 10 seconds in normal quality and 10 in
-low power, about 4 minutes in all; leave the page in front meanwhile. It
-ends with a table and a QR code. Per style and quality the table gives the
-page's average and worst frame rate (the slowest second), and for the
-spectrum styles also how often the visualizer itself drew: low power
-draws those at most 30 times a second, so a low-power row can read "page
-60, draws 30". The QR code holds all of it, with what the browser reports
+**Run test** shows every style for 10 seconds in each of three modes:
+normal, low power, and normal with the glow held still. It starts with
+**Off**, the page with no visualizer, as the baseline. That takes about
+6 minutes; leave the page in front meanwhile. A style well below Off is
+costing frames; if it recovers with the glow held still, the glow is the
+cost, not the style.
+
+The test ends with a table and a QR code. Per style and mode the table
+gives the page's average and worst frame rate (the slowest second), and
+for the spectrum styles also how often the visualizer itself drew: low
+power draws those at most 30 times a second, so a low-power row can read
+"page 60, draws 30". The QR code holds the same numbers rounded to whole
+frames, with the screen and window size and what the browser reports
 about its graphics, as compact JSON. Photograph the QR code and read it
-with any QR app to get the exact numbers as text. **Stop test** stops at
-once and shows the styles measured so far.
+with any QR app to get the numbers as text. A window shrunk by a split
+screen draws fewer pixels than the full screen, so run the test in the
+layout you want numbers for. **Stop test** stops at once and shows the
+styles measured so far.
 
 Lab mode saves nothing: the visualizer style, station and other choices
 stay as they were for normal use. The results stay on the screen and are
