@@ -39,6 +39,9 @@ STARTUP_STALE_S = 86_400.0
 # crash loop never checks every station on each start.
 STARTUP_QUIET_S = 21_600.0
 NETWORK_RETRY_S = 1800.0
+# Between the first pass and the second attempts: a short outage of
+# tunebox's own connection during the first pass is over by then.
+RETRY_DELAY_S = 600.0
 NETWORK_RETRIES = 3
 WAIT_S = 60.0
 # Before the morning drive, and outside the 02:00-03:00 hours in which most
@@ -277,6 +280,7 @@ class HealthChecks:
         pause_s: float = ITEM_PAUSE_S,
         start_delay_s: float = START_DELAY_S,
         retry_wait_s: float = WAIT_S,
+        retry_delay_s: float = RETRY_DELAY_S,
     ) -> None:
         self._probe = probe
         self._feed = feed
@@ -287,6 +291,7 @@ class HealthChecks:
         self._pause_s = pause_s
         self._start_delay_s = start_delay_s
         self._retry_wait_s = retry_wait_s
+        self._retry_delay_s = retry_delay_s
         self._lock = threading.Lock()
         self._wake = threading.Event()
         # A press stays set until its run begins, so the gap between the
@@ -447,8 +452,11 @@ class HealthChecks:
                 results.append(self._check(item, crashed))
                 self._set_progress(done=index + 1)
             last_at = list(first_at)
-            # A second attempt, so one dropped connection is no failure.
+            # A second attempt after RETRY_DELAY_S, so one dropped connection
+            # or a short outage of tunebox's own network is no failure.
             failed = [index for index, result in enumerate(results) if not result.ok]
+            if failed and stop.wait(self._retry_delay_s):
+                return stopped
             self._set_progress(total=items + len(failed))
             for done, index in enumerate(failed, start=items):
                 if self._paused(stop, done):

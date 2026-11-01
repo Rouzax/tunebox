@@ -797,13 +797,14 @@ station that is switched on: it connects to each of its streams and reads a
 little of the audio, and it asks its now-playing feed for the latest songs.
 It checks one thing at a time, with a short pause in between, so a full
 check takes about 10 minutes for 50 stations, and up to 30 when some hosts
-are slow to answer. A failed check is tried once more at the end of the
-run before it counts. tunebox also checks once 5 minutes after it starts,
-when the last check finished more than a day ago and no check started in
-the last 6 hours (so a container that keeps restarting does not check every
-station each time). **Check all now** starts a full check at once; after a
-check you can start the next one 5 minutes later. Switched-off stations are
-not checked.
+are slow to answer. A failed check is tried once more 10 minutes after the
+first round, so a short outage of tunebox's own connection does not count; a
+run with failures therefore takes about 10 minutes longer. tunebox also
+checks once 5 minutes after it starts, when the last check finished more
+than a day ago and no check started in the last 6 hours (so a container that
+keeps restarting does not check every station each time). **Check all now**
+starts a full check at once; after a check you can start the next one 5
+minutes later. Switched-off stations are not checked.
 
 Each station gets a status:
 

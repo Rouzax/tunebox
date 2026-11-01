@@ -166,6 +166,7 @@ class World:
                 UTC,
                 wall=self.clock,
                 pause_s=0,
+                retry_delay_s=0,
             )
             self.health.start(self.stop)
         self.admin = Admin(

@@ -29,7 +29,7 @@ from tunebox.coverpanel import CoverPanel
 from tunebox.covers import CoverService
 from tunebox.coversearch import CoverSearch
 from tunebox.disk import free_bytes
-from tunebox.health import ITEM_PAUSE_S, START_DELAY_S, HealthChecks
+from tunebox.health import ITEM_PAUSE_S, RETRY_DELAY_S, START_DELAY_S, HealthChecks
 from tunebox.logos import Logos, group_key
 from tunebox.logs import add_file, configure, event
 from tunebox.netguard import Guard
@@ -178,6 +178,7 @@ def main() -> int:
             zone[0],
             pause_s=_knob("TUNEBOX_HEALTH_PAUSE_S", ITEM_PAUSE_S),
             start_delay_s=_knob("TUNEBOX_HEALTH_START_S", START_DELAY_S),
+            retry_delay_s=_knob("TUNEBOX_HEALTH_RETRY_S", RETRY_DELAY_S),
         )
         cover_panel = CoverPanel(
             fixes, covers, store, cover_files, blobs, CoverSearch(catalogs, accounts.server_key)
@@ -304,7 +305,7 @@ def local_zone() -> tuple[tzinfo, str]:
 
 def _knob(name: str, default: float) -> float:
     """A timing knob for the admin browser check, which cannot wait out a
-    whole health run or the start-up delay."""
+    whole health run, the start-up delay or the retry delay."""
     raw = os.environ.get(name)
     if raw is None:
         return default

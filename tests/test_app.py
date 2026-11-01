@@ -24,7 +24,7 @@ from tunebox.accounts import Accounts
 from tunebox.app import WEB_ADMIN_DIR, StopSignal, main, open_settings, shut_down
 from tunebox.catalogs import CALL_DEADLINE_S, Catalogs
 from tunebox.config import Config, SourceConfig, state_from_toml
-from tunebox.health import HealthChecks
+from tunebox.health import RETRY_DELAY_S, HealthChecks
 from tunebox.logos import group_key
 from tunebox.netguard import Guard, Probe
 from tunebox.pin import Pin
@@ -723,6 +723,26 @@ def test_the_flush_knob_is_passed_on_or_else_the_default(
     made = usages_made(monkeypatch)
     assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
     assert [m["flush_s"] for m in made] == [flush_s]
+
+
+@pytest.mark.parametrize(("given", "delay_s"), [("0.1", 0.1), (None, RETRY_DELAY_S)])
+def test_the_retry_delay_knob_is_passed_on_or_else_the_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, given: str | None, delay_s: float
+) -> None:
+    if given is None:
+        monkeypatch.delenv("TUNEBOX_HEALTH_RETRY_S", raising=False)
+    else:
+        monkeypatch.setenv("TUNEBOX_HEALTH_RETRY_S", given)
+    made: list[dict[str, Any]] = []
+    real = app.HealthChecks
+
+    def recording(*args: Any, **kwargs: Any) -> HealthChecks:
+        made.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(app, "HealthChecks", recording)
+    assert run_main(monkeypatch, tmp_path, panel=True)[0] == 0
+    assert [m["retry_delay_s"] for m in made] == [delay_s]
 
 
 def no_probe(_url: str) -> Probe:

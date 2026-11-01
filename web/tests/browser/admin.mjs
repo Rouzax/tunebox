@@ -310,6 +310,7 @@ async function startTunebox(folder, port, streamUrl, setup = false, catalogueUrl
             // so only the button starts one.
             TUNEBOX_HEALTH_PAUSE_S: '0.05',
             TUNEBOX_HEALTH_START_S: '86400',
+            TUNEBOX_HEALTH_RETRY_S: '0.1',
         }, catalogueUrl ? {TUNEBOX_CATALOGS: catalogueUrl} : {}),
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,

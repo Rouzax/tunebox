@@ -99,6 +99,7 @@ def make(
         UTC,
         wall=clock or Clock(),
         pause_s=0.0,
+        retry_delay_s=0.0,
     )
 
 
@@ -200,6 +201,106 @@ def test_a_recovery_logs_once(store: Store, caplog: pytest.LogCaptureFixture) ->
     assert recovered[0].levelno == logging.INFO
     assert fields(recovered[0]) == {"channel": "a", "item": "stream:Default", "failing_s": 3600}
     assert events(caplog, "health_failing") == []
+
+
+class Outage(Net):
+    """Calls 60 onwards fail to connect until the run waits for its retry
+    delay: a short outage of tunebox's own network during the first pass."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+        self.over = False
+
+    def _down(self) -> bool:
+        self.calls += 1
+        return self.calls >= 60 and not self.over
+
+    def probe(self, url: str) -> Probe:
+        if self._down():
+            self.asked.append(url)
+            raise HttpError("x: took too long")
+        return super().probe(url)
+
+    def feed(self, source: SourceConfig) -> list[RawEntry]:
+        if self._down():
+            self.asked.append(f"feed:{source.settings['mount']}")
+            raise SourceError("x") from HttpError("x: name lookup failed", unreachable=True)
+        return super().feed(source)
+
+
+class Waits(threading.Event):
+    """A stop event whose waits return at once and are recorded; a wait as
+    long as the retry delay ends the outage."""
+
+    def __init__(self, net: Outage | None = None, stop_on: float | None = None) -> None:
+        super().__init__()
+        self.net = net
+        self.stop_on = stop_on
+        self.waited: list[float] = []
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.waited.append(timeout or 0.0)
+        if timeout == self.stop_on:
+            self.set()
+        if self.net is not None and timeout == RETRY:
+            self.net.over = True
+        return self.is_set()
+
+
+RETRY = 42.0
+
+
+def delayed(store: Store, net: Net, channels: Mapping[str, LiveChannel]) -> HealthChecks:
+    return HealthChecks(
+        net.probe,
+        net.feed,
+        store,
+        lambda: channels,
+        UTC,
+        wall=Clock(),
+        pause_s=0.0,
+        retry_delay_s=RETRY,
+    )
+
+
+def test_an_outage_during_the_first_pass_is_over_by_the_retry(store: Store) -> None:
+    net = Outage()
+    checks = delayed(store, net, stations(*[f"s{i:02}" for i in range(50)]))
+    stop = Waits(net)
+    result = checks.run_once("daily", stop)
+    assert stop.waited.count(RETRY) == 1
+    assert (result.outcome, result.failing) == ("ok", 0)
+    assert all(row.ok for row in store.health_rows() or [])
+
+
+def test_a_dead_station_still_fails_after_the_retry_delay(store: Store) -> None:
+    net = Net()
+    net.streams["https://example.invalid/b"] = HttpError("x: took too long")
+    net.feeds["b"] = SourceError("x")
+    checks = delayed(store, net, stations("a", "b", "c", "d", "e"))
+    stop = Waits()
+    result = checks.run_once("daily", stop)
+    assert stop.waited.count(RETRY) == 1
+    assert (result.outcome, result.failing) == ("ok", 2)
+    failing = {(r.channel, r.item) for r in store.health_rows() or [] if not r.ok}
+    assert failing == {("b", "stream:Default"), ("b", "feed")}
+
+
+def test_no_failure_means_no_retry_delay(store: Store) -> None:
+    stop = Waits()
+    assert delayed(store, Net(), stations("a")).run_once("daily", stop).outcome == "ok"
+    assert RETRY not in stop.waited
+
+
+def test_a_stop_during_the_retry_delay_ends_the_run(store: Store) -> None:
+    net = Net()
+    net.streams["https://example.invalid/a"] = HttpError("x: HTTP 404", 404)
+    stop = Waits(stop_on=RETRY)
+    result = delayed(store, net, stations("a")).run_once("daily", stop)
+    assert result.outcome == "stopped"
+    assert net.asked.count("https://example.invalid/a") == 1
+    assert store.health_rows() == []
 
 
 def test_tunebox_offline_changes_nothing(store: Store, caplog: pytest.LogCaptureFixture) -> None:
@@ -331,7 +432,14 @@ def test_a_stop_at_any_point_writes_nothing_more(
 
     stop.clear()
     down = HealthChecks(
-        net.probe, feed_stopping, store, lambda: stations("a"), UTC, wall=Clock(), pause_s=0.0
+        net.probe,
+        feed_stopping,
+        store,
+        lambda: stations("a"),
+        UTC,
+        wall=Clock(),
+        pause_s=0.0,
+        retry_delay_s=0.0,
     )
     assert down.run_once("daily", stop).outcome == "stopped"
     assert store.health_run().outcome is None
