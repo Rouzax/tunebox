@@ -12,7 +12,6 @@ const STOPPED = 'The health check is not running; restart tunebox.';
 
 // A station reason; name is the stream it is about.
 const REASONS = {
-    not_checked: () => 'Not checked yet',
     streams_failing: () => 'No stream works',
     stream_failing: (name) => `${name} does not work`,
     plain_http: (name) => `${name} plays over plain http, which browsers block on the player's https page`,
@@ -49,6 +48,12 @@ function capital(text) {
 }
 
 // item is the station's item the reason names, or null.
+// Each item line already says "Not checked yet", so the station's list
+// leaves those reasons out rather than repeating them once per item.
+export function shownReasons(reasons) {
+    return reasons.filter((reason) => reason.code !== 'not_checked');
+}
+
 export function reasonText(reason, item) {
     const text = REASONS[reason.code];
     return text ? text(item ? item.name : reason.item) : reason.code;
@@ -117,13 +122,14 @@ function coversLine(counts, id) {
 function stationNode(station, counts, nowMs) {
     const items = new Map(station.items.map((item) => [item.item, item]));
     const last = station.live.last_change;
+    const reasons = shownReasons(station.reasons);
     return el('li', {class: `health-station ${station.status}`},
         el('div', {class: 'health-head'},
             el('strong', null, station.name),
             el('span', {class: 'health-status'},
                 icon(station.status === 'ok' ? 'check_circle' : 'warning'), ' ', STATUS[station.status] || station.status)),
-        station.reasons.length
-            ? el('ul', {class: 'health-reasons'}, station.reasons.map((reason) => el('li', null,
+        reasons.length
+            ? el('ul', {class: 'health-reasons'}, reasons.map((reason) => el('li', null,
                 reasonText(reason, reason.item ? items.get(reason.item) || null : null))))
             : null,
         el('ul', {class: 'health-items hint'}, station.items.map((item) => el('li', null,

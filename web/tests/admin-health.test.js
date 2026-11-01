@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {itemLine, menuText, progressText, reasonText, retryText, runLine} from '../../web_admin/js/health.js';
+import {itemLine, menuText, progressText, reasonText, retryText, runLine, shownReasons} from '../../web_admin/js/health.js';
 
 test('station reasons read as sentences', () => {
     assert.equal(reasonText({code: 'streams_failing', item: null}, null), 'No stream works');
     assert.equal(reasonText({code: 'stream_failing', item: 'stream:MP3'}, {name: 'MP3'}), 'MP3 does not work');
     assert.equal(reasonText({code: 'stuck', item: null}, null), 'No new song for more than 2 hours');
     assert.equal(reasonText({code: 'something_new', item: null}, null), 'something_new');
+});
+
+test('not checked yet is left to the item lines', () => {
+    const reasons = [
+        {code: 'not_checked', item: 'stream:Default'},
+        {code: 'feed_failing', item: 'feed'},
+        {code: 'not_checked', item: 'stream:MP3'},
+    ];
+    assert.deepEqual(shownReasons(reasons), [{code: 'feed_failing', item: 'feed'}]);
 });
 
 test('an item line says what works or since when it fails', () => {

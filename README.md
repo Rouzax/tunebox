@@ -797,8 +797,8 @@ It checks one thing at a time, with a short pause in between, so a full
 check takes about 10 minutes for 50 stations, and up to 30 when some hosts
 are slow to answer. A failed check is tried once more at the end of the
 run before it counts. tunebox also checks once 5 minutes after it starts,
-when the last full check is more than a day old and no check started in the
-last 6 hours (so a container that keeps restarting does not check every
+when the last check finished more than a day ago and no check started in
+the last 6 hours (so a container that keeps restarting does not check every
 station each time). **Check all now** starts a full check at once; after a
 check you can start the next one 5 minutes later. Switched-off stations are
 not checked.
@@ -1098,7 +1098,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | A station shows only its name, no song | Its feed answered slowly or not at all when you opened it (tunebox does not show a song it cannot confirm is on now). | Wait for the next update (10 seconds). If it stays empty, `/healthz` asked on the host itself shows `stale_since` for that station (see [HTTP API](#http-api)). |
 | PawTunes shows nothing new | PawTunes cannot reach the URL. | Open the same `/api/pawtunes/<id>` address in a browser from the PawTunes machine; you should see the current song. |
 | The Health page shows a station as Broken with "cannot be reached" | The station's stream address moved or its server is down. The same words appear for an address tunebox may not fetch: a name that does not resolve, or an address on the home network. | Open the station, use **Check stream** on its address, and find the new address on the station's website. |
-| `health_network_down` in the log | During the daily check, tunebox could not connect to any station: its own internet connection or name lookup was down. | Nothing, if it passes on the next try 30 minutes later. Otherwise check the container's network and DNS. |
+| `health_network_down` in the log | During a check, tunebox could not connect to nearly any station: its own internet connection or name lookup was down. | Nothing, if it passes on the next try 30 minutes later. Otherwise check the container's network and DNS. |
 | The Health page says "The health check is not running; restart tunebox." | The health check's thread has ended. That normally happens only while tunebox shuts down. | Restart tunebox. If the message comes back, report the log lines from just before it. |
 | `health_check_crashed` in the log, again and again | A check run fails on an error in tunebox itself. The page keeps showing the results of the last run that finished. | Report the log lines around the error. |
 
