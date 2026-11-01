@@ -1,0 +1,150 @@
+/* The ?lab=1 overlay, loaded only by lab.js. Text is large enough to read
+   in a photo of the car's screen; the bar stays short so the visualizer
+   shows under it. */
+.tunebox .lab {
+    position:       fixed;
+    z-index:        97;
+    top:            .5rem;
+    left:           .5rem;
+    right:          .5rem;
+    display:        flex;
+    flex-direction: column;
+    gap:            .4rem;
+    padding:        .5rem .6rem;
+    border-radius:  .4rem;
+    color:          #fff;
+    background:     rgba(0, 0, 0, .6);
+    font-size:      1.1rem;
+    line-height:    1.3;
+}
+
+.tunebox .lab-status {
+    display:   flex;
+    flex-wrap: wrap;
+    gap:       .2rem 1rem;
+    align-items: baseline;
+}
+
+.tunebox .lab-style {
+    font-weight: 600;
+    font-size:   1.4rem;
+}
+
+.tunebox .lab-fps {
+    font-size:            1.4rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.tunebox .lab-note {
+    opacity: .8;
+}
+
+.tunebox .lab-buttons {
+    display:   flex;
+    flex-wrap: wrap;
+    gap:       .4rem;
+}
+
+/* Big enough for a finger on the car's screen. */
+.tunebox .lab-button {
+    min-height:    2.75rem;
+    padding:       .4rem .9rem;
+    border:        1px solid rgba(255, 255, 255, .6);
+    border-radius: .3rem;
+    color:         #fff;
+    background:    rgba(255, 255, 255, .08);
+    font:          inherit;
+    cursor:        pointer;
+}
+
+.tunebox .lab-button:disabled {
+    opacity: .4;
+    cursor:  default;
+}
+
+.tunebox .lab-button[aria-pressed="true"] {
+    color:      #011a35;
+    background: #fff;
+}
+
+.tunebox.keyboard .lab-button:focus {
+    outline:        3px solid #fff;
+    outline-offset: 2px;
+}
+
+/* Over the player, QR code and table side by side where the window is wide
+   enough, so one photo takes both. */
+.tunebox .lab-results {
+    position:        fixed;
+    z-index:         97;
+    top:             0;
+    right:           0;
+    bottom:          0;
+    left:            0;
+    display:         flex;
+    flex-wrap:       wrap;
+    align-items:     flex-start;
+    justify-content: center;
+    gap:             1rem;
+    padding:         1rem;
+    overflow:        auto;
+    color:           #fff;
+    background:      #011a35;
+}
+
+.tunebox .lab-results[hidden] {
+    display: none;
+}
+
+.tunebox .lab-qr {
+    flex: 0 0 auto;
+}
+
+.tunebox .lab-qr svg {
+    display: block;
+    width:   min(90vw, 85vh);
+    height:  auto;
+}
+
+.tunebox .lab-results-text {
+    flex:      1 1 18rem;
+    max-width: 40rem;
+}
+
+.tunebox .lab-env {
+    margin:     0 0 .5rem;
+    word-break: break-word;
+}
+
+.tunebox .lab-table {
+    border-collapse: collapse;
+    font-size:       1rem;
+}
+
+.tunebox .lab-table th,
+.tunebox .lab-table td {
+    padding:    .1rem .8rem .1rem 0;
+    text-align: left;
+}
+
+.tunebox .lab-table td:nth-child(n+3) {
+    text-align:           right;
+    font-variant-numeric: tabular-nums;
+}
+
+.tunebox .lab-close {
+    margin-top: .8rem;
+}
+
+.tunebox .lab-caption {
+    caption-side: bottom;
+    padding-top:  .5rem;
+    text-align:   left;
+    font-size:    .85rem;
+    opacity:      .8;
+}
+
+/* Lab mode plays no stream. */
+.tunebox .play:disabled {
+    opacity: .4;
+}

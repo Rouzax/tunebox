@@ -153,7 +153,8 @@ If the container stops right away or the page does not load, see
 Then open the player itself at `http://127.0.0.1:8080/`.
 
 `/check.html` reports what a browser supports: the audio formats it plays,
-its dark mode setting, its window size and the features the player uses.
+its dark mode setting, its window size, the features the player uses and
+its graphics (WebGL, the GPU it reports, cores, memory, screen).
 Open it on the device you want to listen on (a phone, a car) when something
 does not work there.
 
@@ -201,6 +202,32 @@ Good to know:
 - The visualizer starts after your first tap or key press on the page.
 - Opening a station nobody listened to for a while takes a moment: tunebox
   checks its feed first, so what you see is what is on now.
+
+### Check a device with lab mode
+
+To see how well a device, such as the car, draws each visualizer style,
+open the player with `?lab=1` added to its address (for example
+`https://radio.example.com/?lab=1`) and press **Start**. The visualizer
+then runs on a test signal the page makes itself: no stream is needed and
+nothing comes out of the speakers (the play button is off in lab mode).
+The bar at the top shows the style, the frame rate the browser manages,
+and buttons to step through the styles (**Previous**, **Next**) and to
+switch **Low power** on and off.
+
+**Run test** shows every style for 10 seconds in normal quality and 10 in
+low power, about 4 minutes in all; leave the page in front meanwhile. It
+ends with a table and a QR code. Per style and quality the table gives the
+page's average and worst frame rate (the slowest second), and for the
+spectrum styles also how often the visualizer itself drew: low power
+draws those at most 30 times a second, so a low-power row can read "page
+60, draws 30". The QR code holds all of it, with what the browser reports
+about its graphics, as compact JSON. Photograph the QR code and read it
+with any QR app to get the exact numbers as text. **Stop test** stops at
+once and shows the styles measured so far.
+
+Lab mode saves nothing: the visualizer style, station and other choices
+stay as they were for normal use. The results stay on the screen and are
+not sent anywhere.
 
 ## Embed the player on another page
 
@@ -1404,9 +1431,18 @@ and logging out, each checked against `/api/channels`. It needs no network:
 node web/tests/browser/admin.mjs /tmp/admin-shots
 ```
 
+The lab check starts its own tunebox the same way and drives
+[lab mode](#check-a-device-with-lab-mode) with 1-second test windows
+(`?lab=1&labsec=1`): every style, a full test, the QR code checked against
+the results, nothing stored, and the graphics rows on `/check.html`:
+
+```sh
+node web/tests/browser/lab.mjs /tmp/lab-shots
+```
+
 The car's browser is Chromium 120, and the Chrome on a development machine
 is much newer: it accepts CSS and web APIs the car does not have. To run
-either check on Chromium 120, fetch Chrome for Testing 120 once (about
+any of these checks on Chromium 120, fetch Chrome for Testing 120 once (about
 150 MB, checked against a pinned SHA-256 and kept in `~/.cache/tunebox`)
 and pass it as `CHROME`:
 

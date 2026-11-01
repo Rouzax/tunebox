@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {createStorage} from '../js/storage.js';
+import {createStorage, pageOnly} from '../js/storage.js';
 
 function memory() {
     const data = new Map();
@@ -58,5 +58,27 @@ test('blocked or missing storage never throws', () => {
         storage.set('volume', 10);
         assert.equal(storage.get('volume'), null);
         assert.equal(storage.number('volume', 50, 0, 100), 50);
+    }
+});
+
+test('pageOnly reads the stored values and keeps new ones for this page view only', () => {
+    const backend = memory();
+    backend.setItem('tunebox.visualizer', 'off');
+    const storage = createStorage(pageOnly(backend));
+    assert.equal(storage.get('visualizer'), 'off');
+    storage.set('visualizer', 'wave');
+    storage.set('volume', 30);
+    assert.equal(storage.get('visualizer'), 'wave');
+    assert.equal(storage.number('volume', 50, 0, 100), 30);
+    assert.equal(backend.data.get('tunebox.visualizer'), 'off');
+    assert.equal(backend.data.has('tunebox.volume'), false);
+});
+
+test('pageOnly works without a backend and with a blocked one', () => {
+    for (const backend of [null, blocked]) {
+        const storage = createStorage(pageOnly(backend));
+        assert.equal(storage.get('channel'), null);
+        storage.set('channel', 'owr');
+        assert.equal(storage.get('channel'), 'owr');
     }
 });

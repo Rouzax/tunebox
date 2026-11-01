@@ -97,21 +97,43 @@ export function bindVisualizer(app) {
     let gestured = false;
     let available = true;
     let resumeAudio = () => {};
+    // Lab mode (?lab=1): builds the test signal's node in the analyzer's
+    // context; set, the analyzer reads it instead of the stream.
+    let labBuild = null;
+    let powerHeld = false;
+    // Frames audioMotion has drawn, for the lab's draw rate.
+    let draws = 0;
+    // Set by lab mode: told of a style picked from the menu, and whether
+    // the menu may change the style at all (not during a test).
+    let onMenuPick = null;
+    let menuLocked = false;
 
     function ensureMotion() {
-        if (motion || !gestured || !available || !player.element()) {
+        if (motion || !gestured || !available || !(labBuild || player.element())) {
             return motion;
         }
-        motion = new AudioMotionAnalyzer(analyzer, {...BASE, ...RESET, source: player.element()});
+        motion = new AudioMotionAnalyzer(analyzer, {...BASE, ...RESET, source: labBuild ? undefined : player.element()});
+        if (labBuild) {
+            connectLab();
+        }
         motion.registerGradient(ACCENT_GRADIENT, {bgColor: BACKGROUND, colorStops: [accentColor(root)]});
         if (artStops) {
             motion.registerGradient(ART_GRADIENT, {bgColor: BACKGROUND, colorStops: artStops});
         }
-        motion.setOptions({onCanvasDraw: (instance) => app.setBass(instance.getEnergy('bass'))});
+        motion.setOptions({onCanvasDraw: (instance) => {
+            draws += 1;
+            app.setBass(instance.getEnergy('bass'));
+        }});
         resumeAudio = keepAudioRunning(motion.audioCtx, () => player.state() !== 'stopped');
         effects = createEffects(motion, root, app.setBass);
         checkPower();
         return motion;
+    }
+
+    // The lab's signal is for the analysers only: the speakers stay silent.
+    function connectLab() {
+        motion.volume = 0;
+        motion.connectInput(labBuild(motion.audioCtx));
     }
 
     // Moves the canvas to a square around the cover and sizes the ring's
@@ -194,6 +216,10 @@ export function bindVisualizer(app) {
         let slow = 0;
         let fast = 0;
         const check = window.setInterval(() => {
+            if (powerHeld) {
+                window.clearInterval(check);
+                return;
+            }
             if (!motion.isOn || !motion.fps) {
                 return;
             }
@@ -223,9 +249,14 @@ export function bindVisualizer(app) {
         button.textContent = style.label;
         item.appendChild(button);
         button.addEventListener('click', () => {
-            index = i;
-            storage.set('visualizer', style.id);
-            apply();
+            if (!menuLocked) {
+                index = i;
+                storage.set('visualizer', style.id);
+                apply();
+                if (onMenuPick) {
+                    onMenuPick();
+                }
+            }
             app.showPage('main');
         });
         menu.appendChild(item);
@@ -291,4 +322,52 @@ export function bindVisualizer(app) {
         }).observe(root);
     }
     apply();
+
+    // For lab mode only: the gallery's view of the styles. Nothing here is
+    // stored, so the normal player keeps the listener's own choice.
+    return {
+        styles: () => STYLES.map(({id, label}) => ({id, label})),
+        index: () => index,
+        select(i) {
+            index = i;
+            apply();
+        },
+        lowPower: () => lowPower,
+        setLowPower(on) {
+            lowPower = on;
+            if (on) {
+                root.dataset.power = 'low';
+            } else {
+                delete root.dataset.power;
+            }
+            apply();
+        },
+        // Keeps the automatic switch to low power from firing mid-test.
+        holdPower() {
+            powerHeld = true;
+        },
+        // build(audioCtx) returns the AudioNode to analyse in place of the
+        // stream. Call from a user gesture: it may create the AudioContext.
+        connectLab(build) {
+            gestured = true;
+            labBuild = build;
+            // Directly: apply() makes none while the style is Off. Lab mode
+            // plays no stream, so nothing has made one before.
+            ensureMotion();
+            apply();
+            if (motion && motion.audioCtx.state === 'suspended') {
+                motion.audioCtx.resume().catch(() => {});
+            }
+            return Boolean(motion);
+        },
+        // Frames audioMotion has drawn so far, or null while the style is
+        // one it does not draw (Off and the effects.js styles).
+        draws: () => (STYLES[index].effect || STYLES[index].off ? null : draws),
+        onMenuPick(fn) {
+            onMenuPick = fn;
+        },
+        lockMenu(on) {
+            menuLocked = on;
+        },
+    };
 }
