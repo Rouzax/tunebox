@@ -306,6 +306,10 @@ async function startTunebox(folder, port, streamUrl, setup = false, catalogueUrl
             TUNEBOX_CONFIG: join(folder, 'tunebox.toml'),
             LOG_LEVEL: process.env.DEBUG_TUNEBOX_LOG ? 'debug' : 'info',
             TUNEBOX_USAGE_FLUSH_S: '1',
+            // No pause between items, and no check of its own at start-up,
+            // so only the button starts one.
+            TUNEBOX_HEALTH_PAUSE_S: '0.05',
+            TUNEBOX_HEALTH_START_S: '86400',
         }, catalogueUrl ? {TUNEBOX_CATALOGS: catalogueUrl} : {}),
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
@@ -2495,6 +2499,69 @@ async function run() {
                 return `the list holds ${await evaluate(`[...document.querySelectorAll('.cover-row')].map((r) => r.dataset.key).join() || 'nothing'`)}`;
             }
             return null;
+        });
+
+        // The Health page. The host may or may not reach the internet, so
+        // no status is asserted, only that the page follows a run.
+        const healthCount = () => evaluate(`fetch('/admin/api/health/count').then((r) => r.json()).then((d) => JSON.stringify(d))`).then(JSON.parse);
+        const checkAll = () => click('section.health .actions button');
+
+        await step('the Health page lists every enabled station as not checked yet', async () => {
+            const enabled = await evaluate(`fetch('/admin/api/config').then((r) => r.json()).then((c) => c.state.channels.filter((item) => item.enabled !== false).length)`);
+            if (!(await openPage('#health', `document.querySelectorAll('li.health-station').length === ${enabled}`))) {
+                return `the page lists ${await evaluate(`document.querySelectorAll('li.health-station').length`)} of ${enabled} enabled stations`;
+            }
+            const lines = await evaluate(`JSON.stringify([...document.querySelectorAll('li.health-station .health-items li')].map((n) => n.textContent.endsWith('Not checked yet')))`);
+            await noSideways('health');
+            return JSON.parse(lines).every(Boolean) ? null : `an item is already checked: ${lines}`;
+        });
+
+        await step('Check all now runs a check that ends', async () => {
+            await checkAll();
+            // The run may be over before the page looks.
+            if (!(await until(`!document.querySelector('.health-progress').hidden || /^Last check/.test(document.querySelector('section.health p.hint').textContent)`, 60000))) {
+                return 'neither a progress line nor a finished check';
+            }
+            const deadline = Date.now() + 120000;
+            while ((await healthCount()).running) {
+                if (Date.now() > deadline) {
+                    return 'the check still runs after 120 s';
+                }
+                await sleep(500);
+            }
+            return null;
+        });
+
+        await step('the Health page shows when the last check ended', async () => {
+            const shown = `/^Last check/.test(document.querySelector('section.health p.hint').textContent)`;
+            if (!(await until(shown, 15000))) {
+                return `the run line says: ${await evaluate(`document.querySelector('section.health p.hint').textContent`)}`;
+            }
+            const unchecked = await evaluate(`document.querySelectorAll('li.health-station .health-items li').length`);
+            return unchecked > 0 ? null : 'no items listed';
+        });
+
+        await step('a second check too soon is told when to come back', async () => {
+            if (!(await until(`!document.querySelector('section.health .actions button').disabled`, 15000))) {
+                return 'Check all now stays disabled';
+            }
+            await checkAll();
+            const text = `document.querySelector('section.health p.warning')`;
+            if (!(await until(`${text} && !${text}.hidden && ${text}.textContent.includes('You can check again in')`))) {
+                return `the page says: ${await evaluate(`${text} ? ${text}.textContent : 'nothing'`)}`;
+            }
+            return null;
+        });
+
+        await step('the 429 leaves the menu and the station list alone', async () => {
+            const seen = await evaluate(`JSON.stringify({
+                menu: document.querySelector('#shell nav a[href="#health"]').textContent,
+                current: location.hash,
+                stations: document.querySelectorAll('li.health-station').length > 0,
+                login: document.querySelector('#login').hidden,
+            })`);
+            const {menu, current, stations, login} = JSON.parse(seen);
+            return /^Health( \(\d+\))?$/.test(menu) && current === '#health' && stations && login ? null : `after the 429: ${seen}`;
         });
 
         rmSync(transfer, {recursive: true, force: true});

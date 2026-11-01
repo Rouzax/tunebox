@@ -784,6 +784,50 @@ Fixes are stored in `data/tunebox.db`, uploaded covers in `data/blobs/`
 with the uploaded logos, where they count toward the same 100 MB. Fixes
 are not part of the station export, the change history or a restore.
 
+### Health
+
+The **Health** page tells you which stations no longer work, so you do not
+have to read the log to find out. It is part of the admin panel and exists
+only while the panel is on.
+
+Every day at 04:30 (in the time zone set by `TZ`), tunebox checks every
+station that is switched on: it connects to each of its streams and reads a
+little of the audio, and it asks its now-playing feed for the latest songs.
+It checks one thing at a time, with a short pause in between, so a full
+check takes about 10 minutes for 50 stations, and up to 30 when some hosts
+are slow to answer. A failed check is tried once more at the end of the
+run before it counts. tunebox also checks once 5 minutes after it starts,
+when the last full check is more than a day old. **Check all now** starts a
+full check at once; after a check you can start the next one 5 minutes
+later. Switched-off stations are not checked.
+
+Each station gets a status:
+
+- **Broken**: none of its streams works, its feed does not answer, or the
+  feed of a station someone is listening to has failed for more than 10
+  minutes. The player cannot play the station, or shows no song titles.
+- **Warning**: one of several streams does not work, a stream plays over
+  plain http (browsers block it on the player's https page), the feed
+  lists no songs, or the feed answers but has not changed song for more
+  than 2 hours while someone listens (a stuck feed).
+- **OK**: everything checked works. A stream or feed you just added or
+  changed reads "Not checked yet" until the next check.
+
+Below the status, each stream shows its codec and bitrate when it works, or
+why it failed and since when ("Answered HTTP 404, failing for 3 h"). The
+page also shows when the station last changed song and how many of its
+songs of the last 30 days have no image (see [Covers](#covers)).
+
+The **Health** menu entry shows the number of broken stations, for example
+"Health (2)", so you notice without opening the page. The log gets one
+`health_failing` warning when something starts failing and one
+`health_recovered` line when it works again, not one every day.
+
+When tunebox cannot reach the internet itself during a check (every check
+fails to connect at once), it changes no results, logs
+`health_network_down`, and tries again after 30 minutes, at most three
+times.
+
 ## Use it with PawTunes
 
 You only need this while you still use PawTunes. tunebox can supply the
@@ -1049,6 +1093,9 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | No visualizer | It starts after the first tap or key press on the page. A stream served without the cross-origin permission plays without it ("No visualizer for this stream"). | Tap the page once. Nothing to do for such a stream. |
 | A station shows only its name, no song | Its feed answered slowly or not at all when you opened it (tunebox does not show a song it cannot confirm is on now). | Wait for the next update (10 seconds). If it stays empty, `/healthz` asked on the host itself shows `stale_since` for that station (see [HTTP API](#http-api)). |
 | PawTunes shows nothing new | PawTunes cannot reach the URL. | Open the same `/api/pawtunes/<id>` address in a browser from the PawTunes machine; you should see the current song. |
+| The Health page shows a station as Broken with "cannot be reached" | The station's stream address moved or its server is down. | Open the station, use **Check stream** on its address, and find the new address on the station's website. |
+| `health_network_down` in the log | During the daily check, tunebox could not connect to any station: its own internet connection or name lookup was down. | Nothing, if it passes on the next try 30 minutes later. Otherwise check the container's network and DNS. |
+| The Health page says "The health check is not running; restart tunebox." | The health check's thread stopped after an error (`health_check_crashed` in the log). | Restart tunebox, and report the log lines around the error. |
 
 For more detail in the log, set `LOG_LEVEL: info,tunebox.covers=debug` in
 `compose.yaml` and restart.
@@ -1133,7 +1180,7 @@ is reported at startup instead of being ignored.
 | `TUNEBOX_CONFIG` | `/data/tunebox.toml` | Path to the configuration file. |
 | `LOG_LEVEL` | `info` | Log detail: a level, optionally with per-part levels, such as `info,tunebox.covers=debug`. |
 | `TUNEBOX_WEB` | the built-in `web` folder | Folder with the files served at `/`. |
-| `TZ` | | Time zone, as in the compose file: the days the usage statistics count in (UTC when unset or unknown). Log times are always UTC. |
+| `TZ` | | Time zone, as in the compose file: the days the usage statistics count in and the time of the daily station check (UTC when unset or unknown). Log times are always UTC. |
 
 ### HTTP API
 
