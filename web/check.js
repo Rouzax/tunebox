@@ -63,4 +63,20 @@
         storage = 'blocked';
     }
     row('localStorage', storage);
+
+    // From envinfo.js, which the player's ?lab=1 mode reads too.
+    if (window.tuneboxEnvironment) {
+        var environment = window.tuneboxEnvironment();
+        var known = function (value, unit) { return value ? value + unit : 'unknown'; };
+        row('WebGL 1', environment.webgl1 ? 'yes' : 'no');
+        row('WebGL 2', environment.webgl2 ? 'yes' : 'no');
+        row('GPU renderer', environment.renderer || 'unknown');
+        row('GPU vendor', environment.vendor || 'unknown');
+        row('Largest WebGL texture', known(environment.maxTexture, ' px'));
+        row('OffscreenCanvas', environment.offscreen ? 'yes' : 'no');
+        row('CPU cores', known(environment.cores, ''));
+        // Rounded by the browser, and only given to https pages.
+        row('Device memory', known(environment.memory, ' GB'));
+        row('Screen', environment.screen.width + ' x ' + environment.screen.height + ' @' + environment.dpr + 'x');
+    }
 }());

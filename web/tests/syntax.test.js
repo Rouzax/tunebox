@@ -32,8 +32,9 @@ function stripped(source) {
 
 test('player code stays within the ES2019 syntax and API floor', () => {
     const files = readdirSync(JS).filter((name) => name.endsWith('.js')).map((name) => join(JS, name));
-    // The status and check pages run in the car too.
-    files.push(new URL('../status.js', import.meta.url).pathname, new URL('../check.js', import.meta.url).pathname);
+    // The status and check pages, and what they share with the player, run
+    // in the car too.
+    files.push(...['status.js', 'check.js', 'envinfo.js'].map((name) => new URL(`../${name}`, import.meta.url).pathname));
     for (const path of files) {
         const name = path.split('/').pop();
         const source = stripped(readFileSync(path, 'utf8'));
