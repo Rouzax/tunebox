@@ -22,7 +22,7 @@ from tunebox.health import (
 from tunebox.http import HttpError
 from tunebox.netguard import Probe
 from tunebox.sources.base import SourceError
-from tunebox.store import HealthRow, Store, Written
+from tunebox.store import HealthRow, HealthRun, Store, Written
 from tunebox.tracks import RawEntry
 
 ADTS = b"\xff\xf1\x50\x80" + b"\x00" * 60
@@ -523,6 +523,36 @@ def test_the_loop_survives_a_crash(store: Store, caplog: pytest.LogCaptureFixtur
             checks.stop_and_join(time.monotonic() + 2)
     done = [fields(r)["outcome"] for r in events(caplog, "health_check_done")]
     assert done == ["error", "ok"]
+
+
+def test_a_stop_during_a_run_plans_nothing_on_the_closing_store(
+    store: Store, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    net = Net()
+    stop = threading.Event()
+    after_stop: list[str] = []
+
+    def stopping(url: str) -> Probe:
+        stop.set()
+        return net.probe(url)
+
+    read = store.health_run
+
+    def recorded() -> HealthRun:
+        if stop.is_set():
+            after_stop.append("health_run")
+            store.close()
+        return read()
+
+    monkeypatch.setattr(store, "health_run", recorded)
+    checks = make(store, net, stations("a"), probe=stopping)
+    with caplog.at_level(logging.INFO):
+        checks.start(stop)
+        assert checks.request().outcome == "started"
+        checks.stop_and_join(time.monotonic() + 2)
+    assert not checks.alive()
+    assert after_stop == []
+    assert events(caplog, "store_unavailable") == []
 
 
 def test_page_marks_an_old_address_as_not_checked(store: Store) -> None:

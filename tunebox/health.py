@@ -345,6 +345,9 @@ class HealthChecks:
                     trigger: Trigger = "button" if pressed else due[1]
                     with bound("health"):
                         result = self.run_once(trigger, stop)
+                    # After stop the store may already be closed.
+                    if stop.is_set():
+                        return
                     due = self._plan(result.outcome)
                     continue
                 # Woken at least every WAIT_S to read the wall clock again, so
