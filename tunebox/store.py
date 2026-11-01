@@ -86,10 +86,13 @@ _HEALTH_COLUMNS = "channel, item, target, checked_at, ok, reason, codec, kbps, f
 
 
 def _drop_old_health(db: sqlite3.Connection) -> None:
+    # settings.py migrates the same file, so only the store's own versioned
+    # names are its to drop; GLOB, unlike LIKE, is case-sensitive.
     names = [
         row[0]
         for row in db.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'health%'"
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+            " AND (name GLOB 'health_v[0-9]*' OR name GLOB 'health_run_v[0-9]*')"
         )
     ]
     for name in names:

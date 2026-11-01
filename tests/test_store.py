@@ -294,17 +294,21 @@ def test_a_start_keeps_the_last_finish(tmp_path: Path) -> None:
     assert store.health_run() == HealthRun(300, 200, 100, 3, "ok")
 
 
-def test_an_older_health_table_shape_is_dropped(tmp_path: Path) -> None:
+def test_only_the_stores_own_older_health_tables_are_dropped(tmp_path: Path) -> None:
     path = tmp_path / "t.db"
+    others = ("health_ignored", "health_settings", "Healthcheck_mutes", "Health_x")
     with contextlib.closing(sqlite3.connect(path)) as db:
-        db.execute("CREATE TABLE health (channel TEXT, x INTEGER)")
+        for name in (*others, "health_v0", "health_run_v0"):
+            db.execute(f'CREATE TABLE "{name}" (channel TEXT, x INTEGER)')
         db.commit()
     store = Store(path)
     store.health_write(row(True, 1))
     assert len(store.health_rows() or []) == 1
+    store.close()
     with contextlib.closing(sqlite3.connect(path)) as db:
         names = {r[0] for r in db.execute("SELECT name FROM sqlite_master")}
-    assert "health" not in names
+    assert "health_v0" not in names and "health_run_v0" not in names
+    assert set(others) <= names
 
 
 def test_a_failed_health_write_does_not_mark_cover_decisions_unknown(tmp_path: Path) -> None:
