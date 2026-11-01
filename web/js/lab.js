@@ -9,6 +9,9 @@ const SEED = 1;
 // switch costs a few slow frames that say nothing about the style itself.
 const WARMUP_SHARE = 0.1;
 const LIVE_MS = 500;
+// The test's modes per style, in order.
+const MODES = ['normal', 'low', 'still'];
+const MODE_LABELS = {normal: 'normal', low: 'low power', still: 'still glow'};
 // RMS of the meter's samples above this means the signal reaches Web Audio.
 const SIGNAL_RMS = 0.01;
 
@@ -58,7 +61,8 @@ function describeEnvironment(env) {
     if (env.renderer) {
         parts.push(env.renderer);
     }
-    parts.push(`${env.cores || '?'} cores`, `screen ${env.screen.width} x ${env.screen.height} @${env.dpr}x`);
+    parts.push(`${env.cores || '?'} cores`, `screen ${env.screen.width} x ${env.screen.height} @${env.dpr}x`,
+        `window ${window.innerWidth} x ${window.innerHeight}`);
     return parts.join(', ');
 }
 
@@ -86,10 +90,11 @@ export function bindLab(app, viz) {
     const previous = button('lab-previous', 'Previous');
     const next = button('lab-next', 'Next');
     const power = button('lab-power', 'Low power');
+    const still = button('lab-still', 'Still glow');
     const run = button('lab-run', 'Run test');
     const show = button('lab-show', 'Results');
     const buttons = element('div', 'lab-buttons');
-    buttons.append(start, previous, next, power, run, show);
+    buttons.append(start, previous, next, power, still, run, show);
     panel.append(status, buttons);
 
     const results = element('div', 'lab-results');
@@ -99,8 +104,11 @@ export function bindLab(app, viz) {
     const resultsText = element('div', 'lab-results-text');
     const environmentLine = element('p', 'lab-env');
     const table = element('table', 'lab-table');
+    // Scrolls sideways on its own where a narrow window cannot fit it.
+    const tableBox = element('div', 'lab-table-box');
+    tableBox.appendChild(table);
     const close = button('lab-close', 'Close');
-    resultsText.append(environmentLine, table, close);
+    resultsText.append(environmentLine, tableBox, close);
     const qrBox = element('div', 'lab-qr');
     results.append(qrBox, resultsText);
     root.append(panel, results);
@@ -112,6 +120,7 @@ export function bindLab(app, viz) {
     });
 
     let started = false;
+    let stillGlow = false;
     let testing = false;
     let stopRequested = false;
     // Ends the test's current wait at once when Stop test is pressed.
@@ -143,7 +152,8 @@ export function bindLab(app, viz) {
         const style = styles[viz.index()];
         name.textContent = style.label;
         power.setAttribute('aria-pressed', String(viz.lowPower()));
-        for (const control of [previous, next, power]) {
+        still.setAttribute('aria-pressed', String(stillGlow));
+        for (const control of [previous, next, power, still]) {
             control.disabled = !started || testing;
         }
         start.disabled = started;
@@ -237,11 +247,22 @@ export function bindLab(app, viz) {
         viz.setLowPower(!viz.lowPower());
         sync();
     });
+    function holdGlow(on) {
+        stillGlow = on;
+        if (app.holdBass) {
+            app.holdBass(on);
+        }
+    }
+    still.addEventListener('click', () => {
+        holdGlow(!stillGlow);
+        sync();
+    });
 
     function showResults(measured, windowS) {
         const payload = labPayload({
             userAgent: navigator.userAgent,
             screen: {width: window.screen.width, height: window.screen.height},
+            view: {width: window.innerWidth, height: window.innerHeight},
             dpr: window.devicePixelRatio || 1,
             windowS,
             env: environment || {},
@@ -251,7 +272,7 @@ export function bindLab(app, viz) {
             table.removeChild(table.firstChild);
         }
         const caption = element('caption', 'lab-caption',
-            'Frames per second. Page: what the browser managed. Draws: how often the visualizer itself drew (low power draws the spectrum styles at most 30 times a second); a dash means the style keeps no count.');
+            'Frames per second. Page: what the browser managed; Off is the page with no visualizer. Draws: how often the visualizer itself drew (low power draws the spectrum styles at most 30 times a second); a dash means the style keeps no count. Still glow: normal quality with the cover glow not following the bass.');
         table.appendChild(caption);
         const head = element('tr', '');
         for (const title of ['Style', 'Mode', 'Page average', 'Page worst', 'Draws']) {
@@ -262,7 +283,7 @@ export function bindLab(app, viz) {
             const row = element('tr', '');
             row.append(
                 element('td', '', result.label),
-                element('td', '', result.low ? 'low power' : 'normal'),
+                element('td', '', MODE_LABELS[result.mode]),
                 element('td', '', `${result.avg_fps.toFixed(1)}`),
                 element('td', '', `${result.worst_fps.toFixed(1)}`),
                 element('td', '', result.draw_fps === null ? '-' : `${Math.round(result.draw_fps)}`),
@@ -293,11 +314,14 @@ export function bindLab(app, viz) {
         const windowS = testWindowS(new URLSearchParams(window.location.search).get('labsec'));
         const warmupMs = windowS * 1000 * WARMUP_SHARE;
         const measureMs = windowS * 1000 - warmupMs;
-        const kept = {index: viz.index(), low: viz.lowPower()};
+        const kept = {index: viz.index(), low: viz.lowPower(), still: stillGlow};
+        // Off first: the page with no visualizer is what every style is read
+        // against.
+        const order = styles.map((style, i) => ({i, style}));
         const plan = [];
-        styles.forEach((style, i) => {
-            if (style.id !== 'off') {
-                plan.push({i, style, low: false}, {i, style, low: true});
+        order.filter((s) => s.style.id === 'off').concat(order.filter((s) => s.style.id !== 'off')).forEach(({i, style}) => {
+            for (const mode of MODES) {
+                plan.push({i, style, mode});
             }
         });
         const measured = [];
@@ -308,11 +332,12 @@ export function bindLab(app, viz) {
         root.dataset.lab = 'testing';
         sync();
         for (let n = 0; n < plan.length && !stopRequested; n++) {
-            const {i, style, low} = plan[n];
-            viz.setLowPower(low);
+            const {i, style, mode} = plan[n];
+            viz.setLowPower(mode === 'low');
+            holdGlow(mode === 'still');
             viz.select(i);
             sync();
-            note.textContent = `test ${n + 1}/${plan.length}${low ? ', low power' : ''}`;
+            note.textContent = `test ${n + 1}/${plan.length}${mode === 'normal' ? '' : `, ${MODE_LABELS[mode]}`}`;
             await wait(warmupMs);
             recording = [];
             const drawsFrom = viz.draws();
@@ -325,10 +350,11 @@ export function bindLab(app, viz) {
             // A window cut short by Stop test is left out.
             if (!stopRequested) {
                 const drawFps = drawsFrom === null || drawsTo === null ? null : ((drawsTo - drawsFrom) * 1000) / elapsed;
-                measured.push(Object.assign({style: style.id, label: style.label, low, draw_fps: drawFps}, stats));
+                measured.push(Object.assign({style: style.id, label: style.label, mode, draw_fps: drawFps}, stats));
             }
         }
         viz.setLowPower(kept.low);
+        holdGlow(kept.still);
         viz.select(kept.index);
         testing = false;
         viz.lockMenu(false);

@@ -84,7 +84,7 @@
     display:         flex;
     flex-wrap:       wrap;
     align-items:     flex-start;
-    justify-content: center;
+    justify-content: flex-start;
     gap:             1rem;
     padding:         1rem;
     overflow:        auto;
@@ -96,8 +96,12 @@
     display: none;
 }
 
+/* Centred by auto margins, not justify-content: an item wider than a
+   narrow window then overflows to the right, where it scrolls, never past
+   the left edge. */
 .tunebox .lab-qr {
-    flex: 0 0 auto;
+    flex:   0 0 auto;
+    margin: 0 auto;
 }
 
 .tunebox .lab-qr svg {
@@ -108,7 +112,13 @@
 
 .tunebox .lab-results-text {
     flex:      1 1 18rem;
+    min-width: 0;
     max-width: 40rem;
+    margin:    0 auto;
+}
+
+.tunebox .lab-table-box {
+    overflow-x: auto;
 }
 
 .tunebox .lab-env {
@@ -130,6 +140,21 @@
 .tunebox .lab-table td:nth-child(n+3) {
     text-align:           right;
     font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 30rem) {
+    .tunebox .lab-results {
+        padding: 1rem .5rem;
+    }
+
+    .tunebox .lab-table {
+        font-size: .9rem;
+    }
+
+    .tunebox .lab-table th,
+    .tunebox .lab-table td {
+        padding-right: .4rem;
+    }
 }
 
 .tunebox .lab-close {

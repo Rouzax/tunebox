@@ -54,10 +54,23 @@ export function bindPalette(app) {
     root.classList.add('car-ambient-on', 'car-glow-on');
 
     let bass = 0;
+    let held = false;
     // Eased, so single kicks swell rather than flash.
     app.setBass = (level, immediate = false) => {
+        if (held) {
+            return;
+        }
         bass = immediate ? level : bass + (level - bass) * 0.2;
         root.style.setProperty('--bass', bass.toFixed(3));
+    };
+    // Lab mode: the glow stays still, so a test can tell its cost per frame
+    // from the visualizer's own.
+    app.holdBass = (on) => {
+        held = false;
+        if (on) {
+            app.setBass(0, true);
+        }
+        held = on;
     };
 
     const fallback = accentPalette(root);

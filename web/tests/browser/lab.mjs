@@ -1,7 +1,8 @@
 // Browser check of the player's lab mode (?lab=1): the normal player loads
 // none of it; Start feeds the silent test signal to the analysers; Next
-// steps through every visualizer style; a shortened test measures every
-// style in both qualities; the QR code holds exactly the results JSON;
+// steps through every visualizer style; Still glow holds the cover glow;
+// a shortened test measures every style, Off first, in all three modes;
+// the results fit a phone's width; the QR code holds exactly the results JSON;
 // Stop test stops at once; nothing is stored and no stream plays; exactly
 // one AudioContext is made, and only after the Start tap; every WebGL
 // probe context is given back; Start without Web Audio says so;
@@ -298,31 +299,44 @@ async function run() {
         await tap('.lab-power');
         await sleep(200);
 
+        // Still glow holds the cover glow while a style draws.
+        await tap('.lab-still');
+        await sleep(600);
+        const glow = await evaluate(`[document.querySelector('.tunebox').style.getPropertyValue('--bass'),
+            document.querySelector('.lab-still').getAttribute('aria-pressed')].join()`);
+        check(glow === '0.000,true' ? null : `Still glow left the glow at ${glow}`);
+        await tap('.lab-still');
+        await sleep(600);
+        check(await evaluate(`document.querySelector('.lab-still').getAttribute('aria-pressed')`) === 'false'
+            ? null : 'Still glow did not switch off');
+
         await tap('.lab-run');
         if (!(await until(`document.querySelector('.tunebox').dataset.lab === 'done'`, 90000))) {
             throw new LabFailure('the test did not finish');
         }
         const payload = await evaluate(`document.querySelector('.lab-results').dataset.payload`);
         const data = JSON.parse(payload);
-        check(data.v === 2 ? null : `format ${data.v}`);
+        check(data.v === 3 ? null : `format ${data.v}`);
+        check(Array.isArray(data.vw) && data.vw[0] === 960 && data.vw[1] === 560 ? null : `window ${JSON.stringify(data.vw)}`);
         check(data.w === 1 ? null : `window ${data.w} s`);
         check(typeof data.ua === 'string' && data.ua.length ? null : 'no user agent');
         check(data.e && typeof data.e.g1 === 'number' && typeof data.e.g2 === 'number' ? null : `environment ${JSON.stringify(data.e)}`);
-        const tested = STYLES.filter((id) => id !== 'off');
+        // Off first, as the baseline.
+        const tested = ['off'].concat(STYLES.filter((id) => id !== 'off'));
         check(Object.keys(data.r).join() === tested.join() ? null : `results for ${Object.keys(data.r).join()}`);
         for (const id of tested) {
             const row = data.r[id] || [];
-            const pages = [row[0], row[1], row[3], row[4]];
+            const pages = [row[0], row[1], row[3], row[4], row[6], row[7]];
             const draws = [row[2], row[5]];
-            const drawsOk = EFFECTS.includes(id)
+            const drawsOk = id === 'off' || EFFECTS.includes(id)
                 ? draws.every((value) => value === null)
                 // audioMotion draws at most 30 times a second in low power.
                 : draws.every((value) => typeof value === 'number' && value > 0) && row[5] <= 33;
-            check(row.length === 6 && pages.every((value) => typeof value === 'number' && value > 0) && drawsOk
+            check(row.length === 8 && pages.every((value) => typeof value === 'number' && value > 0) && drawsOk
                 ? null : `${id}: ${JSON.stringify(row)}`);
         }
         const rows = await evaluate(`document.querySelectorAll('.lab-table tr').length`);
-        check(rows === tested.length * 2 + 1 ? null : `${rows} table rows`);
+        check(rows === tested.length * 3 + 1 ? null : `${rows} table rows`);
 
         // The code drawn is the code of exactly this payload.
         const drawn = await evaluate(`(() => {
@@ -344,6 +358,21 @@ async function run() {
             ? null : 'the QR code does not hold the results payload');
         check(drawn.visible && drawn.width >= 200 ? null : `QR code shown at ${drawn.width} px`);
         await shoot('lab-results');
+
+        // On a phone the results fit the width: nothing past either edge.
+        await send('Emulation.setDeviceMetricsOverride', {width: 360, height: 780, deviceScaleFactor: 3, mobile: true});
+        await sleep(400);
+        const outside = await evaluate(`(() => {
+            const width = window.innerWidth;
+            return ['.lab-qr svg', '.lab-env', '.lab-table', '.lab-close'].filter((selector) => {
+                const box = document.querySelector(selector).getBoundingClientRect();
+                return box.left < 0 || box.right > width;
+            }).join(', ');
+        })()`);
+        check(outside === '' ? null : `past the edge of a phone: ${outside}`);
+        await shoot('lab-results-phone');
+        await send('Emulation.setDeviceMetricsOverride', {width: 960, height: 560, deviceScaleFactor: 1, mobile: false});
+        await sleep(400);
         check(await evaluate(`document.activeElement === document.querySelector('.lab-close')`) ? null : 'the results did not take the focus');
         await send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
         await send('Input.dispatchKeyEvent', {type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
@@ -359,7 +388,7 @@ async function run() {
         check(await until(`document.querySelector('.tunebox').dataset.lab === 'done'`, 1000)
             ? null : `Stop test took over a second (${await lab()})`);
         const stopped = JSON.parse(await evaluate(`document.querySelector('.lab-results').dataset.payload`));
-        check(Object.keys(stopped.r).length === 1 && stopped.r.wave && stopped.r.wave[3] === null
+        check(Object.keys(stopped.r).length === 1 && stopped.r.off && stopped.r.off[3] === null
             ? null : `after Stop test: ${JSON.stringify(stopped.r)} in ${Date.now() - stopAt} ms`);
         check((await counts()).contexts === 1 ? null : `${(await counts()).contexts} AudioContexts at the end`);
         check((await counts()).losses === data.e.g1 + data.e.g2 ? null : `${(await counts()).losses} WebGL contexts given back`);
