@@ -76,6 +76,11 @@ def test_the_fingerprint_follows_the_source_settings() -> None:
     assert len(a) == 16
 
 
+def test_the_fingerprint_cannot_be_forged_by_a_setting_value() -> None:
+    joined = fingerprint(SourceConfig("triton", {"a": "1\nb=2"}))
+    assert joined != fingerprint(SourceConfig("triton", {"a": "1", "b": "2"}))
+
+
 def test_the_daily_run_is_at_half_past_four_local() -> None:
     start = at("2026-11-01 10:00")
     when, kind = next_run(at("2026-11-01 10:00"), start - 10, start - 5, start - 3600, AMS)

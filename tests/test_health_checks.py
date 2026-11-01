@@ -644,3 +644,53 @@ def test_a_failed_write_still_logs_the_change(
     assert len(events(caplog, "health_failing")) == 1
     [done] = events(caplog, "health_check_done")
     assert done.levelno == logging.WARNING
+
+
+class Unwritable(Store):
+    """A store whose run row never changes, as on a full or read-only disk."""
+
+    def health_run_started(self, now_ms: int) -> None:
+        pass
+
+    def health_run_finished(self, now_ms: int, duration_ms: int, items: int, outcome: str) -> None:
+        pass
+
+
+def test_an_unwritable_run_row_does_not_start_run_after_run(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    net = Net()
+    clock = Clock()
+    store = Unwritable(tmp_path / "tunebox.db")
+
+    def unwritable() -> HealthChecks:
+        return HealthChecks(
+            net.probe,
+            net.feed,
+            store,
+            lambda: stations("a"),
+            UTC,
+            wall=clock,
+            pause_s=0.0,
+            start_delay_s=0.0,
+        )
+
+    checks = unwritable()
+    plan = checks._plan  # pyright: ignore[reportPrivateUsage]
+    assert plan(None) == (clock.now, "startup")
+    checks.run_once("startup", threading.Event())
+    when, kind = plan("ok")
+    assert kind == "daily" and when > clock.now
+    worker = unwritable()
+    stop = threading.Event()
+    with caplog.at_level(logging.INFO):
+        worker.start(stop)
+        try:
+            until(lambda: len(events(caplog, "health_check_done")) == 1)
+            asked = len(net.asked)
+            stop.wait(0.3)
+            assert len(events(caplog, "health_check_done")) == 1
+            assert len(net.asked) == asked
+        finally:
+            stop.set()
+            worker.stop_and_join(time.monotonic() + 2)

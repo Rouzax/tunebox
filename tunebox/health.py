@@ -5,6 +5,7 @@ latest results in the cover store."""
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import threading
@@ -40,8 +41,9 @@ STARTUP_QUIET_S = 21_600.0
 NETWORK_RETRY_S = 1800.0
 NETWORK_RETRIES = 3
 WAIT_S = 60.0
-# Before the morning drive; Dutch clock changes happen at 02:00 and 03:00,
-# so this time exists exactly once every day.
+# Before the morning drive, and outside the 02:00-03:00 hours in which most
+# zones change their clocks, so a daylight-saving day still has exactly one
+# 04:30 in those zones.
 DAILY_AT = daytime(4, 30)
 
 Status = Literal["ok", "warning", "broken"]
@@ -62,7 +64,7 @@ class Judgement:
 
 def fingerprint(source: SourceConfig) -> str:
     """The feed a result belongs to: a changed setting is another feed."""
-    text = "\n".join([source.type, *(f"{k}={v}" for k, v in sorted(source.settings.items()))])
+    text = json.dumps([source.type, sorted(source.settings.items())], ensure_ascii=False)
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
@@ -96,6 +98,14 @@ def next_run(
     if stale and quiet:
         return max(now, process_start + start_delay_s), "startup"
     return _daily_after(now, zone), "daily"
+
+
+def _newer(stored_ms: int | None, kept: float | None) -> float | None:
+    """The later of a stored time (ms) and one kept in memory (s)."""
+    stored = stored_ms / 1000 if stored_ms is not None else None
+    if stored is None or kept is None:
+        return kept if stored is None else stored
+    return max(stored, kept)
 
 
 def judge(
@@ -285,6 +295,11 @@ class HealthChecks:
         self._running = False
         self._progress: dict[str, Any] | None = None
         self._last_end: float | None = None
+        # The run row's times as this process wrote them: when the store
+        # cannot write the row, the plan still sees this process's runs and
+        # does not start the next one at once.
+        self._last_started: float | None = None
+        self._last_finished: float | None = None
         self._retries = 0
         self._thread: threading.Thread | None = None
         self._process_start = wall()
@@ -345,10 +360,12 @@ class HealthChecks:
     def _plan(self, outcome: str | None) -> tuple[float, Trigger]:
         run = self._store.health_run()
         now = self._wall()
+        with self._lock:
+            started, finished = self._last_started, self._last_finished
         when, kind = next_run(
             now,
-            run.last_started_at / 1000 if run.last_started_at is not None else None,
-            run.last_finished_at / 1000 if run.last_finished_at is not None else None,
+            _newer(run.last_started_at, started),
+            _newer(run.last_finished_at, finished),
             self._process_start,
             self._zone,
             self._start_delay_s,
@@ -410,6 +427,8 @@ class HealthChecks:
             stopped = RunResult("stopped", items, 0, skipped, 0)
             if stop.is_set():
                 return stopped
+            with self._lock:
+                self._last_started = started
             self._store.health_run_started(_ms(started))
             before = {(r.channel, r.item): r for r in self._store.health_rows() or []}
             self._set_progress(total=items)
@@ -478,7 +497,10 @@ class HealthChecks:
 
     def _finished(self, clock: float, items: int, outcome: str) -> None:
         duration = round((time.monotonic() - clock) * 1000)
-        self._store.health_run_finished(_ms(self._wall()), duration, items, outcome)
+        finished = self._wall()
+        with self._lock:
+            self._last_finished = finished
+        self._store.health_run_finished(_ms(finished), duration, items, outcome)
 
     def _write(
         self,
