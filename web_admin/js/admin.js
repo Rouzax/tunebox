@@ -6,6 +6,7 @@ import {call, send, setCsrf} from './api.js';
 import {render as renderCovers} from './covers.js';
 import {askCode} from './dom.js';
 import {render as renderEdit} from './edit.js';
+import {menuText, render as renderHealth} from './health.js';
 import {render as renderHistory} from './history.js';
 import {qrMatrix, qrSvg} from './qr.js';
 import {render as renderSettings} from './settings.js';
@@ -382,6 +383,8 @@ function route() {
         renderUsage(view, ctx);
     } else if (name === 'covers') {
         renderCovers(view, ctx);
+    } else if (name === 'health') {
+        renderHealth(view, ctx);
     } else if (name === 'account') {
         renderAccount(view, ctx);
     } else if (name === 'history') {
@@ -389,7 +392,35 @@ function route() {
     } else {
         renderStations(view, ctx);
     }
+    refreshHealth();
 }
+
+const HEALTH_EVERY_MS = 60000;
+
+// The menu's count of broken stations. Through call, not ctx.request: a
+// count must never send the owner to the login form, and any answer but a
+// count leaves the menu as it is.
+async function askHealth() {
+    const {status, data} = await call('GET', 'health/count');
+    if (status !== 200) {
+        return;
+    }
+    const link = document.querySelector('#shell nav a[href="#health"]');
+    link.textContent = menuText(data);
+    link.classList.toggle('has-broken', data.broken > 0);
+}
+
+function refreshHealth() {
+    askHealth().catch(() => {});
+}
+
+ctx.healthChanged = refreshHealth;
+
+setInterval(() => {
+    if (!document.hidden && ctx.config) {
+        refreshHealth();
+    }
+}, HEALTH_EVERY_MS);
 
 window.addEventListener('beforeunload', (event) => {
     if (ctx.unsaved && ctx.unsaved.dirty()) {
