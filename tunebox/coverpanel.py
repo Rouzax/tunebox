@@ -12,7 +12,7 @@ from pathlib import Path
 
 from tunebox.blobs import BlobError, Blobs
 from tunebox.coverfiles import MAX_COVER, CoverFiles, sniff_cover
-from tunebox.coverfix import CoverFixes, Fix, Row, View, is_photo_key, song_list
+from tunebox.coverfix import CoverFixes, Fix, Row, View, is_photo_key, nothing_by_channel, song_list
 from tunebox.covers import CoverService
 from tunebox.coversearch import CoverSearch, SearchKind
 from tunebox.logs import event
@@ -80,6 +80,23 @@ class CoverPanel:
             # The key may hold colons itself; the reader splits at the first.
             "next": f"{listing.next[0]}:{listing.next[1]}" if listing.next else None,
         }
+
+    def nothing_by_channel(self) -> dict[str, int] | None:
+        """The Covers page's No image total per station; None when the song
+        list is unreadable or kept in memory only."""
+        now_ms = round(self._clock() * 1000)
+        try:
+            songs = self._store.heard_songs(now_ms - HEARD_KEEP_MS)
+        except HeardUnreadable:
+            return None
+        if songs is None:
+            return None
+        return nothing_by_channel(
+            songs,
+            {fix.key: fix for fix in self._fixes.all()},
+            self._file_name,
+            self._service.fetch_failure,
+        )
 
     def search(
         self, kind: SearchKind, key: str, artist: str, title: str, text: str

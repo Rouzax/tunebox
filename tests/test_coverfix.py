@@ -21,6 +21,7 @@ from tunebox.coverfix import (
     effective,
     is_artist_photo,
     is_photo_key,
+    nothing_by_channel,
     song_list,
 )
 from tunebox.settings import Settings, SettingsWriteError
@@ -268,6 +269,28 @@ def test_states_of_automatic_answers() -> None:
     assert listed(songs, files={URL_A, URL_B}).totals == Totals(
         songs=6, cover=1, artist=1, nothing=2, fixed=0
     )
+
+
+def test_no_image_counts_per_station_match_the_total() -> None:
+    miss = heard("C", "Miss", NOW_MS - 1, decision(make_track("C", "Miss").key, "miss", None))
+    stored = heard("A", "Cover", NOW_MS - 2, decision(make_track("A", "Cover").key, "cover", URL_A))
+    new = heard("D", "New", NOW_MS - 3)
+    songs = [
+        replace(miss, channels=("owr", "daybreak")),
+        replace(stored, channels=("owr",)),
+        replace(new, channels=("owr",)),
+    ]
+
+    def image(link: str) -> str | None:
+        return f"{name_for(link)}.jpg" if link == URL_A else None
+
+    def failure(_key: str, _value: str) -> str | None:
+        return None
+
+    counts = nothing_by_channel(songs, {}, image, failure)
+    assert counts == {"owr": 1, "daybreak": 1}
+    listing = song_list(songs, {}, image, failure, NOW_MS, "all", "", None)
+    assert listing.totals.nothing == 1
 
 
 @pytest.mark.parametrize(
