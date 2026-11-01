@@ -26,12 +26,20 @@ function browserStorage() {
     }
 }
 
+// Lab mode reads the listener's settings but stores nothing, so a test run
+// leaves the player as it was for normal use.
+function readOnly(backend) {
+    return backend && {getItem: (key) => backend.getItem(key), setItem: () => {}};
+}
+
 const later = (fn, ms) => window.setTimeout(fn, ms);
 const cancel = (id) => window.clearTimeout(id);
 
 async function start(root) {
+    const params = new URLSearchParams(window.location.search);
+    const lab = params.get('lab') === '1';
     const events = createEmitter();
-    const storage = createStorage(browserStorage());
+    const storage = createStorage(lab ? readOnly(browserStorage()) : browserStorage());
     const api = createApi((input, init) => window.fetch(input, init));
     const toast = createToast(root, window);
     const player = createPlayer({
@@ -67,7 +75,6 @@ async function start(root) {
             await askToListen();
         }
     }
-    const params = new URLSearchParams(window.location.search);
     const app = {
         root, events, storage, player, toast, settings,
         channels: listing.channels,
@@ -334,7 +341,12 @@ async function start(root) {
     app.selectChannel(pickChannel(app.channels, params.get('channel'), storage.get('channel'), settings.default_channel));
     // The channel list marks the active channel, so it binds once one is selected.
     bindPages(app);
-    bindVisualizer(app);
+    const visualizer = bindVisualizer(app);
+    if (lab) {
+        // Loaded only here, so the normal player never fetches it.
+        import('./lab.js').then(({bindLab}) => bindLab(app, visualizer));
+        return;
+    }
     // A refused autoplay (no user gesture yet) quietly leaves the play button.
     // play=1 comes from the main window when it hands playback to a small window.
     if (params.get('play') === '1' || (!app.embed && storage.flag('playing'))) {

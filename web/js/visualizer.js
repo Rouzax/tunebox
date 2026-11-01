@@ -97,12 +97,19 @@ export function bindVisualizer(app) {
     let gestured = false;
     let available = true;
     let resumeAudio = () => {};
+    // Lab mode (?lab=1): builds the test signal's node in the analyzer's
+    // context; set, the analyzer reads it instead of the stream.
+    let labBuild = null;
+    let powerHeld = false;
 
     function ensureMotion() {
-        if (motion || !gestured || !available || !player.element()) {
+        if (motion || !gestured || !available || !(labBuild || player.element())) {
             return motion;
         }
-        motion = new AudioMotionAnalyzer(analyzer, {...BASE, ...RESET, source: player.element()});
+        motion = new AudioMotionAnalyzer(analyzer, {...BASE, ...RESET, source: labBuild ? undefined : player.element()});
+        if (labBuild) {
+            connectLab();
+        }
         motion.registerGradient(ACCENT_GRADIENT, {bgColor: BACKGROUND, colorStops: [accentColor(root)]});
         if (artStops) {
             motion.registerGradient(ART_GRADIENT, {bgColor: BACKGROUND, colorStops: artStops});
@@ -112,6 +119,12 @@ export function bindVisualizer(app) {
         effects = createEffects(motion, root, app.setBass);
         checkPower();
         return motion;
+    }
+
+    // The lab's signal is for the analysers only: the speakers stay silent.
+    function connectLab() {
+        motion.volume = 0;
+        motion.connectInput(labBuild(motion.audioCtx));
     }
 
     // Moves the canvas to a square around the cover and sizes the ring's
@@ -194,6 +207,10 @@ export function bindVisualizer(app) {
         let slow = 0;
         let fast = 0;
         const check = window.setInterval(() => {
+            if (powerHeld) {
+                window.clearInterval(check);
+                return;
+            }
             if (!motion.isOn || !motion.fps) {
                 return;
             }
@@ -262,7 +279,8 @@ export function bindVisualizer(app) {
     });
     events.on('audio', ({element, cors}) => {
         available = cors;
-        if (!motion) {
+        // In lab mode a stream plays straight from its element, unanalysed.
+        if (!motion || labBuild) {
             return;
         }
         motion.disconnectInput();
@@ -291,4 +309,49 @@ export function bindVisualizer(app) {
         }).observe(root);
     }
     apply();
+
+    // For lab mode only: the gallery's view of the styles. Nothing here is
+    // stored, so the normal player keeps the listener's own choice.
+    return {
+        styles: () => STYLES.map(({id, label}) => ({id, label})),
+        index: () => index,
+        select(i) {
+            index = i;
+            apply();
+        },
+        lowPower: () => lowPower,
+        setLowPower(on) {
+            lowPower = on;
+            if (on) {
+                root.dataset.power = 'low';
+            } else {
+                delete root.dataset.power;
+            }
+            apply();
+        },
+        // Keeps the automatic switch to low power from firing mid-test.
+        holdPower() {
+            powerHeld = true;
+        },
+        // build(audioCtx) returns the AudioNode to analyse in place of the
+        // stream. Call from a user gesture: it may create the AudioContext.
+        connectLab(build) {
+            gestured = true;
+            available = true;
+            labBuild = build;
+            if (motion) {
+                motion.disconnectInput();
+                connectLab();
+                effects.reconnect();
+            } else {
+                // Directly: apply() makes none while the style is Off.
+                ensureMotion();
+            }
+            apply();
+            if (motion && motion.audioCtx.state === 'suspended') {
+                motion.audioCtx.resume().catch(() => {});
+            }
+            return Boolean(motion);
+        },
+    };
 }
