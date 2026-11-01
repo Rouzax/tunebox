@@ -40,5 +40,8 @@ test('the last run line', () => {
     assert.equal(runLine({last_finished_at: null}, 0), 'Not checked yet. The first check runs 5 minutes after tunebox starts, then daily at 04:30.');
     assert.match(runLine({last_finished_at: 0, duration_ms: 600000, outcome: 'ok', items: 150}, 3600000), /^Last check 1 h ago: 150 items in 10 min\.$/);
     assert.match(runLine({last_finished_at: 0, duration_ms: 1000, outcome: 'network_down', items: 150}, 60000),
-        /^Last check 1 min ago could not reach the internet; tunebox tries again in 30 minutes\.$/);
+        /^Last check 1 min ago could not reach the internet; tunebox tries again later\.$/);
+    const crashed = runLine({last_finished_at: 0, duration_ms: 1000, outcome: 'error', items: 150}, 60000);
+    assert.equal(crashed, 'Last check 1 min ago stopped on an error in tunebox; see the log.');
+    assert.doesNotMatch(crashed, /items in/);
 });

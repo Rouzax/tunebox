@@ -1105,7 +1105,7 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | The Health page shows a station as Broken with "cannot be reached" | The station's stream address moved or its server is down. The same words appear for an address tunebox may not fetch: a name that does not resolve, or an address on the home network. | Open the station, use **Check stream** on its address, and find the new address on the station's website. |
 | `health_network_down` in the log | During a check, tunebox could not connect to nearly any station: its own internet connection or name lookup was down. | Nothing, if it passes on the next try 30 minutes later. Otherwise check the container's network and DNS. |
 | The Health page says "The health check is not running; restart tunebox." | The health check's thread has ended. That normally happens only while tunebox shuts down. | Restart tunebox. If the message comes back, report the log lines from just before it. |
-| `health_check_crashed` in the log, again and again | A check run fails on an error in tunebox itself. The page keeps showing the results of the last run that finished. | Report the log lines around the error. |
+| `health_check_crashed` in the log, again and again | A check run fails on an error in tunebox itself. The Health page says the last check stopped on an error and keeps showing the results of the last run that finished. | Report the log lines around the error. |
 
 For more detail in the log, set `LOG_LEVEL: info,tunebox.covers=debug` in
 `compose.yaml` and restart.

@@ -95,8 +95,13 @@ export function runLine(run, nowMs) {
         return 'Not checked yet. The first check runs 5 minutes after tunebox starts, then daily at 04:30.';
     }
     const ago = duration((nowMs - run.last_finished_at) / 1000);
+    // Whether and when a retry comes depends on the retries left and the
+    // next daily run, which the page does not know.
     if (run.outcome === 'network_down') {
-        return `Last check ${ago} ago could not reach the internet; tunebox tries again in 30 minutes.`;
+        return `Last check ${ago} ago could not reach the internet; tunebox tries again later.`;
+    }
+    if (run.outcome === 'error') {
+        return `Last check ${ago} ago stopped on an error in tunebox; see the log.`;
     }
     return `Last check ${ago} ago: ${run.items} items in ${duration(run.duration_ms / 1000)}.`;
 }
