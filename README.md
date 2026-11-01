@@ -209,21 +209,25 @@ To see how well a device, such as the car, draws each visualizer style,
 open the player with `?lab=1` added to its address (for example
 `https://radio.example.com/?lab=1`) and press **Start**. The visualizer
 then runs on a test signal the page makes itself: no stream is needed and
-nothing comes out of the speakers. The bar at the top shows the style, the
-frame rate the browser manages, and buttons to step through the styles
-(**Previous**, **Next**) and to switch **Low power** on and off.
+nothing comes out of the speakers (the play button is off in lab mode).
+The bar at the top shows the style, the frame rate the browser manages,
+and buttons to step through the styles (**Previous**, **Next**) and to
+switch **Low power** on and off.
 
 **Run test** shows every style for 10 seconds in normal quality and 10 in
 low power, about 4 minutes in all; leave the page in front meanwhile. It
-ends with a table of the average and the worst frame rate (the slowest
-second) per style, and a QR code holding all of it, with what the browser
-reports about its graphics, as compact JSON. Photograph the QR code and
-read it with any QR app to get the exact numbers as text. **Stop test**
-stops after the style being measured and shows what was measured so far.
+ends with a table and a QR code. Per style and quality the table gives the
+page's average and worst frame rate (the slowest second), and for the
+spectrum styles also how often the visualizer itself drew: low power
+draws those at most 30 times a second, so a low-power row can read "page
+60, draws 30". The QR code holds all of it, with what the browser reports
+about its graphics, as compact JSON. Photograph the QR code and read it
+with any QR app to get the exact numbers as text. **Stop test** stops at
+once and shows the styles measured so far.
 
 Lab mode saves nothing: the visualizer style, station and other choices
-stay as they were for normal use, and the results stay on the screen;
-nothing is sent to tunebox.
+stay as they were for normal use. The results stay on the screen and are
+not sent anywhere.
 
 ## Embed the player on another page
 

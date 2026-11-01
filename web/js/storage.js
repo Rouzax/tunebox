@@ -35,3 +35,21 @@ export function createStorage(backend) {
     };
     return storage;
 }
+
+// A backend for lab mode: reads what is stored, keeps changes in memory for
+// this page view, and writes nothing, so normal use finds its settings as
+// they were.
+export function pageOnly(backend) {
+    const changed = new Map();
+    return {
+        getItem(key) {
+            if (changed.has(key)) {
+                return changed.get(key);
+            }
+            return backend ? backend.getItem(key) : null;
+        },
+        setItem(key, value) {
+            changed.set(key, String(value));
+        },
+    };
+}

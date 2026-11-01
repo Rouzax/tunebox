@@ -101,6 +101,12 @@ export function bindVisualizer(app) {
     // context; set, the analyzer reads it instead of the stream.
     let labBuild = null;
     let powerHeld = false;
+    // Frames audioMotion has drawn, for the lab's draw rate.
+    let draws = 0;
+    // Set by lab mode: told of a style picked from the menu, and whether
+    // the menu may change the style at all (not during a test).
+    let onMenuPick = null;
+    let menuLocked = false;
 
     function ensureMotion() {
         if (motion || !gestured || !available || !(labBuild || player.element())) {
@@ -114,7 +120,10 @@ export function bindVisualizer(app) {
         if (artStops) {
             motion.registerGradient(ART_GRADIENT, {bgColor: BACKGROUND, colorStops: artStops});
         }
-        motion.setOptions({onCanvasDraw: (instance) => app.setBass(instance.getEnergy('bass'))});
+        motion.setOptions({onCanvasDraw: (instance) => {
+            draws += 1;
+            app.setBass(instance.getEnergy('bass'));
+        }});
         resumeAudio = keepAudioRunning(motion.audioCtx, () => player.state() !== 'stopped');
         effects = createEffects(motion, root, app.setBass);
         checkPower();
@@ -240,9 +249,14 @@ export function bindVisualizer(app) {
         button.textContent = style.label;
         item.appendChild(button);
         button.addEventListener('click', () => {
-            index = i;
-            storage.set('visualizer', style.id);
-            apply();
+            if (!menuLocked) {
+                index = i;
+                storage.set('visualizer', style.id);
+                apply();
+                if (onMenuPick) {
+                    onMenuPick();
+                }
+            }
             app.showPage('main');
         });
         menu.appendChild(item);
@@ -279,8 +293,7 @@ export function bindVisualizer(app) {
     });
     events.on('audio', ({element, cors}) => {
         available = cors;
-        // In lab mode a stream plays straight from its element, unanalysed.
-        if (!motion || labBuild) {
+        if (!motion) {
             return;
         }
         motion.disconnectInput();
@@ -337,21 +350,24 @@ export function bindVisualizer(app) {
         // stream. Call from a user gesture: it may create the AudioContext.
         connectLab(build) {
             gestured = true;
-            available = true;
             labBuild = build;
-            if (motion) {
-                motion.disconnectInput();
-                connectLab();
-                effects.reconnect();
-            } else {
-                // Directly: apply() makes none while the style is Off.
-                ensureMotion();
-            }
+            // Directly: apply() makes none while the style is Off. Lab mode
+            // plays no stream, so nothing has made one before.
+            ensureMotion();
             apply();
             if (motion && motion.audioCtx.state === 'suspended') {
                 motion.audioCtx.resume().catch(() => {});
             }
             return Boolean(motion);
+        },
+        // Frames audioMotion has drawn so far, or null while the style is
+        // one it does not draw (Off and the effects.js styles).
+        draws: () => (STYLES[index].effect || STYLES[index].off ? null : draws),
+        onMenuPick(fn) {
+            onMenuPick = fn;
+        },
+        lockMenu(on) {
+            menuLocked = on;
         },
     };
 }

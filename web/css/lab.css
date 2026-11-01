@@ -135,3 +135,16 @@
 .tunebox .lab-close {
     margin-top: .8rem;
 }
+
+.tunebox .lab-caption {
+    caption-side: bottom;
+    padding-top:  .5rem;
+    text-align:   left;
+    font-size:    .85rem;
+    opacity:      .8;
+}
+
+/* Lab mode plays no stream. */
+.tunebox .play:disabled {
+    opacity: .4;
+}

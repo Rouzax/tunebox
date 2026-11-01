@@ -27,12 +27,16 @@ function button(className, text) {
     return el;
 }
 
-const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-
 // envinfo.js is a classic script, shared with check.html.
 function loadEnvironment() {
     return new Promise((resolve) => {
-        const read = () => resolve(window.tuneboxEnvironment ? window.tuneboxEnvironment() : null);
+        const read = () => {
+            try {
+                resolve(window.tuneboxEnvironment ? window.tuneboxEnvironment() : null);
+            } catch (error) {
+                resolve(null);
+            }
+        };
         if (window.tuneboxEnvironment) {
             read();
             return;
@@ -63,7 +67,7 @@ function describeEnvironment(env) {
 // both qualities, and the results in one QR code for a photo. Nothing is
 // stored and nothing is sent.
 export function bindLab(app, viz) {
-    const {root, player} = app;
+    const {root} = app;
     const styles = viz.styles();
     const stylesheet = document.createElement('link');
     stylesheet.rel = 'stylesheet';
@@ -110,6 +114,8 @@ export function bindLab(app, viz) {
     let started = false;
     let testing = false;
     let stopRequested = false;
+    // Ends the test's current wait at once when Stop test is pressed.
+    let cutWait = null;
     let meter = null;
     let meterData = null;
     // Timestamps of the last second for the live rate, and of the test
@@ -117,6 +123,21 @@ export function bindLab(app, viz) {
     let recent = [];
     let recording = null;
     root.dataset.lab = 'idle';
+
+    // Resolves after ms, or at once on Stop test.
+    function wait(ms) {
+        return new Promise((resolve) => {
+            if (stopRequested) {
+                resolve();
+                return;
+            }
+            const timer = window.setTimeout(resolve, ms);
+            cutWait = () => {
+                window.clearTimeout(timer);
+                resolve();
+            };
+        });
+    }
 
     function sync() {
         const style = styles[viz.index()];
@@ -186,12 +207,17 @@ export function bindLab(app, viz) {
     }
 
     start.addEventListener('click', () => {
-        if (player.state() !== 'stopped') {
-            player.stop();
-        }
         viz.holdPower();
-        if (!viz.connectLab(buildSignal)) {
+        let connected = false;
+        try {
+            connected = viz.connectLab(buildSignal);
+        } catch (error) {
+            // No Web Audio, or an AudioContext the browser refused.
+            connected = false;
+        }
+        if (!connected) {
             note.textContent = 'Web Audio is not available here.';
+            root.dataset.lab = 'unavailable';
             return;
         }
         started = true;
@@ -224,8 +250,11 @@ export function bindLab(app, viz) {
         while (table.firstChild) {
             table.removeChild(table.firstChild);
         }
+        const caption = element('caption', 'lab-caption',
+            'Frames per second. Page: what the browser managed. Draws: how often the visualizer itself drew (low power draws the spectrum styles at most 30 times a second); a dash means the style keeps no count.');
+        table.appendChild(caption);
         const head = element('tr', '');
-        for (const title of ['Style', 'Mode', 'Average', 'Worst']) {
+        for (const title of ['Style', 'Mode', 'Page average', 'Page worst', 'Draws']) {
             head.appendChild(element('th', '', title));
         }
         table.appendChild(head);
@@ -236,6 +265,7 @@ export function bindLab(app, viz) {
                 element('td', '', result.low ? 'low power' : 'normal'),
                 element('td', '', `${result.avg_fps.toFixed(1)}`),
                 element('td', '', `${result.worst_fps.toFixed(1)}`),
+                element('td', '', result.draw_fps === null ? '-' : `${Math.round(result.draw_fps)}`),
             );
             table.appendChild(row);
         }
@@ -244,7 +274,19 @@ export function bindLab(app, viz) {
         }
         qrBox.appendChild(qrSvg(document, qrMatrix(qrcode, payload, QR_LEVEL), 'QR code with the lab results'));
         results.dataset.payload = payload;
+        openResults();
+    }
+
+    // Focus moves into the results and back, so a keyboard does not wander
+    // through the player hidden behind them.
+    function openResults() {
         results.hidden = false;
+        close.focus();
+    }
+
+    function closeResults() {
+        results.hidden = true;
+        show.focus();
     }
 
     async function runTest() {
@@ -260,6 +302,7 @@ export function bindLab(app, viz) {
         });
         const measured = [];
         testing = true;
+        viz.lockMenu(true);
         stopRequested = false;
         results.hidden = true;
         root.dataset.lab = 'testing';
@@ -272,16 +315,23 @@ export function bindLab(app, viz) {
             note.textContent = `test ${n + 1}/${plan.length}${low ? ', low power' : ''}`;
             await wait(warmupMs);
             recording = [];
+            const drawsFrom = viz.draws();
+            const from = performance.now();
             await wait(measureMs);
+            const drawsTo = viz.draws();
+            const elapsed = performance.now() - from;
             const stats = frameStats(recording);
             recording = null;
+            // A window cut short by Stop test is left out.
             if (!stopRequested) {
-                measured.push(Object.assign({style: style.id, label: style.label, low}, stats));
+                const drawFps = drawsFrom === null || drawsTo === null ? null : ((drawsTo - drawsFrom) * 1000) / elapsed;
+                measured.push(Object.assign({style: style.id, label: style.label, low, draw_fps: drawFps}, stats));
             }
         }
         viz.setLowPower(kept.low);
         viz.select(kept.index);
         testing = false;
+        viz.lockMenu(false);
         root.dataset.lab = measured.length ? 'done' : 'ready';
         if (measured.length) {
             showResults(measured, windowS);
@@ -291,23 +341,28 @@ export function bindLab(app, viz) {
 
     run.addEventListener('click', () => {
         if (testing) {
-            // Takes effect at the end of the current window.
             stopRequested = true;
-            note.textContent = 'stopping...';
+            if (cutWait) {
+                cutWait();
+            }
         } else {
             runTest();
         }
     });
     show.addEventListener('click', () => {
-        results.hidden = !results.hidden;
-    });
-    close.addEventListener('click', () => {
-        results.hidden = true;
-    });
-    document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && !results.hidden) {
-            results.hidden = true;
+        if (results.hidden) {
+            openResults();
+        } else {
+            closeResults();
         }
     });
+    close.addEventListener('click', closeResults);
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !results.hidden) {
+            closeResults();
+        }
+    });
+    // A style picked from the player's own visualizer menu.
+    viz.onMenuPick(sync);
     sync();
 }

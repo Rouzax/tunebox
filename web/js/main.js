@@ -11,7 +11,7 @@ import {bindPages} from './pages.js';
 import {bindPalette} from './palette.js';
 import {createPlayer, resumesAfterPause} from './player.js';
 import {createSwitcher} from './schedule.js';
-import {createStorage} from './storage.js';
+import {createStorage, pageOnly} from './storage.js';
 import {bindTicker} from './ticker.js';
 import {bindPinScreen, onceAsked} from './pin.js';
 import {createToast} from './toast.js';
@@ -26,12 +26,6 @@ function browserStorage() {
     }
 }
 
-// Lab mode reads the listener's settings but stores nothing, so a test run
-// leaves the player as it was for normal use.
-function readOnly(backend) {
-    return backend && {getItem: (key) => backend.getItem(key), setItem: () => {}};
-}
-
 const later = (fn, ms) => window.setTimeout(fn, ms);
 const cancel = (id) => window.clearTimeout(id);
 
@@ -39,7 +33,7 @@ async function start(root) {
     const params = new URLSearchParams(window.location.search);
     const lab = params.get('lab') === '1';
     const events = createEmitter();
-    const storage = createStorage(lab ? readOnly(browserStorage()) : browserStorage());
+    const storage = createStorage(lab ? pageOnly(browserStorage()) : browserStorage());
     const api = createApi((input, init) => window.fetch(input, init));
     const toast = createToast(root, window);
     const player = createPlayer({
@@ -298,6 +292,12 @@ async function start(root) {
         toast.show('Player stopped.');
     };
     stopPlayer = app.stop;
+    if (lab) {
+        // Lab mode is silent and needs no stream; its own signal feeds the
+        // visualizer.
+        app.play = () => toast.show('Playback is off in lab mode.');
+        root.querySelector('.play').disabled = true;
+    }
 
     events.on('state', (state) => {
         if (state === 'playing') {
@@ -344,7 +344,9 @@ async function start(root) {
     const visualizer = bindVisualizer(app);
     if (lab) {
         // Loaded only here, so the normal player never fetches it.
-        import('./lab.js').then(({bindLab}) => bindLab(app, visualizer));
+        import('./lab.js')
+            .then(({bindLab}) => bindLab(app, visualizer))
+            .catch(() => toast.show('Lab mode could not load. Reload the page to try again.', 0));
         return;
     }
     // A refused autoplay (no user gesture yet) quietly leaves the play button.

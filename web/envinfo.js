@@ -20,6 +20,9 @@
             info.renderer = String(gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
             info.vendor = String(gl.getParameter(debug ? debug.UNMASKED_VENDOR_WEBGL : gl.VENDOR));
             info.maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+        } catch (error) {
+            // A context that cannot answer still counts as available; the
+            // details it gave before failing are kept.
         } finally {
             // Browsers allow only a few live contexts per page; hand this
             // one back now rather than when the canvas is collected.

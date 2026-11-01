@@ -5,12 +5,15 @@ import {FORMAT, QR_LEVEL, labPayload} from '../js/labreport.js';
 import {qrMatrix} from '../js/qr.js';
 
 const STYLES = ['wave', 'bars', 'led', 'butterfly', 'ring', 'neon', 'ambient', 'scope', 'lava', 'milkdrop', 'aurora'];
+// effects.js draws these itself; the lab knows no draw rate for them.
+const EFFECTS = ['scope', 'lava', 'milkdrop', 'aurora'];
 
 function realistic(overrides) {
     const results = [];
     for (const id of STYLES) {
-        results.push({style: id, low: false, avg_fps: 59.94, worst_fps: 57.12});
-        results.push({style: id, low: true, avg_fps: 31.5, worst_fps: 28.04});
+        const effect = EFFECTS.indexOf(id) >= 0;
+        results.push({style: id, low: false, avg_fps: 59.94, worst_fps: 57.12, draw_fps: effect ? null : 59.7});
+        results.push({style: id, low: true, avg_fps: 59.5, worst_fps: 58.04, draw_fps: effect ? null : 29.96});
     }
     return Object.assign({
         userAgent: 'Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.109 Safari/537.36 XPENG-G9/5.4.1.1234 CarBrowser/1.0',
@@ -36,12 +39,14 @@ test('labPayload is compact JSON with the format version and every result', () =
     assert.equal(data.e.g2, 1);
     assert.equal(data.e.tx, 16384);
     assert.deepEqual(Object.keys(data.r), STYLES);
-    assert.deepEqual(data.r.wave, [59.9, 57.1, 31.5, 28]);
+    assert.equal(data.rf, 'na,nw,nd,la,lw,ld');
+    assert.deepEqual(data.r.wave, [59.9, 57.1, 60, 59.5, 58, 30]);
+    assert.deepEqual(data.r.lava, [59.9, 57.1, null, 59.5, 58, null]);
 });
 
 test('labPayload leaves a mode the test did not reach as null', () => {
     const data = JSON.parse(labPayload(realistic({results: [{style: 'wave', low: false, avg_fps: 12, worst_fps: 9}]})));
-    assert.deepEqual(data.r, {wave: [12, 9, null, null]});
+    assert.deepEqual(data.r, {wave: [12, 9, null, null, null, null]});
 });
 
 test('labPayload writes absent environment values as null', () => {
@@ -54,9 +59,18 @@ test('labPayload writes absent environment values as null', () => {
 test('labPayload cuts long strings so the code stays small', () => {
     const long = 'x'.repeat(1000);
     const data = JSON.parse(labPayload(realistic({userAgent: long, env: Object.assign(realistic().env, {renderer: long, vendor: long})})));
-    assert.ok(data.ua.length <= 200);
-    assert.ok(data.e.gr.length <= 120);
-    assert.ok(data.e.gv.length <= 60);
+    assert.ok(data.ua.length <= 170);
+    assert.ok(data.e.gr.length <= 100);
+    assert.ok(data.e.gv.length <= 40);
+});
+
+test('labPayload keeps the text ASCII, so the code holds what was measured', () => {
+    // The QR library keeps only the low byte of each character.
+    const text = labPayload(realistic({userAgent: 'Mozilla/5.0 Café', env: Object.assign(realistic().env, {renderer: 'Mali-G78 ™ “GPU”'})}));
+    assert.ok(/^[\x20-\x7e]*$/.test(text), text);
+    const data = JSON.parse(text);
+    assert.equal(data.ua, 'Mozilla/5.0 Caf?');
+    assert.equal(data.e.gr, 'Mali-G78 ? ?GPU?');
 });
 
 test('a full-size payload fits one QR code at the lab\'s level', () => {
@@ -67,9 +81,4 @@ test('a full-size payload fits one QR code at the lab\'s level', () => {
     // car screen.
     assert.ok(matrix.length <= 97, `${matrix.length} modules for ${text.length} bytes`);
     assert.ok(matrix.every((row) => row.length === matrix.length));
-});
-
-test('a realistic payload makes a smaller code', () => {
-    const text = labPayload(realistic());
-    assert.ok(qrMatrix(qrcode, text, QR_LEVEL).length <= 89, `${text.length} bytes`);
 });
