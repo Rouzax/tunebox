@@ -18,6 +18,7 @@ from tunebox.tracks import Kind, Track
 log = logging.getLogger(__name__)
 
 Outcome = Literal["cover", "artist", "miss", "error"]
+HealthChange = Literal["failing", "recovered", "write_failed"] | None
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS covers (
@@ -55,7 +56,46 @@ CREATE TABLE IF NOT EXISTS heard (
 CREATE INDEX IF NOT EXISTS heard_last ON heard(last_at);
 -- heard_track by photo key, newest first: an undo of a photo fix.
 CREATE INDEX IF NOT EXISTS heard_photo ON heard(photo_key, last_at);
+-- The health check's latest result per station item, outside the numbered
+-- migrations; the version is in the name, and _open drops a health table
+-- of any other version, so a new shape starts empty.
+CREATE TABLE IF NOT EXISTS health_v1 (
+    channel TEXT NOT NULL,
+    item TEXT NOT NULL,
+    target TEXT NOT NULL,
+    checked_at INTEGER NOT NULL,
+    ok INTEGER NOT NULL,
+    reason TEXT,
+    codec TEXT,
+    kbps INTEGER,
+    failing_since INTEGER,
+    PRIMARY KEY (channel, item)
+);
+CREATE TABLE IF NOT EXISTS health_run_v1 (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_started_at INTEGER,
+    last_finished_at INTEGER,
+    duration_ms INTEGER,
+    items INTEGER,
+    outcome TEXT
+);
 """
+
+_HEALTH_TABLES = ("health_v1", "health_run_v1")
+_HEALTH_COLUMNS = "channel, item, target, checked_at, ok, reason, codec, kbps, failing_since"
+
+
+def _drop_old_health(db: sqlite3.Connection) -> None:
+    names = [
+        row[0]
+        for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'health%'"
+        )
+    ]
+    for name in names:
+        if name not in _HEALTH_TABLES:
+            db.execute(f'DROP TABLE "{name}"')
+
 
 # The panel lists the songs of this many days; older heard rows go daily.
 HEARD_KEEP_MS = 30 * 86_400_000
@@ -134,6 +174,63 @@ class HeardSong:
     photo: CoverDecision | None
 
 
+@dataclass(frozen=True)
+class HealthRow:
+    channel: str
+    item: str
+    target: str
+    checked_at: int
+    ok: bool
+    reason: str | None
+    codec: str | None
+    kbps: int | None
+    failing_since: int | None
+
+
+@dataclass(frozen=True)
+class HealthRun:
+    last_started_at: int | None = None
+    last_finished_at: int | None = None
+    duration_ms: int | None = None
+    items: int | None = None
+    outcome: str | None = None
+
+
+@dataclass(frozen=True)
+class Written:
+    change: HealthChange
+    # failing_since before this write: how long a recovered item failed.
+    since: int | None
+
+
+def transition(before: HealthRow | None, row: HealthRow) -> tuple[HealthChange, int | None]:
+    """A failure of the same target keeps its first failing_since; a new
+    target starts over, so a fixed address is never reported as the old
+    one recovering."""
+    same = before is not None and before.target == row.target
+    was_failing = same and before is not None and not before.ok
+    if row.ok:
+        return ("recovered" if was_failing else None), None
+    if was_failing and before is not None:
+        return None, before.failing_since
+    return "failing", row.failing_since
+
+
+def _health_row(values: Sequence[object]) -> HealthRow:
+    channel, item, target, checked_at, ok, reason, codec, kbps, failing_since = values
+    return HealthRow(
+        cast("str", channel),
+        cast("str", item),
+        cast("str", target),
+        cast("int", checked_at),
+        bool(ok),
+        cast("str | None", reason),
+        cast("str | None", codec),
+        cast("int | None", kbps),
+        cast("int | None", failing_since),
+    )
+
+
 class Store:
     """Safe to share between threads. If the database cannot be opened or
     written, that is logged once and the server carries on in memory."""
@@ -157,6 +254,7 @@ class Store:
                 db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
                 db.execute("PRAGMA journal_mode=WAL")
                 db.executescript(_SCHEMA)
+                _drop_old_health(db)
                 self._path = path
                 return db
             except (OSError, sqlite3.Error) as error:
@@ -164,6 +262,7 @@ class Store:
                 self.degraded = True
         db = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
         db.executescript(_SCHEMA)
+        _drop_old_health(db)
         return db
 
     def _write_error(self, error: Exception) -> None:
@@ -322,6 +421,109 @@ class Store:
                 self._report(error)
                 return 0
         return cursor.rowcount
+
+    def health_write(self, row: HealthRow) -> Written:
+        """Store the latest result of one item. A failure is reported once and
+        does not mark the cover decisions unknown: a health table says nothing
+        about them."""
+        with self._lock:
+            try:
+                self._db.execute("BEGIN")
+                found = self._db.execute(
+                    f"SELECT {_HEALTH_COLUMNS} FROM health_v1 WHERE channel = ? AND item = ?",
+                    (row.channel, row.item),
+                ).fetchone()
+                before = _health_row(found) if found else None
+                change, since = transition(before, row)
+                self._db.execute(
+                    "INSERT OR REPLACE INTO health_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        row.channel,
+                        row.item,
+                        row.target,
+                        row.checked_at,
+                        int(row.ok),
+                        row.reason,
+                        row.codec,
+                        row.kbps,
+                        since,
+                    ),
+                )
+                self._db.execute("COMMIT")
+            except sqlite3.Error as error:
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
+                self._report(error)
+                return Written("write_failed", None)
+        return Written(change, before.failing_since if before is not None else None)
+
+    def health_rows(self) -> list[HealthRow] | None:
+        """Every stored item, or None when the table cannot be read."""
+        with self._lock:
+            try:
+                found = self._db.execute(
+                    f"SELECT {_HEALTH_COLUMNS} FROM health_v1 ORDER BY channel, item"
+                ).fetchall()
+            except sqlite3.Error as error:
+                self._report(error)
+                return None
+        return [_health_row(values) for values in found]
+
+    def health_prune(self, keep: set[tuple[str, str]]) -> None:
+        """Drop the items that are no longer checked."""
+        with self._lock:
+            try:
+                self._db.execute("BEGIN")
+                stored = self._db.execute("SELECT channel, item FROM health_v1").fetchall()
+                self._db.executemany(
+                    "DELETE FROM health_v1 WHERE channel = ? AND item = ?",
+                    [(c, i) for c, i in stored if (c, i) not in keep],
+                )
+                self._db.execute("COMMIT")
+            except sqlite3.Error as error:
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
+                self._report(error)
+
+    def health_run_started(self, now_ms: int) -> None:
+        with self._lock:
+            try:
+                self._db.execute(
+                    "INSERT INTO health_run_v1 (id, last_started_at) VALUES (1, ?)"
+                    " ON CONFLICT (id) DO UPDATE SET"
+                    " last_started_at = excluded.last_started_at",
+                    (now_ms,),
+                )
+            except sqlite3.Error as error:
+                self._report(error)
+
+    def health_run_finished(self, now_ms: int, duration_ms: int, items: int, outcome: str) -> None:
+        with self._lock:
+            try:
+                self._db.execute(
+                    "INSERT INTO health_run_v1"
+                    " (id, last_finished_at, duration_ms, items, outcome)"
+                    " VALUES (1, ?, ?, ?, ?)"
+                    " ON CONFLICT (id) DO UPDATE SET"
+                    " last_finished_at = excluded.last_finished_at,"
+                    " duration_ms = excluded.duration_ms, items = excluded.items,"
+                    " outcome = excluded.outcome",
+                    (now_ms, duration_ms, items, outcome),
+                )
+            except sqlite3.Error as error:
+                self._report(error)
+
+    def health_run(self) -> HealthRun:
+        with self._lock:
+            try:
+                found = self._db.execute(
+                    "SELECT last_started_at, last_finished_at, duration_ms, items, outcome"
+                    " FROM health_run_v1 WHERE id = 1"
+                ).fetchone()
+            except sqlite3.Error as error:
+                self._report(error)
+                return HealthRun()
+        return HealthRun(*found) if found else HealthRun()
 
     def delete_cover(self, key: str) -> None:
         """A failure leaves the old answer, which still names its link, so
