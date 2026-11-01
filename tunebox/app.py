@@ -29,6 +29,7 @@ from tunebox.coverpanel import CoverPanel
 from tunebox.covers import CoverService
 from tunebox.coversearch import CoverSearch
 from tunebox.disk import free_bytes
+from tunebox.health import ITEM_PAUSE_S, RETRY_DELAY_S, START_DELAY_S, HealthChecks
 from tunebox.logos import Logos, group_key
 from tunebox.logs import add_file, configure, event
 from tunebox.netguard import Guard
@@ -39,7 +40,13 @@ from tunebox.server import TuneboxServer
 from tunebox.settings import Settings, SettingsUnavailable, SettingsWriteError, StaleVersion
 from tunebox.sources import build_source
 from tunebox.store import Store
-from tunebox.streamcheck import PROBE_BYTES, PROBE_DEADLINE_S, StreamChecks, guarded_feed
+from tunebox.streamcheck import (
+    HEALTH_PROBE_BYTES,
+    PROBE_BYTES,
+    PROBE_DEADLINE_S,
+    StreamChecks,
+    guarded_feed,
+)
 from tunebox.usage import Usage
 from tunebox.usagecore import FLUSH_S
 
@@ -154,12 +161,24 @@ def main() -> int:
     pin = Pin(settings, accounts.server_key)
     admin = None
     usage = None
+    health = None
     if config.admin.enabled:
-        usage = open_usage(config.server.data_dir / "usage.db", free_space)
+        zone = local_zone()
+        usage = open_usage(config.server.data_dir / "usage.db", free_space, zone)
         admin_dir = Path(os.environ.get("TUNEBOX_WEB_ADMIN", str(WEB_ADMIN_DIR)))
         checks = StreamChecks(
             lambda url: guard.probe(url, PROBE_DEADLINE_S, PROBE_BYTES),
             guarded_feed(guard),
+        )
+        health = HealthChecks(
+            lambda url: guard.probe(url, PROBE_DEADLINE_S, HEALTH_PROBE_BYTES),
+            guarded_feed(guard),
+            store,
+            lambda: runtime.snapshot.channels,
+            zone[0],
+            pause_s=_knob("TUNEBOX_HEALTH_PAUSE_S", ITEM_PAUSE_S),
+            start_delay_s=_knob("TUNEBOX_HEALTH_START_S", START_DELAY_S),
+            retry_delay_s=_knob("TUNEBOX_HEALTH_RETRY_S", RETRY_DELAY_S),
         )
         cover_panel = CoverPanel(
             fixes, covers, store, cover_files, blobs, CoverSearch(catalogs, accounts.server_key)
@@ -176,6 +195,7 @@ def main() -> int:
             free_space=free_space,
             usage=usage,
             covers=cover_panel,
+            health=health,
             apply=runtime.apply,
             samples=lambda: [
                 title
@@ -222,6 +242,8 @@ def main() -> int:
         # Not among the workers: shut_down joins it first, with its own share
         # of the deadline.
         usage.start(stop)
+    if health is not None:
+        health.start(stop)
     event(
         log,
         logging.INFO,
@@ -234,7 +256,7 @@ def main() -> int:
     # from another one; the main thread only waits for a signal.
     received.wait()
     stop.set()
-    shut_down(server, workers, store, runtime, settings, usage=usage)
+    shut_down(server, workers, store, runtime, settings, usage=usage, health=health)
     event(log, logging.INFO, "stopped")
     return 0
 
@@ -269,21 +291,40 @@ def _catalogs(guard: Guard) -> Catalogs:
     return Catalogs(http.get, deezer=f"{base}/deezer", itunes=f"{base}/itunes/search")
 
 
-def open_usage(path: Path, free_space: Callable[[], int | None]) -> Usage:
-    """Usage statistics count local days in the container's TZ; an unset or
-    unknown zone counts in UTC."""
+def local_zone() -> tuple[tzinfo, str]:
+    """The container's TZ, for usage days and the daily health check; an
+    unset or unknown zone is UTC. The event keeps its usage name, which
+    existing log searches look for."""
     zone_name = os.environ.get("TZ") or "UTC"
     try:
-        zone: tzinfo = ZoneInfo(zone_name)
+        return ZoneInfo(zone_name), zone_name
     except ZoneInfoNotFoundError, ValueError:
         event(log, logging.WARNING, "usage_zone_unknown", zone=zone_name)
-        zone, zone_name = UTC, "UTC"
+        return UTC, "UTC"
+
+
+def _knob(name: str, default: float) -> float:
+    """A timing knob for the admin browser check, which cannot wait out a
+    whole health run, the start-up delay or the retry delay."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    event(log, logging.WARNING, "health_timing_overridden", knob=name, value=value)
+    return value
+
+
+def open_usage(path: Path, free_space: Callable[[], int | None], zone: tuple[tzinfo, str]) -> Usage:
+    """Usage statistics count local days in zone, from local_zone."""
     try:
         # A knob for the admin browser check, which cannot wait a whole interval.
         flush_s = float(os.environ.get("TUNEBOX_USAGE_FLUSH_S", FLUSH_S))
     except ValueError:
         flush_s = FLUSH_S
-    return Usage(path, zone=zone, zone_name=zone_name, free=free_space, flush_s=flush_s)
+    return Usage(path, zone=zone[0], zone_name=zone[1], free=free_space, flush_s=flush_s)
 
 
 def open_settings(path: Path, state: ConfigState, panel: bool) -> Settings:
@@ -332,6 +373,7 @@ def shut_down(
     runtime: Runtime,
     settings: Settings,
     usage: Usage | None = None,
+    health: HealthChecks | None = None,
     timeout_s: float = 8.0,
 ) -> None:
     """Stops serving, lets the pollers and workers finish what they are
@@ -347,6 +389,10 @@ def shut_down(
         # disk still leaves the pollers their time.
         usage.stop_and_join(min(deadline, time.monotonic() + 3.0))
     runtime.stop_and_join(deadline)
+    if health is not None:
+        # Joined before the store closes, so the worker is never inside a
+        # store call when its connection goes.
+        health.stop_and_join(deadline)
     for worker in workers:
         worker.join(max(0.0, deadline - time.monotonic()))
     store.close()

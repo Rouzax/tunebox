@@ -909,3 +909,54 @@ input.find {
     flex: 1 1 12rem;
     min-width: 0;
 }
+
+/* The Health page: one row per station, laid out as the Covers rows. */
+
+.health-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.4rem;
+}
+
+.health-station {
+    display: grid;
+    gap: 0.25rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--field);
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+    overflow-wrap: anywhere;
+}
+
+.health-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.75rem;
+}
+
+.health-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.health-reasons,
+.health-items {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.health-station.broken {
+    border-color: var(--warn);
+}
+
+.health-station.broken .health-status,
+.health-station.warning .health-status,
+.health-station.broken .health-reasons,
+.health-station.warning .health-reasons,
+nav a.has-broken {
+    color: var(--warn);
+}

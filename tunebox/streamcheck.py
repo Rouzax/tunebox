@@ -34,6 +34,9 @@ STREAM_BOUND_S = PROBE_DEADLINE_S + RESOLVE_S
 FEED_BOUND_S = FEED_DEADLINE_S + RESOLVE_S
 # A few seconds of audio: enough to see that it flows and to sniff it.
 PROBE_BYTES = 65_536
+# Enough to see a stream's codec; the daily health check reads this much
+# of every stream, the panel's own check reads PROBE_BYTES.
+HEALTH_PROBE_BYTES = 16_384
 # Checks per minute, all sessions together: each one opens a connection
 # tunebox makes on the owner's behalf.
 PER_MINUTE = 12
@@ -165,21 +168,35 @@ def describe(probe: Probe, url: str) -> dict[str, Any]:
             "ok": False,
             "reason": "This is an HLS stream (a list of short segments), which the player"
             " cannot play. Look for an MP3 or AAC stream address.",
+            "code": "hls",
         }
     inside = playlist_address(probe)
     if inside is not None or declared in _PLAYLISTS:
-        answer: dict[str, Any] = {"ok": False, "reason": "This is a playlist file, not a stream."}
+        answer: dict[str, Any] = {
+            "ok": False,
+            "reason": "This is a playlist file, not a stream.",
+            "code": "playlist",
+        }
         if inside is not None:
             answer["inside"] = inside
         return answer
     codec = codec_of(probe.content_type, probe.head)
     if codec is None:
         shown = _CONTROL.sub("", declared)[:40] or "no content type"
-        return {"ok": False, "reason": f"No AAC or MP3 audio came back ({shown})."}
+        return {
+            "ok": False,
+            "reason": f"No AAC or MP3 audio came back ({shown}).",
+            "code": "no_audio",
+        }
     if not probe.head:
-        return {"ok": False, "reason": "The server answered but sent no audio."}
+        return {
+            "ok": False,
+            "reason": "The server answered but sent no audio.",
+            "code": "no_audio",
+        }
     answer = {"ok": True, "codec": codec, "kbps": kbps_of(probe.icy), "name": name_of(probe.icy)}
     if url.lower().startswith("http://"):
+        answer["code"] = "plain_http"
         answer["warning"] = (
             "It plays over plain http, which browsers block on the player's https page;"
             " a stream in the form needs an https:// address."
@@ -206,6 +223,62 @@ def _tidy(text: str) -> str:
     return _CONTROL.sub("", text)[:REASON_MAX]
 
 
+def error_code(error: BaseException) -> str:
+    """A failure as one of the fixed reason codes the health check stores
+    and logs: never the error's text, which can hold a URL's path and
+    userinfo or another server's words. A source error caused by the
+    network keeps the network's code, so an outage reads alike for streams
+    and feeds."""
+    cause: BaseException | None = error
+    while cause is not None and not isinstance(cause, HttpError):
+        cause = cause.__cause__
+    if isinstance(cause, HttpError):
+        if cause.unreachable:
+            return "unreachable"
+        if cause.status is not None:
+            return f"http_{cause.status}"
+        text = str(cause)
+        if "ICY 200" in text:
+            return "icy_plain_http"
+        # netguard words every deadline as "took too long" or "took longer".
+        if ": took " in text:
+            return "timeout"
+        return "connect_failed"
+    return "feed_error" if isinstance(error, SourceError) else "unreadable"
+
+
+def check_stream(probe: Callable[[str], Probe], url: str) -> dict[str, Any]:
+    """A stream check's answer, without its pace or log line."""
+    try:
+        return describe(probe(url), url)
+    except HttpError as error:
+        return {"ok": False, "reason": _reason(error), "code": error_code(error)}
+
+
+def check_feed(
+    feed: Callable[[SourceConfig], list[RawEntry]], source: SourceConfig
+) -> tuple[dict[str, Any], Exception | None]:
+    """A feed check's answer, without its pace or log line, and the
+    exception when the parser crashed (a parser is meant to raise
+    SourceError, so that is a bug its caller logs)."""
+    try:
+        entries = feed(source)
+    except SourceError as error:
+        return {"ok": False, "reason": _tidy(str(error)), "code": error_code(error)}, None
+    except Exception as error:  # noqa: BLE001 (handed back for the caller to log)
+        return {"ok": False, "reason": UNREADABLE, "code": "unreadable"}, error
+    songs_only = [entry for entry in entries if entry.artist.strip()]
+    newest = sorted(songs_only, key=lambda e: e.started_at_ms or 0, reverse=True)
+    songs = [{"artist": e.artist, "title": e.title} for e in newest[:FEED_ENTRIES]]
+    if not songs:
+        return {
+            "ok": False,
+            "reason": "The feed answered but lists no songs.",
+            "code": "no_songs",
+        }, None
+    return {"ok": True, "songs": songs}, None
+
+
 class StreamChecks:
     """One check at a time, PER_MINUTE a minute; a check that cannot run
     raises Busy rather than waiting."""
@@ -223,42 +296,23 @@ class StreamChecks:
     def stream(self, url: str) -> dict[str, Any]:
         with self._logged("stream_checked") as logged:
             with self._pacer.slot(STREAM_BOUND_S):
-                try:
-                    answer = describe(self._probe(url), url)
-                except HttpError as error:
-                    answer = {"ok": False, "reason": _reason(error)}
+                answer = check_stream(self._probe, url)
             logged.update(outcome="ok" if answer["ok"] else "refused", codec=answer.get("codec"))
             return answer
 
     def feed(self, source: SourceConfig) -> dict[str, Any]:
         with self._logged("feed_checked", source=source.type) as logged:
             with self._pacer.slot(FEED_BOUND_S):
-                try:
-                    entries = self._feed(source)
-                except SourceError as error:
-                    answer: dict[str, Any] = {"ok": False, "reason": _tidy(str(error))}
-                except Exception as error:
-                    # A parser is meant to raise SourceError, so this is a bug
-                    # to see in the log; its text says nothing the panel can use.
-                    logged["error"] = type(error).__name__
-                    log.warning(
-                        "feed_check_crashed",
-                        exc_info=True,
-                        extra={"fields": {"source": source.type}},
-                    )
-                    return {"ok": False, "reason": UNREADABLE}
-                else:
-                    songs_only = [entry for entry in entries if entry.artist.strip()]
-                    newest = sorted(songs_only, key=lambda e: e.started_at_ms or 0, reverse=True)
-                    songs = [
-                        {"artist": entry.artist, "title": entry.title}
-                        for entry in newest[:FEED_ENTRIES]
-                    ]
-                    answer = (
-                        {"ok": True, "songs": songs}
-                        if songs
-                        else {"ok": False, "reason": "The feed answered but lists no songs."}
-                    )
+                answer, crash = check_feed(self._feed, source)
+            if crash is not None:
+                # Its text says nothing the panel can use; the trace is for the log.
+                logged["error"] = type(crash).__name__
+                log.warning(
+                    "feed_check_crashed",
+                    exc_info=crash,
+                    extra={"fields": {"source": source.type}},
+                )
+                return answer
             logged.update(outcome="ok" if answer["ok"] else "refused")
             return answer
 

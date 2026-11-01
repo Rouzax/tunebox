@@ -9,6 +9,7 @@ import random
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from tunebox.config import ChannelConfig
@@ -20,6 +21,20 @@ from tunebox.timeline import Timeline, build
 from tunebox.tracks import Track, clean, reclean
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Liveness:
+    """What the health page reads of a poller, without any traffic.
+    polled_since_wake is False from the moment an idle channel wakes until
+    its first successful poll: a song list that old says nothing yet."""
+
+    active: bool
+    last_poll_ok: int | None
+    stale_since: int | None
+    polled_since_wake: bool
+    last_change: int | None
+
 
 # Triton returns at most 50 entries; afterwards a few are enough to see changes.
 FIRST_FETCH = 50
@@ -280,6 +295,12 @@ class Channel:
         title rules are checked against."""
         with self._lock:
             return [track.full_title for track in self._recent]
+
+    def liveness(self) -> Liveness:
+        active = self.active()
+        with self._lock:
+            newest = max((t.started_at for t in self._recent), default=None)
+            return Liveness(active, self._last_ok, self._stale_since, self._polled, newest)
 
     def status(self) -> dict[str, Any]:
         active = self.active()

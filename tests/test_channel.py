@@ -18,7 +18,7 @@ from tests.fakes import (
     fetch_cover,
 )
 from tunebox.catalogs import Found
-from tunebox.channel import ACTIVE_MS, FIRST_FETCH, STEADY_FETCH, Channel
+from tunebox.channel import ACTIVE_MS, FIRST_FETCH, STEADY_FETCH, Channel, Liveness
 from tunebox.config import ChannelConfig, SourceConfig
 from tunebox.coverfiles import CoverFiles, name_for
 from tunebox.covers import CoverService
@@ -729,3 +729,18 @@ def test_no_artist_photo_without_a_cover_of_the_songs_own() -> None:
         drain(covers)
     current = channel.now_view()[0]["current"]
     assert current["cover"] is None and current["artist_photo"] is None
+
+
+def test_liveness_for_the_health_page() -> None:
+    source = FakeSource()
+    source.responses = [[RawEntry("A", "S", 4_000)]]
+    channel, _, _ = make(source, Clock(5_000))
+    before = channel.liveness()
+    assert before == Liveness(False, None, None, False, None)
+    channel.poll_once()
+    after = channel.liveness()
+    assert after.last_poll_ok == 5_000
+    assert after.polled_since_wake is True
+    assert after.last_change == 4_000
+    # status() keeps the shape /api/status serves.
+    assert set(channel.status()) == {"last_poll_ok", "stale_since", "active"}

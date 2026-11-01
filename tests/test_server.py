@@ -1503,7 +1503,7 @@ def test_a_large_save_while_sessions_cannot_be_read_is_read_only(
     httpd, accounts = admin_parts
     cookie, csrf = log_in(httpd, accounts)
 
-    def unreadable(_self: Accounts, _token: str) -> None:
+    def unreadable(_self: Accounts, _token: str, *, touch: bool = True) -> None:
         raise SettingsUnavailable("down")
 
     monkeypatch.setattr(Accounts, "session", unreadable)
@@ -1523,7 +1523,7 @@ def test_a_large_post_from_off_the_network_is_hidden_before_any_session_read(
 ) -> None:
     asked: list[str] = []
 
-    def session(_self: Accounts, token: str) -> None:
+    def session(_self: Accounts, token: str, *, touch: bool = True) -> None:
         asked.append(token)
 
     monkeypatch.setattr(Accounts, "session", session)

@@ -193,6 +193,20 @@ def test_an_unreadable_list_shows_the_fixes_only(tmp_path: Path) -> None:
     made.close()
 
 
+def test_no_image_counts_per_station(tmp_path: Path) -> None:
+    made = Panel(tmp_path)
+    track = make_track("A", "B", 900_000)
+    made.store.record_heard("owr", [track])
+    made.store.put_cover(CoverDecision(track.key, "miss", None, "m", 1.0))
+    assert made.panel.nothing_by_channel() == {"owr": 1}
+    memory = CoverPanel(made.fixes, made.service, Store(None), made.files, made.blobs, made.search)
+    assert memory.nothing_by_channel() is None
+    store = UnreadableStore(tmp_path / "t.db")
+    unreadable = CoverPanel(made.fixes, made.service, store, made.files, made.blobs, made.search)
+    assert unreadable.nothing_by_channel() is None
+    made.close()
+
+
 def test_the_page_cursor_is_ms_and_key(tmp_path: Path) -> None:
     made = Panel(tmp_path)
     made.store.record_heard("owr", [make_track("A", f"Song {n}", 900_000 + n) for n in range(101)])

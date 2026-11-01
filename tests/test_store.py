@@ -1,11 +1,13 @@
+import contextlib
 import logging
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from tests.fakes import make_track
-from tunebox.store import CoverDecision, HeardUnreadable, Store
+from tunebox.store import CoverDecision, HealthRow, HealthRun, HeardUnreadable, Store, transition
 
 URL = "https://example.invalid/a.jpg"
 PHOTO_URL = "https://example.invalid/p.jpg"
@@ -225,3 +227,99 @@ def test_a_photo_key_lookup_uses_its_index(tmp_path: Path) -> None:
         ("photo:fisher",),
     ).fetchall()
     assert any("heard_photo" in str(row[-1]) for row in plan)
+
+
+def row(ok: bool, at: int, target: str = "https://example.invalid/a", **kw: object) -> HealthRow:
+    fields: dict[str, object] = {
+        "channel": "owr",
+        "item": "stream:AAC",
+        "target": target,
+        "checked_at": at,
+        "ok": ok,
+        "reason": None if ok else "unreachable",
+        "codec": "aac" if ok else None,
+        "kbps": 64 if ok else None,
+        "failing_since": None if ok else at,
+    }
+    fields.update(kw)
+    return HealthRow(**fields)  # type: ignore[arg-type]
+
+
+def test_failing_since_is_kept_set_and_cleared(tmp_path: Path) -> None:
+    store = Store(tmp_path / "t.db")
+    assert store.health_write(row(True, 1)).change is None
+    assert store.health_write(row(False, 10)).change == "failing"
+    again = store.health_write(row(False, 20))
+    assert again.change is None
+    (stored,) = store.health_rows() or []
+    assert stored.failing_since == 10 and stored.checked_at == 20
+    back = store.health_write(row(True, 30))
+    assert back.change == "recovered" and back.since == 10
+    (stored,) = store.health_rows() or []
+    assert stored.failing_since is None
+
+
+def test_a_new_target_starts_over(tmp_path: Path) -> None:
+    store = Store(tmp_path / "t.db")
+    store.health_write(row(False, 10))
+    moved = store.health_write(row(False, 50, target="https://example.invalid/b"))
+    assert moved.change == "failing"
+    (stored,) = store.health_rows() or []
+    assert stored.failing_since == 50
+    # Working at a new address is no recovery of the old one.
+    assert store.health_write(row(True, 60, target="https://example.invalid/c")).change is None
+
+
+def test_transition_without_the_database() -> None:
+    assert transition(None, row(False, 5)) == ("failing", 5)
+    assert transition(row(False, 5), row(False, 9)) == (None, 5)
+    assert transition(row(False, 5), row(True, 9)) == ("recovered", None)
+
+
+def test_prune_keeps_only_current_items(tmp_path: Path) -> None:
+    store = Store(tmp_path / "t.db")
+    store.health_write(row(True, 1))
+    store.health_write(row(True, 1, item="feed"))
+    store.health_write(row(True, 1, channel="gone"))
+    store.health_prune({("owr", "feed")})
+    assert [(r.channel, r.item) for r in store.health_rows() or []] == [("owr", "feed")]
+
+
+def test_a_start_keeps_the_last_finish(tmp_path: Path) -> None:
+    store = Store(tmp_path / "t.db")
+    assert store.health_run() == HealthRun()
+    store.health_run_started(100)
+    store.health_run_finished(200, 100, 3, "ok")
+    store.health_run_started(300)
+    assert store.health_run() == HealthRun(300, 200, 100, 3, "ok")
+
+
+def test_only_the_stores_own_older_health_tables_are_dropped(tmp_path: Path) -> None:
+    path = tmp_path / "t.db"
+    others = ("health_ignored", "health_settings", "Healthcheck_mutes", "Health_x")
+    with contextlib.closing(sqlite3.connect(path)) as db:
+        for name in (*others, "health_v0", "health_run_v0"):
+            db.execute(f'CREATE TABLE "{name}" (channel TEXT, x INTEGER)')
+        db.commit()
+    store = Store(path)
+    store.health_write(row(True, 1))
+    assert len(store.health_rows() or []) == 1
+    store.close()
+    with contextlib.closing(sqlite3.connect(path)) as db:
+        names = {r[0] for r in db.execute("SELECT name FROM sqlite_master")}
+    assert "health_v0" not in names and "health_run_v0" not in names
+    assert set(others) <= names
+
+
+def test_a_failed_health_write_does_not_mark_cover_decisions_unknown(tmp_path: Path) -> None:
+    store = Store(tmp_path / "t.db")
+    store._db.execute("DROP TABLE health_v1")  # pyright: ignore[reportPrivateUsage]
+    assert store.health_write(row(True, 1)).change == "write_failed"
+    assert store.health_rows() is None
+    assert store.cover_links() is not None
+
+
+def test_health_lives_in_memory_without_a_file() -> None:
+    store = Store(None)
+    store.health_write(row(True, 1))
+    assert len(store.health_rows() or []) == 1

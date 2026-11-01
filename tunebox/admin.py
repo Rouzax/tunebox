@@ -51,6 +51,7 @@ from tunebox.coverfix import VIEWS
 from tunebox.coverpanel import CoverPanel, NotACover, StaleCandidate
 from tunebox.coversearch import BadLink
 from tunebox.disk import has_room
+from tunebox.health import HealthChecks
 from tunebox.http_headers import single
 from tunebox.limits import Once, network
 from tunebox.logos import CONTENT_TYPES, Logos, group_key
@@ -257,6 +258,9 @@ class Route:
     types: tuple[str, ...] = JSON_ONLY
     # A fresh code (re-auth) before the handler runs.
     code: bool = False
+    # False for a page's background poll: it reads the session without
+    # keeping it alive, so an open tab still ends at the idle limit.
+    touch: bool = True
 
     def __post_init__(self) -> None:
         if (self.run is None) == (self.open is None):
@@ -280,6 +284,7 @@ class Admin:
         logos: Logos | None = None,
         usage: Usage | None = None,
         covers: CoverPanel | None = None,
+        health: HealthChecks | None = None,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -287,8 +292,8 @@ class Admin:
         """pin is the listening PIN the settings page sets; apply reloads the
         running channels after a change; samples gives recent titles that
         new title rules are tried on; logos holds the downloaded group
-        images the Stations page shows; covers serves the Covers page, and
-        None leaves its routes not found."""
+        images the Stations page shows; covers serves the Covers page and
+        health the Health page, and None leaves its routes not found."""
         self._accounts = accounts
         self._pin = pin
         self._settings = settings
@@ -299,6 +304,7 @@ class Admin:
         self._free = free_space
         self._usage = usage
         self._covers = covers
+        self._health = health
         self._checks = checks
         self._origin = config.public_origin
         # Over plain http a browser drops Secure cookies and refuses the
@@ -350,7 +356,7 @@ class Admin:
             # not enough.
             ("POST", "stream/check"): Route(self._stream_check, code=True),
             ("POST", "source/check"): Route(self._source_check, code=True),
-            ("GET", "usage/live"): Route(self._using(self._usage_live)),
+            ("GET", "usage/live"): Route(self._using(self._usage_live), touch=False),
             ("GET", "usage/summary"): Route(self._using(self._usage_summary)),
             ("GET", "usage/devices"): Route(self._using(self._usage_devices)),
             ("GET", "usage/device"): Route(self._using(self._usage_device)),
@@ -370,6 +376,12 @@ class Admin:
             ("POST", "covers/upload"): Route(
                 self._covering(self._cover_upload), body=MAX_COVER, types=COVER_TYPES
             ),
+            # The button reaches only saved addresses and answers fixed reason
+            # codes, never another server's words: a session is enough.
+            ("GET", "health"): Route(self._checking(self._health_page)),
+            ("GET", "health/count"): Route(self._checking(self._health_count), touch=False),
+            ("GET", "health/covers"): Route(self._checking(self._health_covers)),
+            ("POST", "health/check"): Route(self._checking(self._health_check)),
         }
         if config.setup_page and not accounts.exists():
             self._setup_token = crypto.new_token()
@@ -481,7 +493,7 @@ class Admin:
         refused = self._screen(request, route)
         if refused is not None:
             return refused
-        session = self._session(request)
+        session = self._session(request, touch=route.touch)
         if session is None:
             return _error(401, "login_required")
         given = request.header("X-Tunebox-CSRF") or ""
@@ -495,9 +507,9 @@ class Admin:
         attributes = f"Path=/admin; Max-Age={max_age}; HttpOnly;{secure} SameSite=Strict"
         return ("Set-Cookie", f"{name}={value}; {attributes}")
 
-    def _session(self, request: Request) -> Session | None:
+    def _session(self, request: Request, *, touch: bool = True) -> Session | None:
         token = request.cookie(self.session_cookie)
-        return self._accounts.session(token) if token else None
+        return self._accounts.session(token, touch=touch) if token else None
 
     def _state(self, request: Request) -> Response:
         session = self._session(request)
@@ -1124,6 +1136,45 @@ class Admin:
             return handler(request, session, self._covers)
 
         return run
+
+    def _checking(
+        self, handler: Callable[[Request, Session, HealthChecks], Response]
+    ) -> Callable[[Request, Session], Response]:
+        """A Health handler as a route's run, answering not found when this
+        Admin was built without the health checks."""
+
+        def run(request: Request, session: Session) -> Response:
+            if self._health is None:
+                return _error(404, "not_found")
+            return handler(request, session, self._health)
+
+        return run
+
+    def _health_page(self, _request: Request, _session: Session, health: HealthChecks) -> Response:
+        if not health.alive():
+            return _error(503, "health_stopped")
+        page = health.page()
+        return _error(503, "health_unavailable") if page is None else _json(200, page)
+
+    def _health_count(self, _request: Request, _session: Session, health: HealthChecks) -> Response:
+        return _json(200, {**health.count(), "stopped": not health.alive()})
+
+    def _health_covers(
+        self, _request: Request, _session: Session, _health: HealthChecks
+    ) -> Response:
+        counts = self._covers.nothing_by_channel() if self._covers is not None else None
+        return _json(200, {"counts": counts})
+
+    def _health_check(self, _request: Request, _session: Session, health: HealthChecks) -> Response:
+        asked = health.request()
+        if asked.outcome == "started":
+            return _json(202, {"started": True})
+        if asked.outcome == "running":
+            return _error(409, "health_running")
+        if asked.outcome == "too_soon":
+            retry = ("Retry-After", str(asked.retry_s))
+            return _json(429, {"error": "health_too_soon", "retry_s": asked.retry_s}, retry)
+        return _error(503, "health_stopped")
 
     def _covers_list(self, request: Request, _session: Session, covers: CoverPanel) -> Response:
         query = _query(request)

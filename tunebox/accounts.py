@@ -234,10 +234,12 @@ class Accounts:
             return "totp"
         return None
 
-    def session(self, token: str) -> Session | None:
-        """The live session for a cookie value; asking keeps it alive. The
-        check is a read; the keep-alive and clean-up writes are best-effort,
-        so a session still works while the database cannot be written."""
+    def session(self, token: str, *, touch: bool = True) -> Session | None:
+        """The live session for a cookie value; asking keeps it alive unless
+        touch is False (a background poll, which must not outlast the
+        owner's idle time). The check is a read; the keep-alive and clean-up
+        writes are best-effort, so a session still works while the database
+        cannot be written."""
         now = self._clock()
         hashed = crypto.token_hash(token)
         with self._settings.read() as db:
@@ -254,7 +256,7 @@ class Accounts:
         if now - last_seen > IDLE_S or now > expiry:
             self._try_write("DELETE FROM sessions WHERE token_hash = ?", (hashed,))
             return None
-        if now - last_seen > TOUCH_S:
+        if touch and now - last_seen > TOUCH_S:
             self._try_write("UPDATE sessions SET last_seen = ? WHERE token_hash = ?", (now, hashed))
         return Session(hashed, csrf, address, reauth_at)
 

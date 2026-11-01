@@ -308,7 +308,7 @@ def song_list(
         len(heard),
         sum(1 for r in heard if r.link is not None and r.kind == "album"),
         sum(1 for r in heard if r.link is not None and r.kind == "artist"),
-        sum(1 for r in heard if r.link is None and r.state != "looking"),
+        sum(1 for r in heard if _no_image(r)),
         sum(1 for r in heard if r.fix is not None),
     )
     if view == "fixed":
@@ -329,6 +329,28 @@ def song_list(
     photos = {song.key: song.photo for song in songs}
     page = [_with_photo(r, photos, fixes, image) for r in rows[:limit]]
     return Listing(page, (page[-1].sort_at, page[-1].key) if more else None, totals)
+
+
+def _no_image(row: Row) -> bool:
+    """A song the player shows no image for and is not still looking for."""
+    return row.link is None and row.state != "looking"
+
+
+def nothing_by_channel(
+    songs: Sequence[HeardSong],
+    fixes: Mapping[str, Fix],
+    image: Callable[[str], str | None],
+    failure: Callable[[str, str], str | None],
+) -> dict[str, int]:
+    """The songs that show no image, per station that played them: the
+    Covers page's No image total, split by station."""
+    counts: dict[str, int] = {}
+    for song in songs:
+        row = _song_row(song, fixes, image, failure)
+        if _no_image(row):
+            for channel in row.channels:
+                counts[channel] = counts.get(channel, 0) + 1
+    return counts
 
 
 def _song_row(

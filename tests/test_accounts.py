@@ -90,6 +90,19 @@ def test_sessions_expire_when_idle_and_after_twelve_hours(accounts: Accounts, cl
     assert accounts.session(token) is None
 
 
+def test_a_session_read_without_touching_still_expires_when_idle(
+    accounts: Accounts, clock: Clock
+) -> None:
+    token = accounts.login(PASSWORD, code(clock), "a", "b").token or ""
+    start = clock.now
+    while clock.now - start <= IDLE_S - 59:
+        clock.now += 59
+        assert accounts.session(token, touch=False) is not None
+    clock.now = start + IDLE_S + 60
+    assert accounts.session(token, touch=False) is None
+    assert accounts.session(token) is None
+
+
 def test_logout_ends_the_session(accounts: Accounts, clock: Clock) -> None:
     token = accounts.login(PASSWORD, code(clock), "a", "b").token or ""
     accounts.logout(token)
