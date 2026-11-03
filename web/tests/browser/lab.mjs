@@ -1,6 +1,7 @@
 // Browser check of the player's lab mode (?lab=1): the normal player loads
 // none of it; Start feeds the silent test signal to the analysers; Next
-// steps through every visualizer style; Still glow holds the cover glow;
+// steps through every visualizer style; the cover glow's layer sits on
+// the cover and follows the bass, and Still glow holds it;
 // a shortened test measures every style, Off first, in all three modes;
 // the results fit a phone's width; the QR code holds exactly the results JSON;
 // Stop test stops at once; nothing is stored and no stream plays; exactly
@@ -299,12 +300,28 @@ async function run() {
         await tap('.lab-power');
         await sleep(200);
 
+        // The bass swell sits on the cover's box and moves with the signal.
+        const glowOver = await evaluate(`(() => {
+            const glow = document.querySelector('.car-glow');
+            const art = document.querySelector('.artwork-img');
+            return ['offsetLeft', 'offsetTop', 'offsetWidth', 'offsetHeight']
+                .every((key) => Math.abs(glow[key] - art[key]) <= 1) && art.offsetWidth > 0;
+        })()`);
+        check(glowOver ? null : 'the glow layer is not over the cover');
+        const swell = [];
+        for (let i = 0; i < 8; i++) {
+            swell.push(await evaluate(`document.querySelector('.car-glow').style.opacity`));
+            await sleep(100);
+        }
+        check(new Set(swell).size > 1 && swell.some((value) => Number(value) > 0)
+            ? null : `the glow did not follow the bass: ${swell.join(', ')}`);
+
         // Still glow holds the cover glow while a style draws.
         await tap('.lab-still');
         await sleep(600);
-        const glow = await evaluate(`[document.querySelector('.tunebox').style.getPropertyValue('--bass'),
+        const glow = await evaluate(`[document.querySelector('.car-glow').style.opacity,
             document.querySelector('.lab-still').getAttribute('aria-pressed')].join()`);
-        check(glow === '0.000,true' ? null : `Still glow left the glow at ${glow}`);
+        check(glow === '0,true' ? null : `Still glow left the glow at ${glow}`);
         await tap('.lab-still');
         await sleep(600);
         check(await evaluate(`document.querySelector('.lab-still').getAttribute('aria-pressed')`) === 'false'

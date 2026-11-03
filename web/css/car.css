@@ -319,9 +319,28 @@
     }
 }
 
-/* Cover glow, breathing with the bass level palette.js writes to --bass. */
+/* Cover glow: a still halo on the cover, and the bass swell on its own
+   layer behind it (.car-glow, placed by palette.js), which only changes
+   opacity and scale so the compositor moves it without repainting. Never
+   animate a shadow's size here: on the car that repaint costs most of
+   every frame. */
 .tunebox.car-glow-on .artwork-img {
-    box-shadow: 0 0 calc(1rem + var(--bass, 0) * 2.5rem) calc(var(--bass, 0) * .6rem) var(--art-glow);
+    box-shadow: 0 0 1rem var(--art-glow);
+}
+
+.tunebox .car-glow {
+    display: none;
+}
+
+.tunebox.car-glow-on .car-glow {
+    position:       absolute;
+    z-index:        9;
+    display:        block;
+    border-radius:  .3rem;
+    box-shadow:     0 0 3.5rem .6rem var(--art-glow);
+    opacity:        0;
+    pointer-events: none;
+    will-change:    opacity, transform;
 }
 
 .tunebox[data-viz="neon"] #analyzer canvas {
@@ -367,7 +386,8 @@
     opacity: .35;
 }
 
-.tunebox.car-night .artwork-img {
+.tunebox.car-night .artwork-img,
+.tunebox.car-night .car-glow {
     filter: brightness(.65);
 }
 
