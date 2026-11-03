@@ -53,6 +53,33 @@ export function bindPalette(app) {
     root.insertBefore(ambient, root.firstChild);
     root.classList.add('car-ambient-on', 'car-glow-on');
 
+    // The bass swell is a layer of its own behind the cover, its shadow
+    // painted once per colour; the bass moves only its opacity and scale,
+    // which the compositor animates without repainting. A shadow whose blur
+    // followed the bass repainted a large blurred area every frame, which a
+    // slow graphics chip cannot afford. The cover clips its own content, so
+    // the layer is a sibling placed over the cover's box.
+    const artBox = root.querySelector('.artwork-img');
+    const glow = document.createElement('div');
+    glow.className = 'car-glow';
+    artBox.parentNode.insertBefore(glow, artBox);
+    const place = () => {
+        glow.style.left = `${artBox.offsetLeft}px`;
+        glow.style.top = `${artBox.offsetTop}px`;
+        glow.style.width = `${artBox.offsetWidth}px`;
+        glow.style.height = `${artBox.offsetHeight}px`;
+    };
+    if (window.ResizeObserver) {
+        // The parent too: it centres the cover, so its size moves the cover
+        // without resizing it.
+        const watch = new ResizeObserver(place);
+        watch.observe(artBox);
+        watch.observe(artBox.parentNode);
+    } else {
+        window.addEventListener('resize', place);
+    }
+    place();
+
     let bass = 0;
     let held = false;
     // Eased, so single kicks swell rather than flash.
@@ -61,7 +88,8 @@ export function bindPalette(app) {
             return;
         }
         bass = immediate ? level : bass + (level - bass) * 0.2;
-        root.style.setProperty('--bass', bass.toFixed(3));
+        glow.style.opacity = bass.toFixed(3);
+        glow.style.transform = `scale(${(1 + bass * 0.04).toFixed(4)})`;
     };
     // Lab mode: the glow stays still, so a test can tell its cost per frame
     // from the visualizer's own.
