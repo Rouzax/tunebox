@@ -11,9 +11,6 @@ the new song, not half a minute early, the page fits the car's narrow and
 wide windows, and a dropped connection (a tunnel, a 4G handover) is picked
 up again without a tap.
 
-tunebox can also feed an existing PawTunes player; you do not need PawTunes
-to use it.
-
 ## What you get
 
 For listeners:
@@ -401,7 +398,7 @@ seconds), without a restart.
 - The arrows move a station within its group, or a group up and down.
 - Duplicate makes a copy with the id `<id>-copy`, switched off, to edit.
   It is also how you give a station a new id: the id is fixed once saved,
-  because players and PawTunes use it in addresses.
+  because players use it in addresses.
 - Deleting or switching off the station the player starts on
   (`default_channel`) clears that setting; the player then starts on the
   first station, and the message says so.
@@ -569,7 +566,7 @@ Two limits keep uploads from filling the disk:
 ### Settings and the listening PIN
 
 **Settings** (in the panel's menu) holds what every station inherits unless
-it sets its own: the title delay, the PawTunes delay, how often tunebox
+it sets its own: the title delay, how often tunebox
 checks a station's feed, and how many recently played songs each station
 keeps. An empty field uses tunebox's built-in value, shown in grey. Below
 that: the station a new device starts on, and the location the player uses
@@ -607,8 +604,7 @@ How it behaves:
   rest to try again. With the CrowdSec files from `examples/crowdsec/`, 20
   wrong PINs ban the address at your proxy (for an hour with the profile in
   their README).
-- The admin panel, `/healthz` and `/api/pawtunes` stay open (PawTunes keeps
-  working, hidden stations included).
+- The admin panel and `/healthz` stay open.
 - With the whole player locked, an embed of it on another site stops
   working: browsers do not send the PIN's cookie to a page inside another
   site's frame.
@@ -800,9 +796,6 @@ What a fix does:
 - The player shows the new image from its next update once tunebox has
   downloaded it; until then it keeps the old one. An uploaded image needs
   no download: tunebox copies it into place as its next job.
-- PawTunes shows it from the next time the song starts, because PawTunes
-  keeps one image per song while it plays. PawTunes never shows an
-  uploaded cover: it has no public link.
 - **Back to automatic** removes the fix: tunebox forgets its own earlier
   answer too and looks the song up again. Until that lookup is done, the
   song shows no image, or your photo fix for its artist if there is one.
@@ -874,34 +867,6 @@ When tunebox cannot reach the internet itself during a check (nearly every
 check fails to connect at once), it changes no results, logs
 `health_network_down`, and tries again after 30 minutes, at most three
 times.
-
-## Use it with PawTunes
-
-You only need this while you still use PawTunes. tunebox can supply the
-song titles, history and covers for an existing PawTunes player.
-
-1. In PawTunes' admin panel, open the channel's settings.
-2. Set the stats (now playing) method to **custom**.
-3. Set the URL to tunebox's PawTunes address for that station:
-   `https://<your-host>/api/pawtunes/<station id>`, for example
-   `https://radio.example.com/api/pawtunes/anthems`. If PawTunes runs in a
-   container on the same Docker network, `http://tunebox:8080/api/pawtunes/anthems`
-   works too.
-
-The station ids are the `id` values in `data/tunebox.toml`: `owr`,
-`daybreak` and `anthems` in the example.
-
-What changes in PawTunes:
-
-- Titles switch about when you hear the song, and keep their
-  "(Played by ...)" credits.
-- History shows up to 20 songs, without jingles.
-- Covers come from tunebox. A song's cover is decided the first time
-  PawTunes sees the song; if tunebox had not found one yet, PawTunes uses
-  its own artwork for that song. (Changing the cover while a song plays
-  would make PawTunes list the song twice.)
-- During a station jingle PawTunes shows its default artist with the jingle
-  code; the PawTunes car theme shows the station name instead.
 
 ## Change the stations
 
@@ -1006,13 +971,12 @@ empty database (see [Set up the admin panel](#set-up-the-admin-panel)).
 ## Fine-tune when titles change
 
 Every station sends a song's title some seconds before you hear it, and how
-many differs by station and by player. Two settings in `data/tunebox.toml`
-control the switch:
+many differs by station. One setting in `data/tunebox.toml` controls the
+switch:
 
 ```toml
 [defaults]
-delay_s = 7            # for tunebox's own player (it adds its own buffer)
-pawtunes_delay_s = 28  # for PawTunes
+delay_s = 7  # tunebox's player adds its own buffer on top
 ```
 
 - The title changes **before** the song: raise the number.
@@ -1026,10 +990,14 @@ by reading the stream for a few seconds. The log shows each result as
 `burst_measured`. A stream without `kbps` is not measured, and its titles
 change that much early.
 
-Restart tunebox after a change. Both defaults come from a few measured
-song changes, so small adjustments are normal. You can also set a different
-value for one station by adding `delay_s` or `pawtunes_delay_s` to its
-`[[channels]]` block.
+Restart tunebox after a change. The default comes from a few measured song
+changes, so small adjustments are normal. You can also set a different
+value for one station by adding `delay_s` to its `[[channels]]` block.
+
+`pawtunes_delay_s`, the delay of the PawTunes feed that earlier versions
+had, is ignored wherever it is still set: in `data/tunebox.toml`, in an
+export you import, and in the configuration and history the admin panel
+stored. You can delete it from the file.
 
 ## Update, back up and reset
 
@@ -1139,7 +1107,6 @@ value for one station by adding `delay_s` or `pawtunes_delay_s` to its
 | "This browser cannot play AAC" (or MP3) | The browser lacks that codec (common for AAC in some Linux browsers). | Pick a quality with the other codec, usually "Compatible" (MP3). |
 | No visualizer | It starts after the first tap or key press on the page. A stream served without the cross-origin permission plays without it ("No visualizer for this stream"). | Tap the page once. Nothing to do for such a stream. |
 | A station shows only its name, no song | Its feed answered slowly or not at all when you opened it (tunebox does not show a song it cannot confirm is on now). | Wait for the next update (10 seconds). If it stays empty, `/healthz` asked on the host itself shows `stale_since` for that station (see [HTTP API](#http-api)). |
-| PawTunes shows nothing new | PawTunes cannot reach the URL. | Open the same `/api/pawtunes/<id>` address in a browser from the PawTunes machine; you should see the current song. |
 | The Health page shows a station as Broken with "cannot be reached" | The station's stream address moved or its server is down. The same words appear for an address tunebox may not fetch: a name that does not resolve, or an address on the home network. | Open the station, use **Check stream** on its address, and find the new address on the station's website. |
 | `health_network_down` in the log | During a check, tunebox could not connect to nearly any station: its own internet connection or name lookup was down. | Nothing, if it passes on the next try 30 minutes later. Otherwise check the container's network and DNS. |
 | The Health page says "The health check is not running; restart tunebox." | The health check's thread has ended. That normally happens only while tunebox shuts down. | Restart tunebox. If the message comes back, report the log lines from just before it. |
@@ -1178,7 +1145,6 @@ is reported at startup instead of being ignored.
 | Key | Default | Meaning |
 |---|---|---|
 | `delay_s` | `7` | Seconds after a song's start at which `/api/channels/<id>/now` reports it as current. |
-| `pawtunes_delay_s` | `28` | The same for `/api/pawtunes/<id>`. |
 | `poll_interval_s` | `12` | Seconds between checks of a station's feed, plus up to 3 s of random spread. After a failure the wait doubles each time, up to 120 s. Only while the station is active (see `always`). |
 | `history_size` | `50` | Songs kept per station. |
 
@@ -1218,7 +1184,7 @@ is reported at startup instead of being ignored.
 |---|---|---|
 | `station_id` | none | A regular expression. An entry with no artist whose title matches it is a jingle: not shown as a song and not kept in history. |
 | `played_by` | none | A regular expression for a credit at the end of a title. Its first group (in parentheses) is kept as the credit; the match is removed from the title. |
-| `badge` | none | A regular expression for a label in the title, such as a chart position. The first of its groups that took part in the match is shown as a badge before the title, on the now-playing screen and in Recently played; the match is removed from the title, so the cover search and the song's identity use the plain title. With alternatives, each in its own group, one pattern can take a prefix or a suffix. A title that is nothing but the match is left whole. The PawTunes feed keeps the full title. |
+| `badge` | none | A regular expression for a label in the title, such as a chart position. The first of its groups that took part in the match is shown as a badge before the title, on the now-playing screen and in Recently played; the match is removed from the title, so the cover search and the song's identity use the plain title. With alternatives, each in its own group, one pattern can take a prefix or a suffix. A title that is nothing but the match is left whole. |
 | `artist_separator` | `","` | What separates several artists. Only this splits: `&`, `.` and `/` inside a name are kept. |
 
 ### Environment variables
@@ -1337,11 +1303,6 @@ policy that keeps them from running script.
   comparison, so on a `304` keep your own deadline. A new configuration
   version changes the ETag.
 
-**`GET /api/pawtunes/<id>`** answers in the format PawTunes' "custom" stats
-source reads: `artist`, `title` (with its credit), `artwork` (optional) and
-`history` (up to 20 entries with `artist`, `title`, `played_at` in
-milliseconds and optional `artwork`).
-
 **`GET /healthz`** is `200` with `{"status": "ok"}` while the server runs.
 Asked on the host itself (a connection from loopback without proxy
 headers, as Docker's healthcheck makes), it also gives each station's last
@@ -1369,8 +1330,8 @@ addresses are guessing gets `429` with `{"error": "busy"}` and
 While the PIN is on:
 
 - With **the whole player** locked and no grant, every page address
-  answers with the PIN page, and `/api/*` (except `/api/pin` and
-  `/api/pawtunes`), `/logos/` and `/covers/` answer `401` with
+  answers with the PIN page, and `/api/*` (except `/api/pin`), `/logos/`
+  and `/covers/` answer `401` with
   `{"error": "pin_required"}`.
 - With **chosen stations** and no grant, `/api/channels` leaves out the
   stations with `needs_pin` and adds the header `X-Tunebox-Pin: more`;

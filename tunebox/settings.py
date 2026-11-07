@@ -26,6 +26,7 @@ from tunebox.config import (
     ConfigState,
     keeps_a_channel,
     validate_state,
+    without_retired,
 )
 from tunebox.migrate import migrate
 
@@ -188,12 +189,14 @@ def state_from_dict(data: object) -> ConfigState:
             # its group), so the panel and the player read one value.
             raise ConfigError(f"{where}.doc.group: the group belongs on the station, not its doc")
         rows.append(ChannelRow(cid, group, enabled, cast("dict[str, Any]", body)))
-    return ConfigState(
-        cast("dict[str, float]", defaults),
-        cast("dict[str, Any]", player),
-        tuple(names),
-        tuple(rows),
-        cast("dict[str, str]", images),
+    return without_retired(
+        ConfigState(
+            cast("dict[str, float]", defaults),
+            cast("dict[str, Any]", player),
+            tuple(names),
+            tuple(rows),
+            cast("dict[str, str]", images),
+        )
     )
 
 
@@ -400,15 +403,17 @@ class Settings:
                 " LEFT JOIN groups g ON g.id = c.group_id ORDER BY c.position"
             ).fetchall(),
         )
-        return ConfigState(
-            cast("dict[str, float]", settings.get("defaults", {})),
-            cast("dict[str, Any]", settings.get("player", {})),
-            tuple(name for (name,) in groups),
-            tuple(
-                ChannelRow(cid, group, bool(enabled), cast("dict[str, Any]", json.loads(raw)))
-                for cid, group, enabled, raw in rows
-            ),
-            cast("dict[str, str]", settings.get("group_images", {})),
+        return without_retired(
+            ConfigState(
+                cast("dict[str, float]", settings.get("defaults", {})),
+                cast("dict[str, Any]", settings.get("player", {})),
+                tuple(name for (name,) in groups),
+                tuple(
+                    ChannelRow(cid, group, bool(enabled), cast("dict[str, Any]", json.loads(raw)))
+                    for cid, group, enabled, raw in rows
+                ),
+                cast("dict[str, str]", settings.get("group_images", {})),
+            )
         )
 
     def _write(self, state: ConfigState) -> None:

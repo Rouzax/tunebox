@@ -99,13 +99,13 @@ def _query(target: str, name: str) -> list[str] | None:
 
 def _locked_route(parts: list[str]) -> bool:
     """What the PIN covers besides the pages (which _static judges by the
-    file it would serve): the API except the PIN itself and PawTunes (which
-    knows nothing of a PIN), and the logos and covers. Scripts, styles and
+    file it would serve): the API except the PIN itself, and the logos and
+    covers. Scripts, styles and
     fonts are the player's public code and stay open, so the PIN page can
     load."""
     if parts[:1] in (["logos"], ["covers"]):
         return True
-    return parts[:1] == ["api"] and parts[1:2] not in (["pin"], ["pawtunes"])
+    return parts[:1] == ["api"] and parts[1:2] != ["pin"]
 
 
 def _private(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -608,14 +608,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._not_modified(etag)
             headers = {"ETag": etag, "Cache-Control": "no-cache"}
             return self._send_json(200, body, head, headers)
-        if len(parts) == 3 and parts[:2] == ["api", "pawtunes"]:
-            channel = channels.get(parts[2])
-            if channel is None:
-                return self._send_json(404, {"error": "unknown_channel"}, head)
-            if channel.touch():
-                channel.wait_fresh(FRESH_WAIT_S)
-            headers = {"Cache-Control": "no-cache"}
-            return self._send_json(200, channel.pawtunes_view(), head, headers)
         if parts and parts[0] == "api":
             return self._send_json(404, {"error": "not_found"}, head)
         if parts[:2] == ["logos", "groups"]:

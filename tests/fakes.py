@@ -130,7 +130,6 @@ class NoJitter(random.Random):
 
 def channel_config(
     delay_s: float = 7.0,
-    pawtunes_delay_s: float = 28.0,
     history_size: int = 50,
     always: bool = False,
     group: str | None = None,
@@ -145,7 +144,6 @@ def channel_config(
         source=SourceConfig("triton", {"mount": "OWR_INTERNATIONAL"}),
         rules=RULES,
         delay_s=delay_s,
-        pawtunes_delay_s=pawtunes_delay_s,
         poll_interval_s=12.0,
         history_size=history_size,
         group=group,

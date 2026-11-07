@@ -188,15 +188,6 @@ class CoverService:
         local = self._local(photo_choices(fix, automatic))
         return local[0] if local is not None else None
 
-    def remote_link(self, track: Track) -> str | None:
-        """The catalogue link, for PawTunes, which counts a changed artwork
-        link as a new track. An upload has no public link and is omitted."""
-        with self._lock:
-            shown = self._shown(track)[0]
-        if shown is None or shown.url is None or BLOB_REF.fullmatch(shown.url):
-            return None
-        return shown.url
-
     def request(self, track: Track, priority: int) -> None:
         """Queues what the track still needs: the fetch of the fixes it may
         show (also for a song no search could match), else a search or

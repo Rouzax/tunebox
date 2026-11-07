@@ -44,8 +44,6 @@ JITTER_S = 3.0
 # A cold start would otherwise queue a lookup for every history entry, and
 # iTunes allows about 20 searches a minute.
 HISTORY_LOOKUPS = 20
-# PawTunes' browser keeps at most 20 history entries.
-PAWTUNES_HISTORY = 20
 # A channel that is not pinned keeps polling this long after the last request.
 ACTIVE_MS = 600_000
 # How often an idle poller looks again; a request wakes it at once.
@@ -85,7 +83,6 @@ class Channel:
         self._failures = 0
         self._stale_since: int | None = None
         self._last_ok: int | None = None
-        self._frozen_artwork: dict[tuple[int, str], str | None] = {}
         self._active_until = 0
         self._wake = threading.Event()
         # Set by a successful poll; cleared while idle. What was current
@@ -123,17 +120,12 @@ class Channel:
 
     def _carry_from(self, old: Channel) -> None:
         """A restart for new poll settings keeps what listeners see: the
-        recent list, PawTunes' artwork decisions, the activity window and,
-        when the source is the same, the freshness of the last poll."""
+        recent list, the activity window and, when the source is the same,
+        the freshness of the last poll."""
         with old._lock:
-            # A restart for new rules shows the kept list as those rules read it;
-            # PawTunes' artwork stays frozen under the track's new identity.
+            # A restart for new rules shows the kept list as those rules read it.
             kept = old._recent[: self.config.history_size]
             self._recent = [reclean(t, self.config.rules) for t in kept]
-            renamed = {a.ident: b.ident for a, b in zip(kept, self._recent, strict=True)}
-            self._frozen_artwork = {
-                renamed.get(ident, ident): url for ident, url in old._frozen_artwork.items()
-            }
             self._active_until = old._active_until
             fresh = old._fresh.is_set() and old.config.source == self.config.source
         if fresh:
@@ -266,12 +258,9 @@ class Channel:
     def _request_covers(self, recent: list[Track], now: int) -> list[Track]:
         """Asks covers for what plays and what is near; returns those tracks."""
         timeline = build(recent, now, self.config.delay_s)
-        pawtunes = build(recent, now, self.config.pawtunes_delay_s)
         asked: list[tuple[Track, int]] = [(track, NOW) for track in timeline.not_heard]
         if timeline.audible is not None:
             asked.append((timeline.audible, NOW))
-        if pawtunes.audible is not None:
-            asked.append((pawtunes.audible, NOW))
         asked.extend((track, HISTORY) for track in timeline.history[:HISTORY_LOOKUPS])
         for track, priority in asked:
             self._covers.request(track, priority)
@@ -378,48 +367,6 @@ class Channel:
             "images": images,
         }
         return body, _etag(body)
-
-    def pawtunes_view(self) -> dict[str, Any]:
-        """The shape PawTunes' "custom" stats source reads."""
-        timeline, _ = self._timeline(self.config.pawtunes_delay_s)
-        audible = timeline.audible if self._fresh.is_set() else None
-        body: dict[str, Any]
-        if audible is None:
-            body = {"artist": "", "title": self.config.name}
-        elif audible.kind == "station_id":
-            # PawTunes fills in its default artist; the car theme recognises the
-            # pair and shows the channel name.
-            body = {"artist": "", "title": audible.full_title}
-        else:
-            body = {"artist": audible.artist, "title": audible.full_title}
-            artwork = self._frozen(audible)
-            if artwork:
-                body["artwork"] = artwork
-        entries = ([timeline.current] if timeline.current else []) + list(timeline.history)
-        history: list[dict[str, Any]] = []
-        for track in entries[:PAWTUNES_HISTORY]:
-            entry: dict[str, Any] = {
-                "artist": track.artist,
-                "title": track.full_title,
-                "played_at": track.started_at,
-            }
-            if artwork := self._covers.remote_link(track):
-                entry["artwork"] = artwork
-            history.append(entry)
-        body["history"] = history
-        return body
-
-    def _frozen(self, track: Track) -> str | None:
-        """The artwork PawTunes gets for a track is decided once, when PawTunes
-        first sees it as current. PawTunes treats a changed artwork link,
-        including one appearing or disappearing, as a new track."""
-        with self._lock:
-            if track.ident not in self._frozen_artwork:
-                self._frozen_artwork[track.ident] = self._covers.remote_link(track)
-                live = {t.ident for t in self._recent}
-                for ident in [i for i in self._frozen_artwork if i not in live]:
-                    del self._frozen_artwork[ident]
-            return self._frozen_artwork[track.ident]
 
 
 def _etag(body: dict[str, Any]) -> str:
