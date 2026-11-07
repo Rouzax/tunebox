@@ -1,9 +1,9 @@
 name: checks
 
+# A branch is checked through its pull request only: a push trigger as well
+# would run every check twice. main is checked by image.yml before its build.
 on:
   pull_request:
-  push:
-    branches-ignore: [main]
   workflow_call:
 
 permissions:
