@@ -233,21 +233,29 @@ screen draws fewer pixels than the full screen, so run the test in the
 layout you want numbers for. **Stop test** stops at once and shows the
 styles measured so far.
 
-**GPU test** in the lab bar opens a separate page (`/lab-gpu.html`, which
-also opens directly) that measures what WebGL drawing costs on the device,
-for possible new visualizer styles. Press **Start**; it runs on the same
-silent test signal and says how long it takes (about 4 minutes). It
-measures the page with nothing drawn first, then three test drawings of
-its own at full, half and a third of the window's resolution (a light
-colour field, a tunnel of the cover image over the previous frames, and a
-heavy layered noise), then five Milkdrop presets through Butterchurn at
-half and a third. It also times compiling each test drawing, loading each
-preset, and the longest frame right after switching to a preset. The page
-needs WebGL 2 and says so when the browser has none. It is the only page
-that may compile WebAssembly, because Butterchurn turns each preset's
-equations into WebAssembly; every other page keeps the stricter policy.
-It ends with its own table and its own QR code, separate from the lab
-test's, and **Stop** ends the run early with what was measured so far.
+**GPU test** measures what GPU (WebGL) drawing costs on the device, as a
+guide for new visualizer styles. It needs WebGL 2 and says so when the
+browser has none.
+
+1. In the lab bar, tap **GPU test**. It opens its own page,
+   `/lab-gpu.html`, which you can also open directly.
+2. Tap **Start**. It runs on the same silent test signal, says how long the
+   run takes (about 4 minutes), and shows the live frame rate.
+3. When it ends, photograph the QR code. It is separate from the lab test's
+   QR code, and the same numbers are in the table beside it.
+
+In order, it measures the page with nothing drawn, then three test drawings
+of its own at full, half and a third of the window's resolution: a light
+colour field, a tunnel of the cover image drawn over the previous frames,
+and a heavy layered noise. Then come five Milkdrop presets through
+Butterchurn, at half and a third. It also times compiling each test
+drawing and loading each preset, and records the longest frame just after
+a preset change, which shows up as a stutter. **Stop** ends the run early
+and shows what was measured so far.
+
+Butterchurn turns each preset's equations into WebAssembly, so this page
+alone is allowed to compile WebAssembly; every other page keeps the
+stricter policy.
 
 Lab mode and the GPU test save nothing: the visualizer style, station and
 other choices stay as they were for normal use. The results stay on the
