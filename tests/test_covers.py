@@ -71,6 +71,7 @@ def service(
     photos: Finder | None = None,
     fixes: FakeFixes | None = None,
     blobs: Path | None = None,
+    rules_since: float = 0.0,
 ) -> CoverService:
     files = CoverFiles(folder or fresh_folder(), free=lambda: None, clock=lambda: now[0])
     return CoverService(
@@ -82,6 +83,7 @@ def service(
         find_photo=photos,
         fixes=fixes,
         blob_path=(lambda ref: blob_file(blobs, ref)) if blobs else None,
+        rules_since=rules_since,
     )
 
 
@@ -340,6 +342,40 @@ def test_a_dead_link_is_searched_again_and_the_old_file_stays(tmp_path: Path) ->
     now[0] += 601
     covers.request(track, NOW)
     assert covers.run_once()  # outcome error: searched again after ten minutes
+
+
+def test_a_cover_decided_under_older_rules_is_searched_again_once(tmp_path: Path) -> None:
+    store = Store(None)
+    now = [1000.0]
+    track = make_track()
+    old = service(Finder(Found(URL, "album", "m")), now, store=store, folder=tmp_path)
+    old.request(track, NOW)
+    drain(old)
+    now[0] = 2000.0
+    finder = Finder(Found(URL2, "album", "m"))
+    covers = service(finder, now, store=store, folder=tmp_path, rules_since=1500.0)
+    covers.request(track, NOW)
+    assert covers.lookup(track) is not None  # the old cover shows meanwhile
+    drain(covers)
+    assert len(finder.calls) == 1
+    decision = store.get_cover(track.key)
+    assert decision is not None and decision.url == URL2
+    covers.request(track, NOW)
+    assert not covers.run_once()
+
+
+def test_older_rules_leave_other_outcomes_to_their_ttl() -> None:
+    store = Store(None)
+    now = [1000.0]
+    track = make_track()
+    old = service(Finder(Found(URL, "artist", "m")), now, store=store)
+    old.request(track, NOW)
+    drain(old)
+    finder = Finder(Found(URL2, "album", "m"))
+    covers = service(finder, now, store=store, rules_since=1500.0)
+    covers.request(track, NOW)
+    drain(covers)
+    assert finder.calls == []
 
 
 def test_a_page_instead_of_an_image_counts_as_a_dead_link(tmp_path: Path) -> None:

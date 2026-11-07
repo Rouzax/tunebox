@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 
 from tunebox.tracks import Track, norm
 
@@ -24,6 +24,9 @@ _COMPILED = re.compile(
     r"|\b(?:festival|miami|ibiza|summer|winter)\b.*\b(?:19|20)\d\d\b",
     re.IGNORECASE,
 )
+# Albums one search may look up to learn whose they are; each is a catalogue
+# call, and the ranking rarely needs more than the first two.
+OWNER_CHECKS = 3
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,10 @@ class Candidate:
     # The artist's own picture, where the catalogue gives one with the song.
     artist_image: str = ""
     artist_id: str = ""
+    # Whose album this is, where the catalogue says (iTunes names it only on
+    # a compilation, Deezer only when the album is looked up).
+    album_artist: str = ""
+    album_id: str = ""
 
 
 def base_title(title: str) -> str:
@@ -84,9 +91,15 @@ def lead_artist(name: str) -> str:
 
 
 def compiled(candidate: Candidate) -> bool:
-    """Whether the album or a version label ("(Mixed by ...)") looks like a
-    mix, compilation or show. The song's own name is left out of the album:
-    "Mixed Emotions" on its single "Mixed Emotions" is no mix."""
+    """Whether the album belongs to someone other than the song's artist
+    (a DJ's mix, "Various Artists"), or its title or a version label
+    ("(Mixed by ...)") looks like a mix, compilation or show. The song's own
+    name is left out of the album: "Mixed Emotions" on its single "Mixed
+    Emotions" is no mix."""
+    if candidate.album_artist and not artists_match(
+        search_names([candidate.artist]), candidate.album_artist
+    ):
+        return True
     song = norm(base_title(candidate.title))
     album = f" {norm(candidate.album)} "
     if song:
@@ -95,23 +108,54 @@ def compiled(candidate: Candidate) -> bool:
     return bool(_COMPILED.search(f"{album} {labels}"))
 
 
+def named_after(candidate: Candidate) -> bool:
+    """Whether the album's title starts with the song's: its single or EP
+    ("La Noche 2017 Remixes"), whose owner needs no lookup."""
+    song, album = norm(base_title(candidate.title)), norm(candidate.album)
+    return bool(song) and f"{album} ".startswith(f"{song} ")
+
+
 def best_match(
-    artists: Sequence[str], title: str, candidates: Sequence[Candidate]
+    artists: Sequence[str],
+    title: str,
+    candidates: Sequence[Candidate],
+    owner: Callable[[Candidate], str] | None = None,
 ) -> Candidate | None:
     """The first acceptable candidate, preferring the song's own release over
     a DJ mix, compilation or radio show (whose cover shows that, not the
     song), and then the exact version: the remix that is playing rather than
     the original, or the original rather than a remix. A song released only
-    on a compilation still gets that cover."""
+    on a compilation still gets that cover.
+
+    A mix's title does not always say so ("In Search Of Sunrise 4 - Latin
+    America"), so owner, where given, names the artist of a leading
+    candidate's album ("" when unknown); an album of someone else's then
+    ranks as a compilation and the next candidate is weighed."""
     exact = norm(title)
     acceptable = [
         c
         for c in candidates
         if c.image and titles_match(title, c.title) and artists_match(artists, c.artist)
     ]
-    # Stable: within each rank the catalogue's own order decides.
-    ranked = sorted(acceptable, key=lambda c: (compiled(c), norm(c.title) != exact))
-    return ranked[0] if ranked else None
+    checks = 0
+    while acceptable:
+        # min() keeps the first of equals: within a rank the catalogue's own
+        # order decides.
+        top = min(acceptable, key=lambda c: (compiled(c), norm(c.title) != exact))
+        if (
+            owner is None
+            or checks == OWNER_CHECKS
+            or top.album_artist
+            or compiled(top)
+            or named_after(top)
+        ):
+            return top
+        checks += 1
+        album_artist = owner(top)
+        if not album_artist:
+            return top
+        acceptable[acceptable.index(top)] = replace(top, album_artist=album_artist)
+    return None
 
 
 def searchable(track: Track) -> bool:

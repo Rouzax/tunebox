@@ -26,7 +26,7 @@ from tunebox.config import ChannelConfig, ConfigError, ConfigState, load
 from tunebox.coverfiles import MAX_COVER, CoverFiles
 from tunebox.coverfix import CoverFixes
 from tunebox.coverpanel import CoverPanel
-from tunebox.covers import CoverService
+from tunebox.covers import MATCH_RULES_SINCE, CoverService
 from tunebox.coversearch import CoverSearch
 from tunebox.disk import free_bytes
 from tunebox.health import ITEM_PAUSE_S, RETRY_DELAY_S, START_DELAY_S, HealthChecks
@@ -138,6 +138,7 @@ def main() -> int:
         find_photo=catalogs.artist_photo,
         fixes=fixes,
         blob_path=blobs.path,
+        rules_since=MATCH_RULES_SINCE,
     )
     logos = Logos(config.server.data_dir / "logos", guard.get, blobs)
     bursts = Bursts(guard.stream)

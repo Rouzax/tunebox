@@ -15,12 +15,13 @@ PLACEHOLDER = "https://cdn-images.dzcdn.net/images/artist//1000x1000.jpg"
 BLANK = "https://cdn-images.dzcdn.net/images/artist/d41d8cd98f00b204e9800998ecf8427e/1000x1000-000000-80-0-0.jpg"
 
 
-def deezer_song(artist: str, title: str, cover: str = COVER, album: str = "") -> dict[str, object]:
-    return {
-        "title": title,
-        "artist": {"name": artist},
-        "album": {"cover_xl": cover, "title": album},
-    }
+def deezer_song(
+    artist: str, title: str, cover: str = COVER, album: str = "", album_id: int | None = None
+) -> dict[str, object]:
+    album_part: dict[str, object] = {"cover_xl": cover, "title": album}
+    if album_id is not None:
+        album_part["id"] = album_id
+    return {"title": title, "artist": {"name": artist}, "album": album_part}
 
 
 def itunes_song(artist: str, title: str, art: str) -> dict[str, object]:
@@ -233,6 +234,104 @@ def test_itunes_reads_the_collection_to_prefer_the_own_release() -> None:
 
     found = catalogs(FakeHttp(respond)).find(make_track("TCHAMI", "Adieu"))
     assert found is not None and found.url == own.replace("100x100bb", "1000x1000bb")
+
+
+def dz_cover(name: str) -> str:
+    return f"https://cdn-images.dzcdn.net/images/cover/{name}/1000x1000-000000-80-0-0.jpg"
+
+
+# Deezer's answers for OWR's "COCA & VILLA, PEPE RUBIO - La Noche", trimmed.
+LA_NOCHE_SEARCH = [
+    deezer_song(
+        "Coca", "La Noche", dz_cover("isos"), "In Search Of Sunrise 4 - Latin America", 932046
+    ),
+    deezer_song(
+        "Coca & Villa",
+        "La Noche",
+        dz_cover("isosmixed"),
+        "In Search of Sunrise 4 (Latin America) mixed by Tiësto",
+        69338592,
+    ),
+    deezer_song("Coca & Villa", "La Noche", dz_cover("house"), "House Music", 647212451),
+    deezer_song(
+        "Coca & Villa",
+        "La Noche (D-Formation Remix)",
+        dz_cover("own"),
+        "La Noche (2017 Remixes)",
+        172827442,
+    ),
+]
+LA_NOCHE_ALBUMS = {932046: "Tiësto", 69338592: "Tiësto", 647212451: "Varios Artistas"}
+
+
+def la_noche(url: str) -> bytes:
+    if "api.deezer.com/search?" in url:
+        q = query(url)["q"]
+        return body({"data": [] if q.startswith("artist:") else LA_NOCHE_SEARCH})
+    if "api.deezer.com/album/" in url:
+        album = int(url.rsplit("/", 1)[1])
+        return body({"cover_xl": dz_cover(str(album)), "artist": {"name": LA_NOCHE_ALBUMS[album]}})
+    return body({"results": []})
+
+
+def test_deezer_asks_whose_album_to_skip_a_mix_with_a_plain_title() -> None:
+    http = FakeHttp(la_noche)
+    found = catalogs(http).find(make_track("COCA & VILLA, PEPE RUBIO", "La Noche"))
+    assert found == Found(
+        dz_cover("own"), "album", "deezer: Coca & Villa - La Noche (D-Formation Remix)"
+    )
+    albums = [url.rsplit("/", 1)[1] for url in http.urls if "/album/" in url]
+    assert albums == ["932046", "647212451"]
+
+
+def test_an_unanswered_album_keeps_the_candidate_and_is_no_failure() -> None:
+    def respond(url: str) -> bytes:
+        if "/album/" in url:
+            raise HttpError("down", 503)
+        return la_noche(url)
+
+    found = catalogs(FakeHttp(respond)).find(make_track("COCA & VILLA, PEPE RUBIO", "La Noche"))
+    assert found is not None and found.url == dz_cover("isos")
+
+
+def test_an_album_is_asked_once_per_search() -> None:
+    http = FakeHttp(la_noche)
+    track = make_track("COCA & VILLA", "La Noche (Radio Edit)")
+    catalogs(http).find(track)
+    albums = [url for url in http.urls if "/album/" in url]
+    assert len(albums) == len(set(albums))
+
+
+def test_itunes_skips_a_collection_of_someone_elses() -> None:
+    def respond(url: str) -> bytes:
+        if "itunes.apple.com" in url:
+            return body(
+                {
+                    "results": [
+                        dict(
+                            itunes_song(
+                                "COCA & Villa",
+                                "La Noche",
+                                "https://example.invalid/mix/100x100bb.jpg",
+                            ),
+                            collectionName="In Search of Sunrise, Vol. 4: Latin America",
+                            collectionArtistName="Tiësto",
+                        ),
+                        dict(
+                            itunes_song(
+                                "COCA & Villa",
+                                "La Noche",
+                                "https://example.invalid/own/100x100bb.jpg",
+                            ),
+                            collectionName="La Noche - Single",
+                        ),
+                    ]
+                }
+            )
+        return body({"data": []})
+
+    found = catalogs(FakeHttp(respond)).find(make_track("COCA & VILLA", "La Noche"))
+    assert found is not None and found.url == "https://example.invalid/own/1000x1000bb.jpg"
 
 
 def test_itunes_falls_back_to_the_full_name_of_a_band_with_an_ampersand() -> None:

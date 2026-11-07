@@ -50,6 +50,10 @@ NOW = 0
 HISTORY = 1
 # An artist photo only adds a second side to a cover: it waits for every song.
 PHOTO = 2
+# When the matching rules last changed (2026-11-07 UTC): a song's cover
+# decided before then, under rules that let a DJ mix or compilation cover
+# win, is searched again once; the old cover shows until the new one is in.
+MATCH_RULES_SINCE = 1794009600.0
 # Decisions held in memory; older ones are read back from the store on demand.
 MEMORY = 2000
 # A song still played is searched again at least every 90 days, so a decision
@@ -84,8 +88,10 @@ class CoverService:
         find_photo: Callable[[Track], Found | None] | None = None,
         fixes: FixReader | None = None,
         blob_path: Callable[[str], Path | None] | None = None,
+        rules_since: float = 0.0,
     ) -> None:
         self._store = store
+        self._rules_since = rules_since
         self._find = find
         self._find_photo = find_photo
         self._files = files
@@ -130,7 +136,11 @@ class CoverService:
     def _fresh(self, key: str) -> bool:
         """Caller holds the lock."""
         decision = self._known(key)
-        return decision is not None and self._clock() - decision.decided_at < TTL[decision.outcome]
+        if decision is None:
+            return False
+        if decision.outcome == "cover" and decision.decided_at < self._rules_since:
+            return False
+        return self._clock() - decision.decided_at < TTL[decision.outcome]
 
     def _needs_download(self, key: str) -> bool:
         """Caller holds the lock."""
