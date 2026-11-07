@@ -96,6 +96,7 @@ def make_server(
     (web / "vendor" / "lib-1.0.js").write_text("export {};", encoding="utf-8")
     (web / "vendor" / "lib-1.0.mjs").write_text("export {};", encoding="utf-8")
     (web / "font.woff2").write_bytes(b"wOF2")
+    (web / "tile.webp").write_bytes(b"RIFF\x00\x00\x00\x00WEBP")
     (web / "notes.md").write_text("# x", encoding="utf-8")
     source = FakeSource()
     source.responses = [[RawEntry("FISHER", "Stay", 1_000_000)]]
@@ -294,6 +295,7 @@ def test_static_index_and_head(server: TuneboxServer) -> None:
         ("/app.js", "text/javascript; charset=utf-8", "no-cache"),
         ("/vendor/lib-1.0.js", "text/javascript; charset=utf-8", "max-age=31536000, immutable"),
         ("/font.woff2", "font/woff2", "no-cache"),
+        ("/tile.webp", "image/webp", "no-cache"),
         # Not a vendor file once the path is resolved.
         ("/vendor/../app.js", "text/javascript; charset=utf-8", "no-cache"),
     ],

@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+from tunebox.server import CONTENT_TYPES
+
 WEB = Path(__file__).parent.parent / "web"
 PAGES = sorted(WEB.glob("*.html"))
 
@@ -82,3 +84,9 @@ def test_every_vendor_file_the_admin_pages_import_exists() -> None:
             continue
         for found in re.findall(r"/vendor/[^'\")\s#?]+", page.read_text(encoding="utf-8")):
             assert (root / "web" / found.lstrip("/")).is_file(), f"{page.name}: {found}"
+
+
+def test_every_file_the_player_uses_has_a_served_type() -> None:
+    # Notes for people (README.md, LICENSE, SHA256SUMS) are not served.
+    used = {p.suffix for p in WEB.rglob("*") if p.is_file() and p.suffix and p.suffix != ".md"}
+    assert used - set(CONTENT_TYPES) == set()
