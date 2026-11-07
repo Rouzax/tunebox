@@ -5,6 +5,7 @@ import {keepAudioRunning} from './reconnect.js';
 import {accentColor} from './palette.js';
 import {
     ACCENT_GRADIENT, ART_GRADIENT, BACKGROUND, BASE, LOW_POWER, LOW_POWER_FPS, RESET, availableStyles, chooseStyle,
+    groupOf, groupsFor,
 } from './vizcore.js';
 
 const LOW_POWER_CHECK_MS = 3000;
@@ -18,7 +19,9 @@ const LOW_POWER_CHECK_MS = 3000;
 export function bindVisualizer(app) {
     const {root, events, storage, player, toast} = app;
     const toggle = root.querySelector('.viz-toggle');
-    const menu = root.querySelector('.viz-list');
+    const groupsBox = root.querySelector('.viz-groups');
+    const toTiles = root.querySelector('.btn-viz-tiles');
+    const offButton = root.querySelector('.viz-off');
     const analyzer = root.querySelector('#analyzer');
     const artBox = root.querySelector('.artwork-img');
     // MilkDrop needs WebGL 2; without it its styles are not offered.
@@ -210,30 +213,126 @@ export function bindVisualizer(app) {
         }, LOW_POWER_CHECK_MS);
     }
 
-    const items = STYLES.map((style, i) => {
-        const item = document.createElement('li');
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = style.label;
-        item.appendChild(button);
-        button.addEventListener('click', () => {
-            if (!menuLocked) {
-                index = i;
-                standIn = null;
-                storage.set('visualizer', style.id);
-                apply();
-                if (onMenuPick) {
-                    onMenuPick();
-                }
-            }
-            app.showPage('main');
-        });
-        menu.appendChild(item);
-        return item;
-    });
-    function markActive() {
-        items.forEach((item, i) => item.classList.toggle('active', i === index));
+    // The page shows the group tiles, or one group's styles. It opens on
+    // the group of the style showing, as the channel page opens on the
+    // playing station.
+    const groups = groupsFor(gl2);
+    let openGroup = null;
+    // The rendered style buttons: their list item and style index.
+    let items = [];
+
+    function element(tag, className, text) {
+        const el = document.createElement(tag);
+        if (className) {
+            el.className = className;
+        }
+        if (text !== undefined) {
+            el.textContent = text;
+        }
+        return el;
     }
+
+    function pick(i) {
+        if (!menuLocked) {
+            index = i;
+            standIn = null;
+            storage.set('visualizer', STYLES[i].id);
+            apply();
+            if (onMenuPick) {
+                onMenuPick();
+            }
+        }
+        app.showPage('main');
+    }
+
+    function renderViz() {
+        items = [];
+        groupsBox.textContent = '';
+        const group = groups.filter((candidate) => candidate.id === openGroup)[0];
+        if (!group) {
+            openGroup = null;
+            const grid = element('div', 'viz-tiles');
+            for (const each of groups) {
+                const tile = element('button', 'tile');
+                tile.type = 'button';
+                tile.dataset.group = each.id;
+                const art = element('span', 'tile-art');
+                const image = element('img');
+                image.alt = '';
+                image.src = each.image;
+                art.append(image);
+                tile.append(art, element('span', 'name', each.label));
+                grid.append(tile);
+            }
+            groupsBox.append(grid);
+        } else {
+            const list = element('ul', 'viz-list');
+            STYLES.forEach((style, i) => {
+                if (style.group !== openGroup) {
+                    return;
+                }
+                const item = element('li');
+                const button = element('button', '', style.label);
+                button.type = 'button';
+                button.addEventListener('click', () => pick(i));
+                item.append(button);
+                list.append(item);
+                items.push({item, i});
+            });
+            groupsBox.append(element('h4', '', group.label), list);
+        }
+        toTiles.classList.toggle('hidden', openGroup === null);
+        offButton.classList.toggle('hidden', openGroup !== null);
+        markActive();
+    }
+
+    // Opens a group's styles, or the tiles again with null; back on the
+    // tiles, the tile just left takes the focus when the page had it.
+    function showGroup(id) {
+        const left = openGroup;
+        const hadFocus = root.contains(document.activeElement) && document.activeElement !== document.body;
+        openGroup = id;
+        renderViz();
+        groupsBox.closest('.page').scrollTop = 0;
+        if (!hadFocus) {
+            return;
+        }
+        const target = openGroup !== null
+            ? toTiles
+            : [...groupsBox.querySelectorAll('.tile')].filter((tile) => tile.dataset.group === left)[0];
+        if (target) {
+            target.focus({preventScroll: true});
+        }
+    }
+
+    function markActive() {
+        items.forEach(({item, i}) => item.classList.toggle('active', i === index));
+        offButton.classList.toggle('active', STYLES[index].engine === 'off');
+    }
+
+    groupsBox.addEventListener('click', (event) => {
+        const tile = event.target.closest('.tile[data-group]');
+        if (tile) {
+            showGroup(tile.dataset.group);
+        }
+    });
+    toTiles.addEventListener('click', () => showGroup(null));
+    offButton.addEventListener('click', () => pick(styleIndex('off')));
+    events.on('page', (page) => {
+        if (page === 'viz') {
+            openGroup = groupOf(STYLES[index].id);
+            renderViz();
+        }
+    });
+    // Escape on the page: from a group to the tiles (true), else nothing.
+    app.vizBack = () => {
+        if (openGroup === null) {
+            return false;
+        }
+        showGroup(null);
+        return true;
+    };
+    renderViz();
 
     toggle.classList.remove('hidden');
     toggle.addEventListener('click', () => app.showPage(app.page() === 'viz' ? 'main' : 'viz'));

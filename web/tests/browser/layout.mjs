@@ -36,7 +36,7 @@ const SIZES = [
     {name: 'desktop', width: 1280, height: 800},
 ];
 // 'group' is the channel page with a group opened from its tile.
-const PAGES = ['main', 'history', 'channels', 'group', 'viz'];
+const PAGES = ['main', 'history', 'channels', 'group', 'viz', 'viztiles'];
 const LONG_TITLE = 'An Extremely Long Track Title That Will Never Fit On One Line (Extended Festival Mix)';
 const LONG_ARTIST = 'ARTIST ONE, ARTIST TWO, ARTIST THREE, ARTIST FOUR, ARTIST FIVE';
 const LONG_PLAYED = 'Somebody With A Long Name Mainstage Tomorrowland Winter 2026';
@@ -141,7 +141,7 @@ function inspect(page, slack) {
     }
 
     // The active page fills the area above the bar.
-    const activePage = document.querySelector(`.page.${page === 'channels' || page === 'group' ? 'channels-page' : page === 'viz' ? 'viz-page' : page}`);
+    const activePage = document.querySelector(`.page.${page === 'channels' || page === 'group' ? 'channels-page' : page === 'viz' || page === 'viztiles' ? 'viz-page' : page}`);
     const pageRect = box(activePage);
     if (!inside(pageRect, viewport)) {
         problems.push(`active page is not within the window (${Math.round(pageRect.left)},${Math.round(pageRect.top)} ${Math.round(pageRect.width)}x${Math.round(pageRect.height)})`);
@@ -432,7 +432,28 @@ function inspect(page, slack) {
             problems.push(`${oversized.length} channel logo(s) loaded at full size (${oversized[0].naturalWidth} px)`);
         }
     }
+    if (page === 'viztiles') {
+        const tiles = [...document.querySelectorAll('.viz-groups .tile[data-group]')];
+        if (tiles.length !== 4) {
+            problems.push(`${tiles.length} visualizer group tiles`);
+        }
+        const off = document.querySelector('.viz-off');
+        if (!off || off.offsetParent === null) {
+            problems.push('no Off button under the visualizer tiles');
+        }
+        const unloaded = tiles.filter((tile) => !tile.querySelector('img') || !tile.querySelector('img').getAttribute('src'));
+        if (unloaded.length) {
+            problems.push(`${unloaded.length} visualizer tile(s) without a picture`);
+        }
+    }
     if (page === 'viz') {
+        // Off has no group: the page opens on the tiles with Off marked.
+        const off = document.querySelector('.tunebox').dataset.viz === 'off';
+        if (off ? !document.querySelector('.viz-groups .tile') || !document.querySelector('.viz-off.active')
+            : !document.querySelector('.viz-groups .viz-list li.active')) {
+            const heading = document.querySelector('.viz-groups h4');
+            problems.push(`the visualizer page does not open on the group of the chosen style (${heading ? heading.textContent : 'tiles'}, ${document.querySelector('.tunebox').dataset.viz})`);
+        }
         // Buttons side by side in the grid start at the same height.
         const tops = [...document.querySelectorAll('.viz-list button')].map((b) => b.getBoundingClientRect());
         const crooked = tops.filter((r) => tops.some((o) => o !== r && Math.abs(o.bottom - r.bottom) < r.height / 2 && Math.abs(o.top - r.top) > 1));
@@ -511,6 +532,62 @@ async function checkStaleHeight(send, evaluate) {
 // The tiles open a group, and the group closes again by its own button and
 // by Escape; a second Escape leaves the channel page. Resolves to the
 // problems found, or null when the config has fewer than two groups.
+// The visualizer page opens on the chosen style's group; All groups and
+// Escape go back to the tiles, Escape on the tiles to now playing; a tile
+// opens its styles.
+async function checkVizGroups(send, evaluate) {
+    const problems = [];
+    await send('Emulation.setDeviceMetricsOverride', {width: 489, height: 518, deviceScaleFactor: 1, mobile: false});
+    await send('Page.navigate', {url: `${BASE}/`});
+    await sleep(2500);
+    const state = () => evaluate(`(() => {
+        const root = document.querySelector('.tunebox');
+        const heading = root.querySelector('.viz-groups h4');
+        const active = root.querySelector('.viz-list li.active');
+        return {
+            page: root.dataset.page,
+            tiles: root.querySelectorAll('.viz-groups .tile[data-group]').length,
+            styles: root.querySelectorAll('.viz-groups .viz-list li').length,
+            heading: heading ? heading.textContent : null,
+            active: active ? active.textContent : null,
+            back: !root.querySelector('.btn-viz-tiles').classList.contains('hidden'),
+        };
+    })()`);
+    const escape = async () => {
+        await send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
+        await send('Input.dispatchKeyEvent', {type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
+        await sleep(300);
+    };
+    await evaluate(`document.querySelector('.viz-toggle').click()`);
+    await sleep(500);
+    const first = await state();
+    if (first.page !== 'viz' || first.heading !== 'Waves' || first.active !== 'Wave' || !first.back || first.tiles) {
+        problems.push(`the visualizer page does not open on Waves with Wave marked (${JSON.stringify(first)})`);
+    }
+    await evaluate(`document.querySelector('.btn-viz-tiles').click()`);
+    await sleep(300);
+    const tiles = await state();
+    if (tiles.tiles !== 4 || tiles.styles || tiles.back) {
+        problems.push(`All groups does not show the four tiles (${JSON.stringify(tiles)})`);
+    }
+    await evaluate(`[...document.querySelectorAll('.viz-groups .tile')].find((t) => t.dataset.group === 'milkdrop').click()`);
+    await sleep(300);
+    const milkdrop = await state();
+    if (milkdrop.heading !== 'MilkDrop' || milkdrop.styles !== 19) {
+        problems.push(`the MilkDrop tile does not open Shuffle and 18 presets (${JSON.stringify(milkdrop)})`);
+    }
+    await escape();
+    const back = await state();
+    if (back.page !== 'viz' || back.tiles !== 4) {
+        problems.push(`Escape in a group does not return to the tiles (${JSON.stringify(back)})`);
+    }
+    await escape();
+    if ((await state()).page !== 'main') {
+        problems.push('Escape on the tiles does not return to now playing');
+    }
+    return problems;
+}
+
 async function checkTiles(send, evaluate) {
     await send('Emulation.setDeviceMetricsOverride', {width: 489, height: 518, deviceScaleFactor: 1, mobile: false});
     await send('Page.navigate', {url: `${BASE}/`});
@@ -540,7 +617,7 @@ async function checkTiles(send, evaluate) {
     };
     tilePage('opening the channel page', tiles);
     const group = await evaluate(`(() => {
-        const tile = document.querySelector('.tile[data-group]');
+        const tile = document.querySelector('.channel-groups .tile[data-group]');
         tile.click();
         return {name: tile.dataset.group};
     })()`);
@@ -556,7 +633,7 @@ async function checkTiles(send, evaluate) {
     tilePage('All groups', await state());
     // Back from the last group, its tile has the focus and is in view.
     const last = await evaluate(`(() => {
-        const tiles = document.querySelectorAll('.tile[data-group]');
+        const tiles = document.querySelectorAll('.channel-groups .tile[data-group]');
         const tile = tiles[tiles.length - 1];
         tile.focus();
         tile.click();
@@ -579,7 +656,7 @@ async function checkTiles(send, evaluate) {
         problems.push(`back from ${last}, its tile is not focused in view (${JSON.stringify(returned)})`);
     }
     await sleep(300);
-    await evaluate(`document.querySelector('.tile[data-group]').click()`);
+    await evaluate(`document.querySelector('.channel-groups .tile[data-group]').click()`);
     await sleep(300);
     // An Escape the PIN keypad took leaves the group open.
     await evaluate(`(() => {
@@ -622,7 +699,7 @@ async function checkTiles(send, evaluate) {
             problems.push(`${single.id} plays already and no station in a group has several streams to pick first`);
             return problems;
         }
-        await evaluate(`[...document.querySelectorAll('.tile[data-group]')].find((t) => t.dataset.group === ${JSON.stringify(grouped.group)}).click()`);
+        await evaluate(`[...document.querySelectorAll('.channel-groups .tile[data-group]')].find((t) => t.dataset.group === ${JSON.stringify(grouped.group)}).click()`);
         await sleep(300);
         await evaluate(`document.querySelector('.channel[data-id=${JSON.stringify(grouped.id)}]').click()`);
         await sleep(300);
@@ -661,7 +738,7 @@ async function checkTiles(send, evaluate) {
     await evaluate(`document.querySelector('.open-channels').click()`);
     await sleep(700);
     if (lone.group) {
-        await evaluate(`[...document.querySelectorAll('.tile[data-group]')].find((t) => t.dataset.group === ${JSON.stringify(lone.group)}).click()`);
+        await evaluate(`[...document.querySelectorAll('.channel-groups .tile[data-group]')].find((t) => t.dataset.group === ${JSON.stringify(lone.group)}).click()`);
         await sleep(300);
     }
     await evaluate(`document.querySelector('[data-id=${JSON.stringify(lone.id)}]').click()`);
@@ -682,6 +759,7 @@ async function run() {
     try {
         failures.push(...await checkFocusRing(send, evaluate));
         failures.push(...await checkStaleHeight(send, evaluate));
+        failures.push(...await checkVizGroups(send, evaluate));
         const tileProblems = await checkTiles(send, evaluate);
         if (tileProblems === null) {
             console.log('fewer than two groups in this config: tiles and open groups not checked');
@@ -729,18 +807,22 @@ async function run() {
                         for (const page of PAGES) {
                             const opened = await evaluate(`(() => {
                                 const root = document.querySelector('.tunebox');
-                                const open = {history: '.open-history', channels: '.open-channels', group: '.open-channels', viz: '.viz-toggle'}['${page}'];
+                                const open = {history: '.open-history', channels: '.open-channels', group: '.open-channels', viz: '.viz-toggle', viztiles: '.viz-toggle'}['${page}'];
                                 if (root.dataset.page !== 'main') {
                                     root.querySelector('.page:not(.main) .btn-back') && [...root.querySelectorAll('.btn-back')][0].click();
                                 }
                                 if (open) {
                                     root.querySelector(open).click();
                                 }
+                                if ('${page}' === 'viztiles') {
+                                    root.querySelector('.btn-viz-tiles').click();
+                                    return true;
+                                }
                                 if ('${page}' !== 'group') {
                                     return true;
                                 }
                                 // The playing station's group, so its stream choices show.
-                                const tiles = [...root.querySelectorAll('.tile[data-group]')];
+                                const tiles = [...root.querySelectorAll('.channel-groups .tile[data-group]')];
                                 const tile = tiles.find((t) => t.classList.contains('active')) || tiles[0];
                                 if (tile) {
                                     tile.click();
