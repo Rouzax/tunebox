@@ -248,22 +248,27 @@ def test_the_pages_keep_the_plain_policy(server: TuneboxServer) -> None:
         "img-src 'self' data:; media-src https: http:; connect-src 'self'; "
         "frame-ancestors *; base-uri 'none'; form-action 'none'"
     )
-    for path in ["/", "/index.html", "/status.html", "/pin.html"]:
+    for path in ["/status.html", "/pin.html"]:
         status, headers, _ = request(server, path)
         assert status == 200, path
         assert headers["content-security-policy"] == CSP, path
 
 
-def test_only_the_gpu_test_page_may_compile_webassembly(server: TuneboxServer) -> None:
-    assert list(PAGE_CSP) == ["lab-gpu.html"]
-    policy = PAGE_CSP["lab-gpu.html"]
+def test_only_the_player_and_the_gpu_test_may_compile_webassembly(server: TuneboxServer) -> None:
+    assert sorted(PAGE_CSP) == ["index.html", "lab-gpu.html"]
     # The same policy, with only script-src widened, and never to eval.
-    assert policy == CSP.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
-    assert "'unsafe-eval'" not in policy.split()
+    wasm = CSP.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
+    for page, policy in PAGE_CSP.items():
+        assert policy == wasm, page
+        assert "'unsafe-eval'" not in policy.split(), page
     for path in ["/lab-gpu.html", "/lab%2Dgpu.html", "/vendor/../lab-gpu.html"]:
         status, headers, body = request(server, path)
         assert status == 200 and b"<title>GPU</title>" in body, path
-        assert headers["content-security-policy"] == policy, path
+        assert headers["content-security-policy"] == wasm, path
+    for path in ["/", "/index.html", "/vendor/../index.html"]:
+        status, headers, _ = request(server, path)
+        assert status == 200, path
+        assert headers["content-security-policy"] == wasm, path
     # Scripts carry no policy of their own, whichever page loads them.
     assert "content-security-policy" not in request(server, "/app.js")[1]
 
@@ -273,7 +278,7 @@ def test_static_index_and_head(server: TuneboxServer) -> None:
     assert status == 200
     assert headers["content-type"] == "text/html; charset=utf-8"
     assert headers["cache-control"] == "no-cache"
-    assert headers["content-security-policy"] == CSP
+    assert headers["content-security-policy"] == PAGE_CSP["index.html"]
     assert headers["referrer-policy"] == "strict-origin-when-cross-origin"
     assert headers["x-content-type-options"] == "nosniff"
     assert body.startswith(b"<!doctype html>")
@@ -1080,7 +1085,8 @@ def test_a_locked_site_shows_the_pin_page_for_every_page(site: PinWorld) -> None
         assert status == 200, path
         assert b"<title>PIN</title>" in body, path
         assert headers["cache-control"] == "no-store", path
-        assert "content-security-policy" in headers, path
+        # The PIN page in the player's place runs no Butterchurn.
+        assert headers["content-security-policy"] == CSP, path
 
 
 def test_a_locked_site_locks_the_gpu_test_page_like_the_player(site: PinWorld) -> None:

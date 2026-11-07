@@ -71,6 +71,8 @@ export function bindPages(app) {
         }
         if (page === 'channels' && openGroup !== null) {
             showGroup(null);
+        } else if (page === 'viz' && app.vizBack && app.vizBack()) {
+            return;
         } else {
             app.showPage('main');
         }

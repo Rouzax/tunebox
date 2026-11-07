@@ -37,7 +37,9 @@ def test_player_page_has_the_elements_the_scripts_bind_to() -> None:
         "car-played",
         "history-list",
         "channel-groups",
-        "viz-list",
+        "viz-groups",
+        "btn-viz-tiles",
+        "viz-off",
         "volume-slider",
     ]:
         assert name in classes, name

@@ -1,6 +1,6 @@
 // Browser check of the GPU test page (lab-gpu.html): lab mode's GPU test
-// button opens it with labsec carried; only this page's policy allows
-// WebAssembly; no AudioContext before the Start tap and exactly one after;
+// button opens it with labsec carried; this page and the player allow
+// WebAssembly, the check page does not; no AudioContext before the Start tap and exactly one after;
 // the Full screen button shows where the browser allows it and switches
 // both ways; a shortened full run measures Off, every probe shader at
 // every scale and every candidate preset once with its load stall, and
@@ -203,10 +203,11 @@ async function run() {
         const gpuPolicy = await policyOf('/lab-gpu.html');
         check(/script-src 'self' 'wasm-unsafe-eval';/.test(gpuPolicy) && !/'unsafe-eval'/.test(gpuPolicy)
             ? null : `lab-gpu.html policy: ${gpuPolicy}`);
-        for (const path of ['/', '/check.html']) {
-            const policy = await policyOf(path);
-            check(/script-src 'self';/.test(policy) && !/wasm/.test(policy) ? null : `${path} policy: ${policy}`);
-        }
+        // The player runs MilkDrop too; other pages keep the strict policy.
+        const playerPolicy = await policyOf('/');
+        check(playerPolicy === gpuPolicy ? null : `/ policy: ${playerPolicy}`);
+        const checkPolicy = await policyOf('/check.html');
+        check(/script-src 'self';/.test(checkPolicy) && !/wasm/.test(checkPolicy) ? null : `/check.html policy: ${checkPolicy}`);
 
         browser = await connect({port: DEVTOOLS_PORT});
         const {send, evaluate} = browser;
@@ -251,7 +252,9 @@ async function run() {
 
         // Lab mode's button opens the page and carries labsec.
         await open('/?lab=1&labsec=1');
-        if (!(await until(`document.querySelector('.lab-gpu')`))) {
+        // In the window: the lab bar is placed once lab.css has loaded.
+        if (!(await until(`document.querySelector('.lab-gpu')
+            && document.querySelector('.lab-gpu').getBoundingClientRect().bottom <= window.innerHeight`))) {
             throw new CheckFailure('lab mode has no GPU test button');
         }
         await tap('.lab-gpu');

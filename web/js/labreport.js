@@ -1,9 +1,6 @@
 // The lab's results as one compact JSON text for a QR code. Short keys;
 // v changes whenever a key's meaning does.
-export const FORMAT = 3;
-// The order of each style's numbers in r, carried in the payload so a
-// photo of the code reads on its own.
-const ROW_FIELDS = 'na,nw,nd,la,lw,ld,sa,sw';
+export const FORMAT = 4;
 // Where each mode's numbers start in a row. Still glow asks only about
 // the page, so it has no draw rate.
 const MODE_AT = {normal: 0, low: 3, still: 6};
@@ -26,8 +23,9 @@ const number = (value) => (typeof value === 'number' && Number.isFinite(value) ?
 // r maps each style to the page's average and worst frame rate and the
 // visualizer's own draw rate in normal quality, then the same in low
 // power, then the page's two in normal quality with the cover glow held
-// still (ROW_FIELDS). A mode the test did not reach is null, and so is the draw
-// rate of a style audioMotion does not draw.
+// still (na,nw,nd,la,lw,ld,sa,sw, fixed by the format). A mode the test
+// did not reach is null, and so is the draw rate of a style audioMotion
+// does not draw.
 function byStyle(results) {
     const out = {};
     for (const result of results) {
@@ -66,7 +64,6 @@ export function labPayload({userAgent, screen, view, dpr, windowS, env, results}
             hc: number(env.cores),
             dm: number(env.memory),
         },
-        rf: ROW_FIELDS,
         r: byStyle(results),
     });
 }

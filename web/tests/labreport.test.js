@@ -4,10 +4,10 @@ import qrcode from '../vendor/qrcode-generator-2.0.4/qrcode.mjs';
 import {FORMAT, QR_LEVEL, labPayload} from '../js/labreport.js';
 import {qrMatrix} from '../js/qr.js';
 
-const STYLES = ['off', 'wave', 'bars', 'led', 'butterfly', 'ring', 'neon', 'ambient', 'scope', 'lava', 'milkdrop', 'aurora'];
+const STYLES = ['off', 'wave', 'bars', 'led', 'butterfly', 'ring', 'neon', 'ambient', 'scope', 'lava', 'aurora', 'swirl', 'md-shuffle'];
 // Off and the styles effects.js draws itself: the lab knows no draw rate
 // for them.
-const EFFECTS = ['off', 'scope', 'lava', 'milkdrop', 'aurora'];
+const EFFECTS = ['off', 'scope', 'lava', 'aurora', 'swirl', 'md-shuffle'];
 
 function realistic(overrides) {
     const results = [];
@@ -43,7 +43,8 @@ test('labPayload is compact JSON with the format version and every result', () =
     assert.equal(data.e.g2, 1);
     assert.equal(data.e.tx, 16384);
     assert.deepEqual(Object.keys(data.r), STYLES);
-    assert.equal(data.rf, 'na,nw,nd,la,lw,ld,sa,sw');
+    assert.equal(data.rf, undefined);
+    assert.equal(FORMAT, 4);
     assert.deepEqual(data.r.wave, [60, 57, 60, 60, 58, 30, 60, 59]);
     assert.deepEqual(data.r.lava, [60, 57, null, 60, 58, null, 60, 59]);
 });

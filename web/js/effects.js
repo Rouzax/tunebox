@@ -14,7 +14,7 @@ export function createEffects(motion, root, onLevel) {
     canvas.className = 'car-fx';
     host.parentNode.insertBefore(canvas, host);
     const ctx = canvas.getContext('2d');
-    // Milkdrop's previous frame; drawing a canvas onto itself is not reliable.
+    // Swirl's previous frame; drawing a canvas onto itself is not reliable.
     const buffer = document.createElement('canvas');
     const bufferCtx = buffer.getContext('2d');
     const bands = {bass: 0, mid: 0, treble: 0};
@@ -151,7 +151,7 @@ export function createEffects(motion, root, onLevel) {
     // MilkDrop's basic trick: redraw the last frame slightly zoomed, turned
     // and faded, then add a ring shaped by the waveform, so rings flow
     // outward and swirl. Bass drives the zoom, mids the turn.
-    function drawMilkdrop(dt) {
+    function drawSwirl(dt) {
         const {width, height} = canvas;
         if (buffer.width !== width || buffer.height !== height) {
             buffer.width = width;
@@ -224,7 +224,7 @@ export function createEffects(motion, root, onLevel) {
     const PROGRAMS = {
         scope: {ambient: false, draw: drawScope},
         lava: {ambient: true, draw: drawLava},
-        milkdrop: {ambient: true, draw: drawMilkdrop},
+        swirl: {ambient: true, draw: drawSwirl},
         aurora: {ambient: true, draw: drawAurora},
     };
 

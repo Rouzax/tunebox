@@ -31,6 +31,8 @@ import {fileURLToPath} from 'node:url';
 
 import qrcode from '../../vendor/qrcode-generator-2.0.4/qrcode.mjs';
 import {QR_LEVEL} from '../../js/labreport.js';
+import {SHUFFLE_ID} from '../../js/milkdropcore.js';
+import {STYLES as ALL_STYLES} from '../../js/vizcore.js';
 import {qrMatrix} from '../../js/qr.js';
 import {alive, connect, killGroup, sleep} from './cdp.mjs';
 
@@ -39,20 +41,36 @@ const PYTHON = join(ROOT, '.venv', 'bin', 'python');
 const SHOTS = process.argv[2] || null;
 const DEVTOOLS_PORT = 9300 + Math.floor(Math.random() * 500);
 const FOLDER_PREFIX = 'tunebox-lab-check-';
-// Styles effects.js draws itself: they have no draw count.
-const EFFECTS = ['scope', 'lava', 'milkdrop', 'aurora'];
-const STYLES = ['wave', 'bars', 'led', 'butterfly', 'ring', 'neon', 'ambient', 'scope', 'lava', 'milkdrop', 'aurora', 'off'];
+// Every style, as Next steps through them (headless Chrome has WebGL 2).
+const STYLES = ALL_STYLES.map((style) => style.id);
+// Styles audioMotion does not draw have no draw count.
+const UNCOUNTED = ALL_STYLES.filter((style) => style.engine !== 'motion').map((style) => style.id);
+// Run test measures MilkDrop as Shuffle only.
+const TESTED = STYLES.filter((id) => id.indexOf('md-') !== 0 || id === SHUFFLE_ID);
 
 if (typeof WebSocket === 'undefined') {
     console.error('This Node has no WebSocket client: use Node 22+, or run Node 20 with --experimental-websocket.');
     process.exit(2);
 }
 
-// Runs before any page script: counts AudioContexts and WebGL contexts
-// given back, and takes Web Audio away for ?nowebaudio=1.
+// Runs before any page script: counts AudioContexts, WebGL contexts given
+// back and WebAssembly compiles, records policy violations, and takes Web
+// Audio away for ?nowebaudio=1.
 const INSTRUMENT = `(() => {
-    const counts = {contexts: 0, losses: 0};
+    const counts = {contexts: 0, losses: 0, wasm: 0, violations: 0};
     window.labCheckCounts = counts;
+    for (const name of ['compile', 'instantiate']) {
+        const real = WebAssembly[name];
+        WebAssembly[name] = function (...args) {
+            if (name === 'compile' || !(args[0] instanceof WebAssembly.Module)) {
+                counts.wasm += 1;
+            }
+            return real.apply(this, args);
+        };
+    }
+    document.addEventListener('securitypolicyviolation', () => {
+        counts.violations += 1;
+    });
     if (location.search.indexOf('nowebaudio=1') >= 0) {
         window.AudioContext = undefined;
         window.webkitAudioContext = undefined;
@@ -235,7 +253,7 @@ async function run() {
         const lab = () => evaluate(`document.querySelector('.tunebox').dataset.lab`);
 
         await open('/');
-        if (!(await until(`document.querySelector('.viz-list li')`))) {
+        if (!(await until(`document.querySelector('.viz-groups .tile')`))) {
             throw new LabFailure('the player did not start');
         }
         await sleep(500);
@@ -288,7 +306,13 @@ async function run() {
         // A style picked from the player's own menu shows in the lab bar.
         await tap('.viz-toggle');
         await sleep(600);
-        await tap('.viz-list li:nth-child(5) button');
+        if (await evaluate(`!document.querySelector('.btn-viz-tiles').classList.contains('hidden')`)) {
+            await tap('.btn-viz-tiles');
+            await sleep(300);
+        }
+        await tap('.viz-groups .tile[data-group="bars"]');
+        await sleep(300);
+        await tap('.viz-list li:nth-child(4) button');
         await sleep(600);
         check(await evaluate(`document.querySelector('.lab-style').textContent`) === 'Ring'
             ? null : `the lab bar says ${await evaluate(`document.querySelector('.lab-style').textContent`)} after picking Ring from the menu`);
@@ -333,19 +357,19 @@ async function run() {
         }
         const payload = await evaluate(`document.querySelector('.lab-results').dataset.payload`);
         const data = JSON.parse(payload);
-        check(data.v === 3 ? null : `format ${data.v}`);
+        check(data.v === 4 ? null : `format ${data.v}`);
         check(Array.isArray(data.vw) && data.vw[0] === 960 && data.vw[1] === 560 ? null : `window ${JSON.stringify(data.vw)}`);
         check(data.w === 1 ? null : `window ${data.w} s`);
         check(typeof data.ua === 'string' && data.ua.length ? null : 'no user agent');
         check(data.e && typeof data.e.g1 === 'number' && typeof data.e.g2 === 'number' ? null : `environment ${JSON.stringify(data.e)}`);
         // Off first, as the baseline.
-        const tested = ['off'].concat(STYLES.filter((id) => id !== 'off'));
+        const tested = ['off'].concat(TESTED.filter((id) => id !== 'off'));
         check(Object.keys(data.r).join() === tested.join() ? null : `results for ${Object.keys(data.r).join()}`);
         for (const id of tested) {
             const row = data.r[id] || [];
             const pages = [row[0], row[1], row[3], row[4], row[6], row[7]];
             const draws = [row[2], row[5]];
-            const drawsOk = id === 'off' || EFFECTS.includes(id)
+            const drawsOk = UNCOUNTED.includes(id)
                 ? draws.every((value) => value === null)
                 // audioMotion draws at most 30 times a second in low power.
                 : draws.every((value) => typeof value === 'number' && value > 0) && row[5] <= 33;
@@ -408,9 +432,42 @@ async function run() {
         check(Object.keys(stopped.r).length === 1 && stopped.r.off && stopped.r.off[3] === null
             ? null : `after Stop test: ${JSON.stringify(stopped.r)} in ${Date.now() - stopAt} ms`);
         check((await counts()).contexts === 1 ? null : `${(await counts()).contexts} AudioContexts at the end`);
-        check((await counts()).losses === data.e.g1 + data.e.g2 ? null : `${(await counts()).losses} WebGL contexts given back`);
+        // envinfo's contexts, and the player's own WebGL 2 check.
+        check((await counts()).losses === data.e.g1 + data.e.g2 + 1 ? null : `${(await counts()).losses} WebGL contexts given back`);
         console.log(`results payload: ${payload.length} bytes, QR code ${matrix.length} modules`);
         console.log(payload);
+
+        // MilkDrop: Shuffle draws, every preset compiles as WebAssembly with
+        // no policy violation, and leaving it stops its drawing.
+        const stepTo = async (id) => {
+            for (let i = 0; i < STYLES.length && (await evaluate(`document.querySelector('.tunebox').dataset.viz`)) !== id; i++) {
+                await tap('.lab-next');
+                await sleep(250);
+            }
+            return (await evaluate(`document.querySelector('.tunebox').dataset.viz`)) === id;
+        };
+        if (!(await evaluate(`document.querySelector('.lab-results').hidden`))) {
+            await tap('.lab-close');
+            await sleep(300);
+        }
+        const mdFrames = () => evaluate(`(() => { const c = document.querySelector('.car-md'); return c ? Number(c.dataset.mdFrames || 0) : -1; })()`);
+        check(await stepTo(SHUFFLE_ID) ? null : 'Next never reached MilkDrop Shuffle');
+        await sleep(3000);
+        const shuffling = await mdFrames();
+        await sleep(1000);
+        const box = await evaluate(`(() => { const c = document.querySelector('.car-md'); return c ? [c.width, c.height, c.hidden] : null; })()`);
+        check(box && box[0] > 0 && box[1] > 0 && !box[2] && (await mdFrames()) > shuffling && shuffling > 0
+            ? null : `MilkDrop does not draw (${JSON.stringify(box)}, frames ${shuffling})`);
+        await shoot('lab-md-shuffle');
+        check(await stepTo('wave') ? null : 'Next never came round to Wave');
+        await sleep(300);
+        const left = await mdFrames();
+        await sleep(1000);
+        check((await mdFrames()) === left && await evaluate(`document.querySelector('.car-md').hidden`)
+            ? null : 'MilkDrop still draws after leaving it');
+        const after = await counts();
+        check(after.wasm > 0 ? null : 'MilkDrop compiled no WebAssembly');
+        check(after.violations === 0 ? null : `${after.violations} policy violation(s)`);
 
         check(await evaluate(`localStorage.length === ${before} && localStorage.getItem('tunebox.visualizer') === 'off'`)
             ? null : 'lab mode stored something');
