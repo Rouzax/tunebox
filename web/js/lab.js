@@ -93,8 +93,9 @@ export function bindLab(app, viz) {
     const still = button('lab-still', 'Still glow');
     const run = button('lab-run', 'Run test');
     const show = button('lab-show', 'Results');
+    const gpu = button('lab-gpu', 'GPU test');
     const buttons = element('div', 'lab-buttons');
-    buttons.append(start, previous, next, power, still, run, show);
+    buttons.append(start, previous, next, power, still, run, gpu, show);
     panel.append(status, buttons);
 
     const results = element('div', 'lab-results');
@@ -159,6 +160,7 @@ export function bindLab(app, viz) {
         start.disabled = started;
         run.disabled = !started;
         run.textContent = testing ? 'Stop test' : 'Run test';
+        gpu.disabled = testing;
         show.disabled = !results.dataset.payload;
     }
 
@@ -374,6 +376,12 @@ export function bindLab(app, viz) {
         } else {
             runTest();
         }
+    });
+    // A page of its own (lab-gpu.html): it measures WebGL apart from the
+    // player, with its own signal and results.
+    gpu.addEventListener('click', () => {
+        const seconds = new URLSearchParams(window.location.search).get('labsec');
+        window.location.href = seconds === null ? 'lab-gpu.html' : `lab-gpu.html?labsec=${encodeURIComponent(seconds)}`;
     });
     show.addEventListener('click', () => {
         if (results.hidden) {
