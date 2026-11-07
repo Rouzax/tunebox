@@ -30,9 +30,11 @@ For listeners:
   back in with the new text.
 - **Day and night.** A button cycles automatic, day and night; night dims
   everything but the title.
-- **Visualizer.** Twelve styles, from spectrum bars to a ring around the
-  cover and slow ambient colour fields, coloured from the album cover. It
-  switches itself to a lighter mode on slow hardware.
+- **Visualizer.** Styles in four groups: spectrum bars (including a ring
+  around the cover), waves, slow ambient colour fields, all coloured from
+  the album cover, and MilkDrop: 17 classic MilkDrop presets with their
+  own colours, one at a time or shuffled. The spectrum styles switch
+  themselves to a lighter mode on slow hardware.
 - **Lock screen and media keys.** Phones and cars show the song and cover;
   next and previous change station.
 - **Small window and embedding.** Open the player in a small pop-out window,
@@ -174,7 +176,13 @@ it). What the buttons do:
   the device's own volume control there. The radio then plays at full
   volume, whatever the slider was set to in a wider window.
 - **Visualizer** (bars icon), **small window** (box with arrow; not on
-  touch screens) and **fullscreen**.
+  touch screens) and **fullscreen**. The Visualizer page shows a tile per
+  group (Bars, Waves, Ambient, MilkDrop) and **Off** below them; it opens
+  on the group of the style showing. Tap a style to switch to it, **All
+  groups** or Escape to go back to the tiles. **Shuffle** in MilkDrop
+  moves to another preset every 45 seconds and plays each once before
+  any repeats. MilkDrop needs WebGL 2; browsers without it do not show
+  that tile.
 - **Day/night** (top left) cycles automatic, day and night. Automatic
   follows the sun when `[player]` has a location, otherwise the device's
   dark mode setting. It turns dark when the evening sun is 4 degrees above
@@ -216,8 +224,9 @@ switch **Low power** on and off, and to hold the cover glow still
 
 **Run test** shows every style for 10 seconds in each of three modes:
 normal, low power, and normal with the glow held still. It starts with
-**Off**, the page with no visualizer, as the baseline. That takes about
-6 minutes; leave the page in front meanwhile. A style well below Off is
+**Off**, the page with no visualizer, as the baseline. MilkDrop is
+measured as **Shuffle** only; each preset has passed the GPU test below.
+That takes about 7 minutes; leave the page in front meanwhile. A style well below Off is
 costing frames; if it recovers with the glow held still, the glow is the
 cost, not the style.
 
@@ -262,8 +271,9 @@ its load; a preset that fails any of the three is not smooth enough for
 the player.
 
 Butterchurn turns each preset's equations into WebAssembly, so this page
-alone is allowed to compile WebAssembly; every other page keeps the
-stricter policy.
+and the player, which draws MilkDrop the same way, are allowed to compile
+WebAssembly (never to run text as JavaScript); the status, check and PIN
+pages keep the stricter policy.
 
 Lab mode and the GPU test save nothing: the visualizer style, station and
 other choices stay as they were for normal use. The results stay on the
@@ -1438,7 +1448,8 @@ node web/tests/browser/admin.mjs /tmp/admin-shots
 The lab check starts its own tunebox the same way and drives
 [lab mode](#check-a-device-with-lab-mode) with 1-second test windows
 (`?lab=1&labsec=1`): every style, a full test, the QR code checked against
-the results, nothing stored, and the graphics rows on `/check.html`:
+the results, MilkDrop drawing through WebAssembly and stopping when left,
+nothing stored, and the graphics rows on `/check.html`:
 
 ```sh
 node web/tests/browser/lab.mjs /tmp/lab-shots

@@ -321,7 +321,10 @@ export function bindLab(app, viz) {
         // against.
         const order = styles.map((style, i) => ({i, style}));
         const plan = [];
-        order.filter((s) => s.style.id === 'off').concat(order.filter((s) => s.style.id !== 'off')).forEach(({i, style}) => {
+        // MilkDrop as Shuffle only: every preset at three modes would triple
+        // the run and overflow the QR code, and each passed the GPU test.
+        const timed = order.filter((s) => s.style.engine !== 'milkdrop' || s.style.id === 'md-shuffle');
+        timed.filter((s) => s.style.id === 'off').concat(timed.filter((s) => s.style.id !== 'off')).forEach(({i, style}) => {
             for (const mode of MODES) {
                 plan.push({i, style, mode});
             }
