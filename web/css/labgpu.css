@@ -1,0 +1,195 @@
+/* The GPU test page. Text is large enough to read in a photo of the car's
+   screen; the bar stays short so the drawing shows under it. */
+html,
+body {
+    margin:     0;
+    height:     100%;
+    color:      #fff;
+    background: #011a35;
+    font:       1.1rem/1.3 system-ui, sans-serif;
+}
+
+/* Full window whatever the render size: a smaller drawing buffer is
+   stretched to fill it, as the player's visualizer would be. */
+.gpu-canvas {
+    position: fixed;
+    top:      0;
+    left:     0;
+    width:    100vw;
+    height:   100vh;
+    display:  block;
+}
+
+.gpu-canvas[hidden] {
+    display: none;
+}
+
+.gpu-bar {
+    position:       fixed;
+    z-index:        2;
+    top:            .5rem;
+    left:           .5rem;
+    right:          .5rem;
+    display:        flex;
+    flex-direction: column;
+    gap:            .4rem;
+    padding:        .5rem .6rem;
+    border-radius:  .4rem;
+    background:     rgba(0, 0, 0, .6);
+}
+
+.gpu-status {
+    display:     flex;
+    flex-wrap:   wrap;
+    gap:         .2rem 1rem;
+    align-items: baseline;
+}
+
+.gpu-test,
+.gpu-fps {
+    font-size: 1.4rem;
+}
+
+.gpu-test {
+    font-weight: 600;
+}
+
+.gpu-fps {
+    font-variant-numeric: tabular-nums;
+}
+
+.gpu-note {
+    opacity: .8;
+}
+
+.gpu-buttons {
+    display:   flex;
+    flex-wrap: wrap;
+    gap:       .4rem;
+}
+
+/* Big enough for a finger on the car's screen. */
+.gpu-button {
+    box-sizing:      border-box;
+    display:         inline-flex;
+    align-items:     center;
+    min-height:      2.75rem;
+    padding:         .4rem .9rem;
+    border:          1px solid rgba(255, 255, 255, .6);
+    border-radius:   .3rem;
+    color:           #fff;
+    background:      rgba(255, 255, 255, .08);
+    font:            inherit;
+    text-decoration: none;
+    cursor:          pointer;
+}
+
+.gpu-button:disabled {
+    opacity: .4;
+    cursor:  default;
+}
+
+.gpu-button:focus-visible {
+    outline:        3px solid #fff;
+    outline-offset: 2px;
+}
+
+/* QR code and table side by side where the window is wide enough, so one
+   photo takes both. */
+.gpu-results {
+    position:    fixed;
+    z-index:     3;
+    top:         0;
+    right:       0;
+    bottom:      0;
+    left:        0;
+    display:     flex;
+    flex-wrap:   wrap;
+    align-items: flex-start;
+    gap:         1rem;
+    padding:     1rem;
+    overflow:    auto;
+    background:  #011a35;
+}
+
+.gpu-results[hidden] {
+    display: none;
+}
+
+/* Centred by auto margins, not justify-content: an item wider than a
+   narrow window then overflows to the right, where it scrolls, never past
+   the left edge. */
+.gpu-qr {
+    flex:   0 0 auto;
+    margin: 0 auto;
+}
+
+.gpu-qr svg {
+    display: block;
+    width:   min(90vw, 85vh);
+    height:  auto;
+}
+
+.gpu-results-text {
+    flex:      1 1 18rem;
+    min-width: 0;
+    max-width: 44rem;
+    margin:    0 auto;
+}
+
+.gpu-table-box {
+    overflow-x: auto;
+}
+
+.gpu-env {
+    margin:     0 0 .5rem;
+    word-break: break-word;
+}
+
+.gpu-table {
+    border-collapse: collapse;
+    font-size:       1rem;
+}
+
+.gpu-table th,
+.gpu-table td {
+    padding:    .1rem .8rem .1rem 0;
+    text-align: left;
+}
+
+.gpu-table td:nth-child(n+2) {
+    white-space: nowrap;
+}
+
+.gpu-table td:nth-child(3),
+.gpu-table td:nth-child(4) {
+    text-align:           right;
+    font-variant-numeric: tabular-nums;
+}
+
+.gpu-table caption {
+    caption-side: bottom;
+    padding-top:  .5rem;
+    text-align:   left;
+    font-size:    .85rem;
+    opacity:      .8;
+}
+
+.gpu-close {
+    margin-top: .8rem;
+}
+
+@media (max-width: 30rem) {
+    .gpu-results {
+        padding: 1rem .5rem;
+    }
+
+    .gpu-table {
+        font-size: .9rem;
+    }
+
+    .gpu-table th,
+    .gpu-table td {
+        padding-right: .4rem;
+    }
+}

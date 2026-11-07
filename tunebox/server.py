@@ -62,24 +62,35 @@ CONTENT_TYPES = {
 # Folders here carry their version in the name. Everything else (the player's
 # own code has no build step to fingerprint it) is revalidated on every load.
 IMMUTABLE_DIRS = ("vendor/",)
+
+
 # Covers, logos and default images are served by tunebox itself; streams
 # come from redirect targets whose hosts vary, hence any https host for
 # media. http media is for an http stream_url on a plain-http page; https
 # pages block it anyway.
-CSP = "; ".join(
-    [
-        "default-src 'self'",
-        "script-src 'self'",
-        "style-src 'self'",
-        "font-src 'self'",
-        "img-src 'self' data:",
-        "media-src https: http:",
-        "connect-src 'self'",
-        "frame-ancestors *",
-        "base-uri 'none'",
-        "form-action 'none'",
-    ]
-)
+def _csp(script_src: str) -> str:
+    return "; ".join(
+        [
+            "default-src 'self'",
+            f"script-src {script_src}",
+            "style-src 'self'",
+            "font-src 'self'",
+            "img-src 'self' data:",
+            "media-src https: http:",
+            "connect-src 'self'",
+            "frame-ancestors *",
+            "base-uri 'none'",
+            "form-action 'none'",
+        ]
+    )
+
+
+CSP = _csp("'self'")
+# Pages whose policy differs from CSP, by the file served. Butterchurn, on
+# the GPU test page only, compiles each preset's equations to WebAssembly,
+# which needs 'wasm-unsafe-eval'; 'unsafe-eval' would let strings run as
+# JavaScript too, so it is never granted.
+PAGE_CSP = {"lab-gpu.html": _csp("'self' 'wasm-unsafe-eval'")}
 
 
 def etag_matches(header: str | None, etag: str) -> bool:
@@ -720,7 +731,10 @@ class Handler(BaseHTTPRequestHandler):
                 ("Cache-Control", "max-age=31536000, immutable" if immutable else "no-cache"),
             ]
         if target.suffix == ".html":
-            headers.append(("Content-Security-Policy", CSP))
+            # Judged on the file served: the PIN page in place of a locked
+            # page keeps the plain policy.
+            policy = PAGE_CSP.get(target.relative_to(web_dir).as_posix(), CSP)
+            headers.append(("Content-Security-Policy", policy))
             headers.append(("Referrer-Policy", "strict-origin-when-cross-origin"))
         self._send(200, target.read_bytes(), content_type, head, [*headers, *extra])
 

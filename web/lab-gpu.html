@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tunebox GPU test</title>
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/labgpu.css">
+<script src="envinfo.js" defer></script>
+<script type="module" src="js/labgpu.js"></script>
+</head>
+<body>
+<div class="gpu">
+  <noscript><p>The GPU test needs JavaScript.</p></noscript>
+  <canvas class="gpu-canvas gpu-probe" hidden></canvas>
+  <canvas class="gpu-canvas gpu-preset" hidden></canvas>
+  <div class="gpu-bar" role="region" aria-label="GPU test">
+    <div class="gpu-status">
+      <span class="gpu-test">GPU test</span>
+      <span class="gpu-fps">-- fps</span>
+      <span class="gpu-note"></span>
+    </div>
+    <div class="gpu-buttons">
+      <button class="gpu-button gpu-start" type="button">Start</button>
+      <button class="gpu-button gpu-show" type="button" disabled>Results</button>
+      <a class="gpu-button gpu-back" href="./?lab=1">Back to lab</a>
+    </div>
+  </div>
+  <div class="gpu-results" role="dialog" aria-label="GPU test results" hidden>
+    <div class="gpu-qr"></div>
+    <div class="gpu-results-text">
+      <p class="gpu-env"></p>
+      <div class="gpu-table-box"><table class="gpu-table"></table></div>
+      <button class="gpu-button gpu-close" type="button">Close</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

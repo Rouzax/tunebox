@@ -40,7 +40,7 @@ from tunebox.logos import Logos, group_key
 from tunebox.logs import configure
 from tunebox.pin import Attempt, Pin
 from tunebox.runtime import EMPTY, Snapshot
-from tunebox.server import CSP, Handler, TuneboxServer, etag_matches
+from tunebox.server import CSP, PAGE_CSP, Handler, TuneboxServer, etag_matches
 from tunebox.settings import Settings, SettingsUnavailable
 from tunebox.store import Store
 from tunebox.tracks import RawEntry
@@ -89,6 +89,7 @@ def make_server(
     (web / "index.html").write_text("<!doctype html><title>t</title>", encoding="utf-8")
     (web / "pin.html").write_text("<!doctype html><title>PIN</title>", encoding="utf-8")
     (web / "status.html").write_text("<!doctype html><title>status</title>", encoding="utf-8")
+    (web / "lab-gpu.html").write_text("<!doctype html><title>GPU</title>", encoding="utf-8")
     (tmp_path / "secret.txt").write_text("secret", encoding="utf-8")
     (web / "app.js").write_text("export {};", encoding="utf-8")
     (web / "vendor").mkdir()
@@ -239,6 +240,32 @@ def test_not_found(server: TuneboxServer, path: str) -> None:
     status, headers, _ = request(server, path)
     assert status == 404
     assert headers["content-type"].startswith("application/json")
+
+
+def test_the_pages_keep_the_plain_policy(server: TuneboxServer) -> None:
+    assert CSP == (
+        "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; "
+        "img-src 'self' data:; media-src https: http:; connect-src 'self'; "
+        "frame-ancestors *; base-uri 'none'; form-action 'none'"
+    )
+    for path in ["/", "/index.html", "/status.html", "/pin.html"]:
+        status, headers, _ = request(server, path)
+        assert status == 200, path
+        assert headers["content-security-policy"] == CSP, path
+
+
+def test_only_the_gpu_test_page_may_compile_webassembly(server: TuneboxServer) -> None:
+    assert list(PAGE_CSP) == ["lab-gpu.html"]
+    policy = PAGE_CSP["lab-gpu.html"]
+    # The same policy, with only script-src widened, and never to eval.
+    assert policy == CSP.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
+    assert "'unsafe-eval'" not in policy.split()
+    for path in ["/lab-gpu.html", "/lab%2Dgpu.html", "/vendor/../lab-gpu.html"]:
+        status, headers, body = request(server, path)
+        assert status == 200 and b"<title>GPU</title>" in body, path
+        assert headers["content-security-policy"] == policy, path
+    # Scripts carry no policy of their own, whichever page loads them.
+    assert "content-security-policy" not in request(server, "/app.js")[1]
 
 
 def test_static_index_and_head(server: TuneboxServer) -> None:
@@ -1054,6 +1081,21 @@ def test_a_locked_site_shows_the_pin_page_for_every_page(site: PinWorld) -> None
         assert b"<title>PIN</title>" in body, path
         assert headers["cache-control"] == "no-store", path
         assert "content-security-policy" in headers, path
+
+
+def test_a_locked_site_locks_the_gpu_test_page_like_the_player(site: PinWorld) -> None:
+    for path in ["/lab-gpu.html", "/lab%2dgpu.html"]:
+        status, headers, body = request(site.httpd, path)
+        assert status == 200, path
+        assert b"<title>PIN</title>" in body, path
+        assert headers["cache-control"] == "no-store", path
+        # The PIN page in its place runs no Butterchurn.
+        assert headers["content-security-policy"] == CSP, path
+    grant = grant_of(site.httpd)
+    status, headers, body = request(site.httpd, "/lab-gpu.html", headers={"Cookie": grant})
+    assert status == 200 and b"<title>GPU</title>" in body
+    assert headers["cache-control"].startswith("private")
+    assert headers["content-security-policy"] == PAGE_CSP["lab-gpu.html"]
 
 
 def test_a_locked_site_refuses_the_api_and_the_logos(site: PinWorld) -> None:
