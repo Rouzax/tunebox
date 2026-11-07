@@ -32,8 +32,8 @@ For listeners:
   everything but the title.
 - **Visualizer.** Styles in four groups: spectrum bars (including a ring
   around the cover), waves, slow ambient colour fields, all coloured from
-  the album cover, and MilkDrop: 17 classic MilkDrop presets with their
-  own colours, one at a time or shuffled. The spectrum styles switch
+  the album cover, and MilkDrop: classic MilkDrop presets with their own
+  colours, one at a time or shuffled. The spectrum styles switch
   themselves to a lighter mode on slow hardware.
 - **Lock screen and media keys.** Phones and cars show the song and cover;
   next and previous change station.
@@ -226,9 +226,9 @@ switch **Low power** on and off, and to hold the cover glow still
 normal, low power, and normal with the glow held still. It starts with
 **Off**, the page with no visualizer, as the baseline. MilkDrop is
 measured as **Shuffle** only; each preset has passed the GPU test below.
-That takes about 7 minutes; leave the page in front meanwhile. A style well below Off is
-costing frames; if it recovers with the glow held still, the glow is the
-cost, not the style.
+That takes about 7 minutes; leave the page in front meanwhile. A style
+well below Off is costing frames; if it recovers with the glow held
+still, the glow is the cost, not the style.
 
 The test ends with a table and a QR code. Per style and mode the table
 gives the page's average and worst frame rate (the slowest second), and

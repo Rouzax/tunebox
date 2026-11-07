@@ -25,10 +25,14 @@ export function webgl2Available() {
     }
 }
 
-// onLevel(glow) drives the cover glow; onFail('butterchurn') when the
-// engine cannot start, onFail('preset') when a preset picked on its own
-// cannot load.
-export function createMilkdrop({motion, root, onLevel, onFail}) {
+const importButterchurn = () => import(BUTTERCHURN).then((module) => module.default);
+const fetchJson = (file) => window.fetch(PRESET_DIR + file).then((response) => response.json());
+
+// onLevel(glow) drives the cover glow; onFail('butterchurn') whenever a
+// MilkDrop style is asked for and the engine cannot start, onFail('preset')
+// when a preset picked on its own cannot show. loadButterchurn and
+// fetchPreset are the network, replaceable in tests.
+export function createMilkdrop({motion, root, onLevel, onFail, loadButterchurn = importButterchurn, fetchPreset = fetchJson}) {
     let canvas = null;
     let visualizer = null;
     let starting = null;
@@ -43,6 +47,9 @@ export function createMilkdrop({motion, root, onLevel, onFail}) {
     let scale = 2;
     let size = {cssWidth: 0, cssHeight: 0};
     let current = null;
+    // The style and scale asked for last, while MilkDrop is on; asking for
+    // the same again (a new cover re-applies the style) changes nothing.
+    let showing = null;
     // Bumped by every start and stop, so a preset still loading for a
     // style that is gone is not shown.
     let run = 0;
@@ -54,6 +61,8 @@ export function createMilkdrop({motion, root, onLevel, onFail}) {
             canvas = document.createElement('canvas');
             // car-fx: placed, faded and dimmed like the 2D effects.
             canvas.className = 'car-fx car-md';
+            // Shown once a start still wanted gets its engine.
+            canvas.hidden = true;
             host.parentNode.insertBefore(canvas, host);
         }
         return canvas;
@@ -95,12 +104,12 @@ export function createMilkdrop({motion, root, onLevel, onFail}) {
             return Promise.resolve(visualizer);
         }
         if (!starting) {
-            starting = import(BUTTERCHURN).then((module) => {
+            starting = loadButterchurn().then((butterchurn) => {
                 const element = ensureCanvas();
                 const {width, height} = renderSize(element.clientWidth, element.clientHeight, window.devicePixelRatio || 1, scale);
                 element.width = width;
                 element.height = height;
-                visualizer = module.default.createVisualizer(motion.audioCtx, element, {
+                visualizer = butterchurn.createVisualizer(motion.audioCtx, element, {
                     width, height, pixelRatio: 1, textureRatio: 1, onlyUseWASM: true,
                 });
                 connect();
@@ -108,7 +117,6 @@ export function createMilkdrop({motion, root, onLevel, onFail}) {
             }).catch(() => {
                 broken = true;
                 visualizer = null;
-                onFail('butterchurn');
                 return null;
             });
         }
@@ -140,24 +148,22 @@ export function createMilkdrop({motion, root, onLevel, onFail}) {
         onLevel(followed.glow);
     }
 
-    // Resolves true once the preset shows; a failed one leaves the cycle.
+    // Resolves 'shown', 'offline' (the file did not come; worth another
+    // try later) or 'broken' (it would not compile: it leaves the cycle).
     function show(id, blendS, mine) {
         const preset = PRESETS.filter((candidate) => candidate.id === id)[0];
-        return window.fetch(PRESET_DIR + preset.file)
-            .then((response) => response.json())
-            .then((data) => {
-                if (mine !== run) {
-                    return false;
-                }
-                return Promise.resolve(visualizer.loadPreset(data, blendS)).then(() => {
-                    current = id;
-                    return true;
-                });
-            })
-            .catch(() => {
+        return fetchPreset(preset.file).then((data) => {
+            if (mine !== run) {
+                return 'stale';
+            }
+            return Promise.resolve(visualizer.loadPreset(data, blendS)).then(() => {
+                current = id;
+                return 'shown';
+            }, () => {
                 cycle.drop(id);
-                return false;
+                return 'broken';
             });
+        }, () => 'offline');
     }
 
     function shuffle(mine, blendS) {
@@ -165,20 +171,23 @@ export function createMilkdrop({motion, root, onLevel, onFail}) {
         if (!next || mine !== run) {
             return;
         }
-        show(next, blendS, mine).then((shown) => {
+        show(next, blendS, mine).then((outcome) => {
             if (mine !== run) {
                 return;
             }
-            if (!shown) {
+            if (outcome === 'broken') {
                 shuffle(mine, blendS);
                 return;
             }
+            // Shown, or offline: the next try comes after the usual wait,
+            // so a dropped connection does not spin through the cycle.
             timer = window.setTimeout(() => shuffle(mine, BLEND_S), SHUFFLE_S * 1000);
         });
     }
 
     function halt() {
         run += 1;
+        showing = null;
         cancelAnimationFrame(frame);
         frame = 0;
         window.clearTimeout(timer);
@@ -187,11 +196,21 @@ export function createMilkdrop({motion, root, onLevel, onFail}) {
 
     return {
         start(style, lowPower) {
+            const wanted = lowPower ? 3 : 2;
+            if (showing && showing.id === style.id && showing.scale === wanted) {
+                return;
+            }
             halt();
             const mine = run;
-            scale = lowPower ? 3 : 2;
+            scale = wanted;
+            showing = {id: style.id, scale: wanted};
             load().then((ready) => {
-                if (!ready || mine !== run) {
+                if (mine !== run) {
+                    return;
+                }
+                if (!ready) {
+                    showing = null;
+                    onFail('butterchurn');
                     return;
                 }
                 canvas.hidden = false;
@@ -202,8 +221,8 @@ export function createMilkdrop({motion, root, onLevel, onFail}) {
                     shuffle(mine, current ? BLEND_S : 0);
                     return;
                 }
-                show(style.id, current ? BLEND_S : 0, mine).then((shown) => {
-                    if (!shown && mine === run) {
+                show(style.id, current ? BLEND_S : 0, mine).then((outcome) => {
+                    if (outcome !== 'shown' && outcome !== 'stale' && mine === run) {
                         onFail('preset');
                     }
                 });
