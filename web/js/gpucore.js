@@ -1,6 +1,7 @@
 // The GPU test's plan and the pure arithmetic it runs on: which cells it
 // measures in what order, how long that takes, the analyser's bands, the
-// spectrum texture's bins and the longest frame after a preset switch.
+// spectrum texture's bins, the longest frame after a preset switch and the
+// rule a preset must pass to ship.
 
 // Each probe shader stands for a class of possible visualizer styles.
 export const PROBES = [
@@ -9,27 +10,44 @@ export const PROBES = [
     {id: 'heavy', label: 'Noise (heavy)'},
 ];
 
-// From light to heavy: no custom shaders; two typical presets; many
-// shape instances; long ray-marched warp and composite shaders.
+// Candidates for the player's MilkDrop group, across authors and looks,
+// picked for few shape instances and short warp and composite shaders:
+// hundreds of shape instances or a long warp shader are what dropped a
+// preset to a few frames per second, or froze the car's screen while it
+// loaded. The first three already passed in the car. Each line names the
+// preset's original file in butterchurn-presets.
 export const PRESETS = [
-    {id: 'hur', file: 'geiss-hurricane.json', label: 'Geiss - Hurricane'},
-    {id: 'mbl', file: 'flexi-mindblob-shiny-mix.json', label: 'Flexi - mindblob [shiny mix]'},
-    {id: 'dsc', file: 'martin-disco-mix-4.json', label: 'martin - disco mix 4'},
-    {id: 'saw', file: 'sawtooth-grin-roam.json', label: 'sawtooth grin roam'},
-    {id: 'cas', file: 'martin-castle-in-the-air.json', label: 'martin - castle in the air'},
+    {id: 'hu', file: 'geiss-hurricane.json', label: 'Geiss - Hurricane'}, // Geiss - Hurricane
+    {id: 'mb', file: 'flexi-mindblob-shiny-mix.json', label: 'Flexi - mindblob [shiny mix]'}, // Flexi - mindblob [shiny mix]
+    {id: 'dm', file: 'martin-disco-mix-4.json', label: 'martin - disco mix 4'}, // martin - disco mix 4
+    {id: 'sm', file: 'flexi-martin-geiss-sherwin-maxawow.json', label: 'Flexi, martin + geiss - sherwin maxawow'}, // Flexi, martin + geiss - dedicated to the sherwin maxawow
+    {id: 'rw', file: 'flexi-martin-geiss-rogue-wave-strike.json', label: 'Flexi, martin + geiss - rogue wave strike'}, // Flexi, martin + geiss - painterly rogue wave strike
+    {id: 'ps', file: 'flexi-psychenapping.json', label: 'Flexi - psychenapping'}, // Flexi - psychenapping
+    {id: 'dv', file: 'flexi-martin-dive.json', label: 'Flexi + Martin - dive'}, // Flexi + Martin - dive
+    {id: 'rt', file: 'flexi-reality-tunnel.json', label: 'Flexi - reality tunnel'}, // Flexi - reality tunnel
+    {id: 'rd', file: 'geiss-reaction-diffusion-2.json', label: 'Geiss - Reaction Diffusion 2'}, // Geiss - Reaction Diffusion 2
+    {id: 'hk', file: 'rovastar-geiss-hyperspace-kaleidoscope.json', label: 'Rovastar + Geiss - Hyperspace kaleidoscope'}, // Rovastar + Geiss - Hyperspace - kaleidoscope
+    {id: 'po', file: 'aderrasi-potion-of-spirits.json', label: 'Aderrasi - Potion of Spirits'}, // Aderrasi - Potion of Spirits
+    {id: 'ud', file: 'unchained-unified-drag-2.json', label: 'Unchained - Unified Drag 2'}, // Unchained - Unified Drag 2
+    {id: 'tv', file: 'zylot-true-visionary-final-mix.json', label: 'Zylot - True Visionary'}, // Zylot - True Visionary (Final Mix)
+    {id: 'sg', file: 'eos-zylot-skylight-stained-glass.json', label: 'Eo.S. + Zylot - skylight'}, // Eo.S. + Zylot - skylight (Stained Glass Majesty mix)
+    {id: 'gm', file: 'martin-gate-to-moria.json', label: 'martin - gate to moria'}, // martin - gate to moria
+    {id: 'bt', file: 'martin-reflections-on-black-tiles.json', label: 'martin - reflections on black tiles'}, // martin - reflections on black tiles
+    {id: 'dh', file: 'cope-the-drain-to-heaven.json', label: 'cope - the drain to heaven'}, // cope - the drain to heaven
+    {id: 'lc', file: 'shifter-liquid-circuitry-conjugoth.json', label: 'shifter - liquid circuitry'}, // shifter - liquid circuitry - conjugoth
 ];
 
 // Render scales as divisors of the canvas's device pixels: 1, 1/2, 1/3.
-// Butterchurn at full size is not measured: the player would never run a
-// Milkdrop preset at full resolution on the car's screen.
+// Presets run at half size only: the player draws MilkDrop at half size,
+// and a preset smooth there was smooth at 1/3 too in the car.
 export const PROBE_SCALES = [1, 2, 3];
-export const PRESET_SCALES = [2, 3];
+export const PRESET_SCALES = [2];
 // How long frames are watched after a preset is asked for, beyond the
 // moment it has loaded: shader compiles can land on the first draws.
 export const SWITCH_WATCH_S = 2;
 
-// Off first, as the baseline every other cell is read against. A preset's
-// first cell carries `load`, the switch whose cost is measured.
+// Off first, as the baseline every other cell is read against. Each
+// preset has one cell, which measures its load as well.
 export function gpuPlan() {
     const plan = [{kind: 'off', id: 'off', label: 'Off', scale: 1}];
     for (const probe of PROBES) {
@@ -38,11 +56,36 @@ export function gpuPlan() {
         }
     }
     for (const preset of PRESETS) {
-        PRESET_SCALES.forEach((scale, i) => {
-            plan.push({kind: 'preset', id: preset.id, label: preset.label, file: preset.file, scale, load: i === 0});
-        });
+        plan.push({kind: 'preset', id: preset.id, label: preset.label, file: preset.file, scale: PRESET_SCALES[0], load: true});
     }
     return plan;
+}
+
+// What a preset must manage in the car to ship in the player. stallMs
+// bounds the longest frame around its load: a long load freezes whatever
+// is on screen, a blend from the preset before included.
+export const PASS = {avg: 55, worst: 45, stallMs: 100};
+// Milliseconds are written whole and capped, keeping the QR code small;
+// 999 reads "999 or more", a fail under PASS.
+export const MS_CAP = 999;
+
+export function capMs(ms) {
+    return typeof ms === 'number' && Number.isFinite(ms) ? Math.min(MS_CAP, Math.round(ms)) : null;
+}
+
+// misses names each part of PASS the preset fell short of.
+export function presetVerdict(stats, stallMs) {
+    const misses = [];
+    if (!(stats.avg_fps >= PASS.avg)) {
+        misses.push('average');
+    }
+    if (!(stats.worst_fps >= PASS.worst)) {
+        misses.push('worst');
+    }
+    if (!(typeof stallMs === 'number' && stallMs <= PASS.stallMs)) {
+        misses.push('load');
+    }
+    return {pass: misses.length === 0, misses};
 }
 
 // Whole seconds the plan takes at windowS per cell, leaving out the load

@@ -1,10 +1,10 @@
 // The GPU test's results as one compact JSON text for a QR code, apart
 // from the lab's own: k names the test, v changes whenever a key's
 // meaning does.
-import {PRESET_SCALES, PROBE_SCALES} from './gpucore.js';
+import {PRESETS, PRESET_SCALES, PROBE_SCALES, capMs} from './gpucore.js';
 
 export const KIND = 'gpu';
-export const FORMAT = 1;
+export const FORMAT = 2;
 // Level L, as the lab's code: read from a still photo of a screen.
 export const QR_LEVEL = 'L';
 
@@ -21,14 +21,20 @@ const number = (value) => (typeof value === 'number' && Number.isFinite(value) ?
 const ratio = (value) => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 100) / 100 : null);
 const whole = (value) => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null);
 
-// r maps each test to its average and worst frame rate per render scale,
-// in the order of rs for Off and the probe shaders (Off has scale 1 only)
-// and of bs for the Butterchurn presets. A cell the run did not reach is
-// null.
+// Failures that stop more than one test: no WebGL 2, the context lost,
+// Butterchurn unable to start. A single preset's failure is its 0 in p.
+const RUN_WIDE = ['gl2', 'gl', 'bc'];
+
+// r maps Off and each probe shader to its average and worst frame rate
+// per render scale in PROBE_SCALES order (Off has scale 1 only). A cell
+// the run did not reach is null.
 function byTest(results) {
     const out = {};
     for (const result of results) {
-        const scales = result.kind === 'preset' ? PRESET_SCALES : result.kind === 'off' ? [1] : PROBE_SCALES;
+        if (result.kind === 'preset') {
+            continue;
+        }
+        const scales = result.kind === 'off' ? [1] : PROBE_SCALES;
         const at = scales.indexOf(result.scale);
         if (at < 0) {
             continue;
@@ -41,28 +47,49 @@ function byTest(results) {
     return out;
 }
 
-// su: per probe shader the milliseconds to compile and link its programs;
-// per preset [loadPreset's milliseconds, the longest frame in ms from the
-// switch until SWITCH_WATCH_S after it loaded].
+// p holds one entry per preset in PRESETS order: [average fps, worst fps,
+// the longest frame in ms around its load], 0 when it failed, null when
+// the run did not reach it. Its load time itself is left out: the pass
+// rule reads the stall.
+function byPreset(results, setup, failed) {
+    return PRESETS.map((preset) => {
+        if (failed[preset.id]) {
+            return 0;
+        }
+        const result = results.filter((r) => r.kind === 'preset' && r.id === preset.id && r.scale === PRESET_SCALES[0])[0];
+        if (!result) {
+            return null;
+        }
+        const timed = setup[preset.id];
+        return [whole(result.avg_fps), whole(result.worst_fps), capMs(timed && timed.worst)];
+    });
+}
+
+// su: per probe shader the milliseconds to compile and link its programs.
 function bySetup(setup) {
     const out = {};
     Object.keys(setup).forEach((id) => {
-        const value = setup[id];
-        out[id] = typeof value === 'number' ? whole(value) : [whole(value.load), whole(value.worst)];
+        if (typeof setup[id] === 'number') {
+            out[id] = capMs(setup[id]);
+        }
     });
     return out;
 }
 
-// results: [{kind ('off', 'probe' or 'preset'), id, scale, avg_fps,
-// worst_fps}]; setup: {probeId: ms, presetId: {load, worst}}; failed:
-// {id: reason} for tests that could not run.
-export function gpuPayload({userAgent, screen, view, dpr, windowS, env, results, setup, failed}) {
+// view and fullscreen describe the page when the run started. results:
+// [{kind ('off', 'probe' or 'preset'), id, scale, avg_fps, worst_fps}];
+// setup: {probeId: ms, presetId: {load, worst}}; failed: {id: reason} for
+// tests that could not run.
+export function gpuPayload({userAgent, screen, view, fullscreen, dpr, windowS, env, results, setup, failed}) {
+    const reasons = failed || {};
+    const timed = setup || {};
     const payload = {
         k: KIND,
         v: FORMAT,
         ua: cut(userAgent, MAX_AGENT),
         sc: [screen.width, screen.height],
         vw: [view.width, view.height],
+        fs: flag(fullscreen),
         dpr: ratio(dpr),
         w: windowS,
         e: {
@@ -75,15 +102,14 @@ export function gpuPayload({userAgent, screen, view, dpr, windowS, env, results,
             hc: number(env.cores),
             dm: number(env.memory),
         },
-        rs: PROBE_SCALES,
-        bs: PRESET_SCALES,
         r: byTest(results),
-        su: bySetup(setup || {}),
+        su: bySetup(timed),
+        p: byPreset(results, timed, reasons),
     };
-    const reasons = failed || {};
-    if (Object.keys(reasons).length) {
+    const runWide = RUN_WIDE.filter((id) => reasons[id]);
+    if (runWide.length) {
         payload.x = {};
-        Object.keys(reasons).forEach((id) => {
+        runWide.forEach((id) => {
             payload.x[id] = cut(String(reasons[id]), 12);
         });
     }
