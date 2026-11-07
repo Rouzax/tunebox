@@ -37,7 +37,8 @@ repos:
         pass_filenames: false
       - id: pytest
         name: pytest with coverage
-        entry: .venv/bin/pytest --cov
+        # One worker per core (pytest-xdist); coverage is combined across them.
+        entry: .venv/bin/pytest --cov -n auto
         language: system
         pass_filenames: false
         always_run: true
