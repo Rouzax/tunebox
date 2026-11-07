@@ -86,11 +86,13 @@ def _csp(script_src: str) -> str:
 
 
 CSP = _csp("'self'")
-# Pages whose policy differs from CSP, by the file served. Butterchurn, on
-# the GPU test page only, compiles each preset's equations to WebAssembly,
-# which needs 'wasm-unsafe-eval'; 'unsafe-eval' would let strings run as
-# JavaScript too, so it is never granted.
-PAGE_CSP = {"lab-gpu.html": _csp("'self' 'wasm-unsafe-eval'")}
+_WASM = _csp("'self' 'wasm-unsafe-eval'")
+# Pages whose policy differs from CSP, by the file served. Butterchurn, the
+# player's MilkDrop and the GPU test's, compiles each preset's equations to
+# WebAssembly, which needs 'wasm-unsafe-eval'; 'unsafe-eval' would let
+# strings run as JavaScript too, so it is never granted. pin.html, served
+# in a locked page's place, keeps CSP.
+PAGE_CSP = {"index.html": _WASM, "lab-gpu.html": _WASM}
 
 
 def etag_matches(header: str | None, etag: str) -> bool:
