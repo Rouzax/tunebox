@@ -10,7 +10,7 @@ checked against the registry, no package scripts run. `SHA256SUMS` is checked by
 | `poppins-5.3.0/` | `@fontsource/poppins` 5.3.0, latin and latin-ext woff2, weights 300, 400, 500 | SIL Open Font License 1.1 |
 | `qrcode-generator-2.0.4/` | `qrcode-generator` 2.0.4, `dist/qrcode.mjs` (the ES module build), for the admin setup page | MIT |
 | `butterchurn-3.0.0-beta.5/` | `butterchurn` 3.0.0-beta.5, `dist/butterchurn.min.js` (the ES module build), for the GPU test page only | MIT |
-| `butterchurn-presets-3.0.0-beta.4/` | `butterchurn-presets` 3.0.0-beta.4, five presets from `presets/converted/`, renamed to plain file names (from `Geiss - Hurricane`, `Flexi - mindblob [shiny mix]`, `martin - disco mix 4`, `sawtooth grin roam`, `martin - castle in the air`), for the GPU test page only | MIT |
+| `butterchurn-presets-3.0.0-beta.4/` | `butterchurn-presets` 3.0.0-beta.4, 18 presets from `presets/converted/`, renamed to plain file names (the original names are in `web/js/gpucore.js`), for the GPU test page only | MIT |
 | `material-symbols-rounded-737e332/` | Material Symbols Rounded, weight 400, 24 px, from Google's `google/material-design-icons` repository at commit `737e332` (Google publishes no npm package for them); only the icons in `scripts/icons.txt`, plus `icons.svg` built from them | Apache-2.0 |
 
 To update: fetch the new tarball the same way, replace the folder (its name

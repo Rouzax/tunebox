@@ -1,10 +1,12 @@
 // The GPU test page (lab-gpu.html): what WebGL costs on this device. Off
 // first, then the probe shaders of gpuprobe.js at three render scales,
-// then Butterchurn presets at two, each on the lab's silent test signal,
-// with the setup cost of each. The results end in a table and one QR code
-// for a photo. Nothing is stored and nothing is sent.
+// then each candidate Butterchurn preset at half size, each on the lab's
+// silent test signal, with the setup cost of each and a verdict per
+// preset. The results end in a table and one QR code for a photo. Nothing
+// is stored and nothing is sent.
 import qrcode from '../vendor/qrcode-generator-2.0.4/qrcode.mjs';
-import {PRESETS, SWITCH_WATCH_S, bands, describeSeconds, gpuPlan, planSeconds, shrink, worstGapMs} from './gpucore.js';
+import {PASS, PRESETS, SWITCH_WATCH_S, bands, capMs, describeSeconds, gpuPlan, planSeconds, presetVerdict, shrink, worstGapMs} from './gpucore.js';
+import {bindFullscreen, isFullscreen} from './fullscreen.js';
 import {SPECTRUM_BINS, createProbe} from './gpuprobe.js';
 import {QR_LEVEL, gpuPayload} from './gpureport.js';
 import {labSignal} from './labsignal.js';
@@ -37,6 +39,8 @@ const environmentLine = root.querySelector('.gpu-env');
 const table = root.querySelector('.gpu-table');
 const qrBox = root.querySelector('.gpu-qr');
 const close = root.querySelector('.gpu-close');
+const full = root.querySelector('.gpu-full');
+const summary = root.querySelector('.gpu-summary');
 
 const params = new URLSearchParams(window.location.search);
 const windowS = testWindowS(params.get('labsec'));
@@ -61,7 +65,8 @@ function readEnvironment() {
     }
 }
 
-function describeEnvironment(env) {
+// view: the window the run measured, and whether it was full screen.
+function describeEnvironment(env, view) {
     if (!env) {
         return 'Environment: unknown';
     }
@@ -70,12 +75,26 @@ function describeEnvironment(env) {
         parts.push(env.renderer);
     }
     parts.push(`${env.cores || '?'} cores`, `screen ${env.screen.width} x ${env.screen.height} @${env.dpr}x`,
-        `window ${window.innerWidth} x ${window.innerHeight}`);
+        `window ${view.width} x ${view.height}${view.fullscreen ? ' (full screen)' : ''}`);
     return parts.join(', ');
 }
 
+function currentView() {
+    return {width: window.innerWidth, height: window.innerHeight, fullscreen: isFullscreen()};
+}
+
 const environment = readEnvironment();
-environmentLine.textContent = describeEnvironment(environment);
+environmentLine.textContent = describeEnvironment(environment, currentView());
+// The run keeps the window it started in: leaving full screen during it
+// does not change what the results say it measured.
+let startView = currentView();
+const labelFull = () => {
+    full.textContent = isFullscreen() ? 'Leave full screen' : 'Full screen';
+};
+if (bindFullscreen(full)) {
+    document.addEventListener('fullscreenchange', labelFull);
+    document.addEventListener('webkitfullscreenchange', labelFull);
+}
 note.textContent = `Silent test signal, ${describeSeconds(planSeconds(plan, windowS))}. Press Start.`;
 root.dataset.gpu = 'idle';
 
@@ -283,6 +302,7 @@ async function runTest(signal) {
                     });
                     visualizer.connectAudio(signal.source);
                 } catch (error) {
+                    failed.bc = 'butterchurn';
                     PRESETS.forEach((preset) => {
                         failed[preset.id] = 'butterchurn';
                     });
@@ -340,19 +360,30 @@ async function runTest(signal) {
     return {measured, setup, failed};
 }
 
+// Milliseconds capped as in the payload: 999 reads "999 or more".
 function setupText(id, setup) {
     const value = setup[id];
     if (typeof value === 'number') {
-        return String(Math.round(value));
+        return String(capMs(value));
     }
-    return value ? `${Math.round(value.load)} / ${Math.round(value.worst)}` : '';
+    return value ? `${capMs(value.load)} / ${capMs(value.worst)}` : '';
+}
+
+function verdictText(result, setup) {
+    if (result.kind !== 'preset') {
+        return '';
+    }
+    const timed = setup[result.id];
+    const verdict = presetVerdict(result, timed ? timed.worst : null);
+    return verdict.pass ? 'pass' : `fail: ${verdict.misses.join(', ')}`;
 }
 
 function showResults({measured, setup, failed}) {
     const payload = gpuPayload({
         userAgent: navigator.userAgent,
         screen: {width: window.screen.width, height: window.screen.height},
-        view: {width: window.innerWidth, height: window.innerHeight},
+        view: startView,
+        fullscreen: startView.fullscreen,
         dpr: window.devicePixelRatio || 1,
         windowS,
         env: environment || {},
@@ -363,10 +394,11 @@ function showResults({measured, setup, failed}) {
     while (table.firstChild) {
         table.removeChild(table.firstChild);
     }
+    environmentLine.textContent = describeEnvironment(environment, startView);
     table.appendChild(element('caption',
-        `Frames per second; worst is the slowest second. Scale: the share of the window's device pixels drawn, stretched to fill it. Setup ms: for a probe, compiling and linking its shaders; for a Butterchurn preset, loading it / the longest frame from the switch to ${SWITCH_WATCH_S} s after it loaded.`));
+        `Frames per second; worst is the slowest second. Scale: the share of the window's device pixels drawn, stretched to fill it. Setup ms: for a probe, compiling and linking its shaders; for a Butterchurn preset, loading it / the longest frame from the switch to ${SWITCH_WATCH_S} s after it loaded (999: 999 or more). Verdict: a preset passes with an average of at least ${PASS.avg}, a worst second of at least ${PASS.worst} and no frame over ${PASS.stallMs} ms around its load.`));
     const head = element('tr');
-    for (const title of ['Test', 'Scale', 'Average', 'Worst', 'Setup ms']) {
+    for (const title of ['Test', 'Scale', 'Average', 'Worst', 'Verdict', 'Setup ms']) {
         head.appendChild(element('th', title));
     }
     table.appendChild(head);
@@ -378,16 +410,24 @@ function showResults({measured, setup, failed}) {
             element('td', SCALE_LABELS[result.scale]),
             element('td', result.avg_fps.toFixed(1)),
             element('td', String(result.worst_fps)),
+            element('td', verdictText(result, setup)),
             element('td', seen[result.id] ? '' : setupText(result.id, setup)),
         );
         seen[result.id] = true;
         table.appendChild(row);
     }
     Object.keys(failed).forEach((id) => {
+        const preset = PRESETS.filter((candidate) => candidate.id === id)[0];
         const row = element('tr');
-        row.append(element('td', id), element('td', ''), element('td', 'failed'), element('td', ''), element('td', failed[id]));
+        row.append(element('td', preset ? preset.label : id), element('td', ''), element('td', 'failed'), element('td', ''),
+            element('td', preset ? 'fail' : ''), element('td', failed[id]));
         table.appendChild(row);
     });
+    // A preset that failed to load counts as judged and not passing.
+    const judged = measured.filter((result) => result.kind === 'preset');
+    const passing = judged.filter((result) => verdictText(result, setup) === 'pass').length;
+    const broken = PRESETS.filter((preset) => failed[preset.id]).length;
+    summary.textContent = `${passing} of ${judged.length + broken} presets pass`;
     while (qrBox.firstChild) {
         qrBox.removeChild(qrBox.firstChild);
     }
@@ -434,6 +474,7 @@ start.addEventListener('click', () => {
         sync();
         return;
     }
+    startView = currentView();
     state = 'testing';
     stopRequested = false;
     results.hidden = true;

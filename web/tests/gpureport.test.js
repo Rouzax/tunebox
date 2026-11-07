@@ -15,6 +15,7 @@ function realistic(overrides) {
         userAgent: 'Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.109 Safari/537.36 XPENG-G9/5.4.1.1234 CarBrowser/1.0',
         screen: {width: 2560, height: 1440},
         view: {width: 1372, height: 686},
+        fullscreen: false,
         dpr: 1.75,
         windowS: 10,
         env: {
@@ -28,38 +29,55 @@ function realistic(overrides) {
     }, overrides);
 }
 
-test('gpuPayload carries its own marker, the environment and every cell', () => {
+test('gpuPayload carries the marker, the device, the probes and one entry per preset', () => {
     const data = JSON.parse(gpuPayload(realistic()));
     assert.equal(data.k, KIND);
     assert.equal(data.k, 'gpu');
-    assert.equal(data.v, FORMAT);
+    assert.equal(data.v, 2);
+    assert.equal(FORMAT, 2);
     assert.equal(data.w, 10);
     assert.deepEqual(data.vw, [1372, 686]);
+    assert.equal(data.fs, 0);
     assert.equal(data.dpr, 1.75);
     assert.equal(data.e.tx, 4096);
-    assert.deepEqual(data.rs, [1, 2, 3]);
-    assert.deepEqual(data.bs, [2, 3]);
-    assert.deepEqual(Object.keys(data.r), ['off', 'light', 'cover', 'heavy'].concat(PRESETS.map((p) => p.id)));
+    assert.equal(data.rs, undefined);
+    assert.equal(data.bs, undefined);
+    assert.deepEqual(Object.keys(data.r), ['off', 'light', 'cover', 'heavy']);
     assert.deepEqual(data.r.off, [60, 57]);
     assert.deepEqual(data.r.heavy, [60, 57, 60, 57, 60, 57]);
-    assert.deepEqual(data.r.cas, [60, 57, 60, 57]);
-    assert.deepEqual(data.su.light, 12);
-    assert.deepEqual(data.su.hur, [1235, 1500]);
+    assert.deepEqual(data.su, {light: 12, cover: 32, heavy: 48});
+    assert.equal(data.p.length, PRESETS.length);
+    // The stall, not the load time, and capped.
+    assert.deepEqual(data.p[0], [60, 57, 999]);
     assert.equal(data.x, undefined);
+    assert.equal(JSON.parse(gpuPayload(realistic({fullscreen: true}))).fs, 1);
 });
 
-test('gpuPayload leaves cells the run did not reach as null', () => {
+test('a preset not reached is null, a preset that failed is 0', () => {
     const data = JSON.parse(gpuPayload(realistic({
-        results: [{kind: 'probe', id: 'cover', scale: 2, avg_fps: 31.2, worst_fps: 28}, {kind: 'preset', id: 'dsc', scale: 3, avg_fps: 20, worst_fps: 9}],
-        setup: {},
+        results: [{kind: 'preset', id: PRESETS[1].id, scale: 2, avg_fps: 58.4, worst_fps: 55}],
+        setup: {[PRESETS[1].id]: {load: 92, worst: 33.4}},
+        failed: {[PRESETS[2].id]: 'load'},
     })));
-    assert.deepEqual(data.r, {cover: [null, null, 31, 28, null, null], dsc: [null, null, 20, 9]});
+    assert.equal(data.p[0], null);
+    assert.deepEqual(data.p[1], [58, 55, 33]);
+    assert.equal(data.p[2], 0);
+    assert.ok(data.p.slice(3).every((entry) => entry === null));
+    assert.equal(data.x, undefined);
+    assert.deepEqual(data.r, {});
     assert.deepEqual(data.su, {});
 });
 
-test('gpuPayload names tests that could not run', () => {
-    const data = JSON.parse(gpuPayload(realistic({results: [], setup: {}, failed: {gl2: 'missing', cas: 'load failed for a long reason'}})));
-    assert.deepEqual(data.x, {gl2: 'missing', cas: 'load failed '});
+test('a run-wide failure is one x entry, whatever it took down', () => {
+    const failed = {bc: 'butterchurn'};
+    PRESETS.forEach((preset) => {
+        failed[preset.id] = 'butterchurn';
+    });
+    const data = JSON.parse(gpuPayload(realistic({failed})));
+    assert.deepEqual(data.x, {bc: 'butterchurn'});
+    assert.ok(data.p.every((entry) => entry === 0));
+    const gl = JSON.parse(gpuPayload(realistic({results: [], setup: {}, failed: {gl2: 'missing', gl: 'lost after a long while'}})));
+    assert.deepEqual(gl.x, {gl2: 'missing', gl: 'lost after a'});
 });
 
 test('gpuPayload writes absent environment values as null and keeps the text ASCII', () => {
@@ -75,13 +93,18 @@ test('gpuPayload writes absent environment values as null and keeps the text ASC
 test('a full-size payload fits one QR code at level L within version 20', () => {
     const long = 'x'.repeat(1000);
     const base = realistic();
-    // Every number at its widest, every string at its cap.
+    const setup = {light: 12345, cover: 12345, heavy: 12345};
+    PRESETS.forEach((preset) => {
+        setup[preset.id] = {load: 12345, worst: 12345};
+    });
+    // Every number at its widest, every string at its cap, a run-wide failure.
     const text = gpuPayload(realistic({
         userAgent: long,
-        env: Object.assign({}, base.env, {renderer: long, vendor: long}),
+        fullscreen: true,
+        env: Object.assign({}, base.env, {renderer: long, vendor: long, maxTexture: 16384, cores: 10}),
         results: base.results.map((r) => Object.assign({}, r, {avg_fps: 144.4, worst_fps: 120})),
-        setup: Object.assign({}, base.setup, {light: 12345, cover: 12345, heavy: 12345},
-            ...PRESETS.map((p) => ({[p.id]: {load: 12345, worst: 12345}}))),
+        setup,
+        failed: {gl: 'lost after a long while'},
     }));
     const matrix = qrMatrix(qrcode, text, QR_LEVEL);
     assert.ok(matrix.length <= 97, `${matrix.length} modules for ${text.length} bytes`);

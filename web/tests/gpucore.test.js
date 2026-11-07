@@ -1,27 +1,47 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
-import {PRESETS, PROBES, bands, describeSeconds, gpuPlan, planSeconds, shrink, worstGapMs} from '../js/gpucore.js';
+import {PASS, PRESETS, PROBES, bands, capMs, describeSeconds, gpuPlan, planSeconds, presetVerdict, shrink, worstGapMs} from '../js/gpucore.js';
 
-test('the plan measures Off first, then every probe at three scales, then every preset at two', () => {
+test('the plan measures Off first, then every probe at three scales, then every preset once at half size', () => {
     const plan = gpuPlan();
     assert.deepEqual(plan[0], {kind: 'off', id: 'off', label: 'Off', scale: 1});
     const probes = plan.filter((cell) => cell.kind === 'probe');
     assert.deepEqual(probes.map((cell) => `${cell.id}/${cell.scale}`),
         ['light/1', 'light/2', 'light/3', 'cover/1', 'cover/2', 'cover/3', 'heavy/1', 'heavy/2', 'heavy/3']);
     const presets = plan.filter((cell) => cell.kind === 'preset');
-    assert.equal(presets.length, PRESETS.length * 2);
-    assert.deepEqual(presets.filter((cell) => cell.load).map((cell) => cell.id), PRESETS.map((preset) => preset.id));
-    assert.ok(presets.every((cell, i) => cell.scale === (i % 2 ? 3 : 2) && cell.load === (i % 2 === 0)));
-    assert.equal(plan.length, 1 + PROBES.length * 3 + PRESETS.length * 2);
+    assert.deepEqual(presets.map((cell) => cell.id), PRESETS.map((preset) => preset.id));
+    assert.ok(presets.every((cell) => cell.scale === 2 && cell.load === true));
+    assert.equal(plan.length, 1 + PROBES.length * 3 + PRESETS.length);
 });
 
-test('a full run takes three to four minutes before load times', () => {
+test('a full run takes a little over five minutes before load times', () => {
     const seconds = planSeconds(gpuPlan(), 10);
-    assert.equal(seconds, 210);
-    assert.equal(describeSeconds(seconds), 'about 3 min 30 s');
+    assert.equal(seconds, 316);
+    assert.equal(describeSeconds(seconds), 'about 5 min 16 s');
     assert.equal(describeSeconds(180), 'about 3 min');
     assert.equal(describeSeconds(30), 'about 30 s');
+});
+
+test('a preset passes only with all three: average, worst second and load', () => {
+    assert.deepEqual(PASS, {avg: 55, worst: 45, stallMs: 100});
+    assert.deepEqual(presetVerdict({avg_fps: 55, worst_fps: 45}, 100), {pass: true, misses: []});
+    assert.deepEqual(presetVerdict({avg_fps: 54.9, worst_fps: 45}, 100), {pass: false, misses: ['average']});
+    assert.deepEqual(presetVerdict({avg_fps: 59, worst_fps: 44}, 33), {pass: false, misses: ['worst']});
+    assert.deepEqual(presetVerdict({avg_fps: 59, worst_fps: 57}, 101), {pass: false, misses: ['load']});
+    // The castle in the car: smooth once loaded, a 1283 ms frame on load.
+    assert.deepEqual(presetVerdict({avg_fps: 57, worst_fps: 51}, 1283), {pass: false, misses: ['load']});
+    assert.deepEqual(presetVerdict({avg_fps: 2, worst_fps: 0}, 967), {pass: false, misses: ['average', 'worst', 'load']});
+    // A load that was never timed cannot pass.
+    assert.deepEqual(presetVerdict({avg_fps: 60, worst_fps: 59}, null), {pass: false, misses: ['load']});
+});
+
+test('capMs rounds and caps at 999', () => {
+    assert.equal(capMs(32.6), 33);
+    assert.equal(capMs(1283), 999);
+    assert.equal(capMs(999.4), 999);
+    assert.equal(capMs(undefined), null);
+    assert.equal(capMs(NaN), null);
 });
 
 test('every preset is vendored and runs as WebAssembly', () => {
@@ -31,6 +51,14 @@ test('every preset is vendored and runs as WebAssembly', () => {
         // No JavaScript form: the page's policy could not run it anyway.
         assert.equal(data.init_eqs_str, undefined, preset.file);
     }
+});
+
+test('the candidates are the 18 agreed presets, ids unique and short', () => {
+    assert.equal(PRESETS.length, 18);
+    assert.deepEqual(PRESETS.map((preset) => preset.id),
+        ['hu', 'mb', 'dm', 'sm', 'rw', 'ps', 'dv', 'rt', 'rd', 'hk', 'po', 'ud', 'tv', 'sg', 'gm', 'bt', 'dh', 'lc']);
+    assert.equal(new Set(PRESETS.map((preset) => preset.file)).size, 18);
+    assert.ok(PRESETS.every((preset) => /^[a-z]{2}$/.test(preset.id) && preset.label.length <= 45));
 });
 
 test('bands average the bins of bass, mids and highs', () => {
