@@ -89,6 +89,14 @@ body {
     cursor:  default;
 }
 
+.gpu-button.hidden {
+    display: none;
+}
+
+.gpu-button.active {
+    background: rgba(255, 255, 255, .25);
+}
+
 .gpu-button:focus-visible {
     outline:        3px solid #fff;
     outline-offset: 2px;

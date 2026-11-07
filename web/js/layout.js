@@ -1,3 +1,5 @@
+import {bindFullscreen} from './fullscreen.js';
+
 // Real height. Car and mobile browsers can report 100vh as the screen
 // height without their address bar, so sizes in vh run taller than the
 // window. car.css sizes the wide layout's cover from --car-vh, the measured
@@ -22,7 +24,7 @@ export function bindLayout(app) {
     if (app.embed) {
         return;
     }
-    bindFullscreen(root);
+    bindFullscreen(root.querySelector('.fullscreen-toggle'));
 
     const popup = root.querySelector('.popup-toggle');
     popup.classList.remove('hidden');
@@ -54,26 +56,4 @@ function bindFocusRings(root) {
         }
     }, true);
     document.addEventListener('pointerdown', () => root.classList.remove('keyboard'), true);
-}
-
-function bindFullscreen(root) {
-    const toggle = root.querySelector('.fullscreen-toggle');
-    const page = document.documentElement;
-    if (!(document.fullscreenEnabled || document.webkitFullscreenEnabled)) {
-        return;
-    }
-    const current = () => document.fullscreenElement || document.webkitFullscreenElement;
-    const sync = () => toggle.classList.toggle('active', Boolean(current()));
-    toggle.classList.remove('hidden');
-    toggle.addEventListener('click', () => {
-        const request = current()
-            ? (document.exitFullscreen || document.webkitExitFullscreen).call(document)
-            : (page.requestFullscreen || page.webkitRequestFullscreen).call(page);
-        // Browsers may refuse (no user gesture, policy); the button just stays as it was.
-        if (request && request.catch) {
-            request.catch(() => {});
-        }
-    });
-    document.addEventListener('fullscreenchange', sync);
-    document.addEventListener('webkitfullscreenchange', sync);
 }
