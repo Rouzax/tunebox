@@ -441,9 +441,11 @@ function inspect(page, slack) {
         if (!off || off.offsetParent === null) {
             problems.push('no Off button under the visualizer tiles');
         }
-        const unloaded = tiles.filter((tile) => !tile.querySelector('img') || !tile.querySelector('img').getAttribute('src'));
+        // Loaded, not only addressed: a type the server will not serve
+        // leaves an empty square.
+        const unloaded = tiles.filter((tile) => !tile.querySelector('img') || !tile.querySelector('img').naturalWidth);
         if (unloaded.length) {
-            problems.push(`${unloaded.length} visualizer tile(s) without a picture`);
+            problems.push(`${unloaded.length} visualizer tile(s) without a loaded picture`);
         }
     }
     if (page === 'viz') {
