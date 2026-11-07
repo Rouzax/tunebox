@@ -1,84 +1,16 @@
 import AudioMotionAnalyzer from '../vendor/audiomotion-analyzer-4.5.4/audioMotion-analyzer.js';
 import {createEffects} from './effects.js';
+import {createMilkdrop, webgl2Available} from './milkdrop.js';
 import {keepAudioRunning} from './reconnect.js';
 import {accentColor} from './palette.js';
+import {
+    ACCENT_GRADIENT, ART_GRADIENT, BACKGROUND, BASE, LOW_POWER, LOW_POWER_FPS, RESET, availableStyles, chooseStyle,
+} from './vizcore.js';
 
-const ART_GRADIENT = 'car-art';
-const ACCENT_GRADIENT = 'accent';
-const BACKGROUND = '#011a35';
-// Never changed by a style: no scale, no background fill, drawn over the page.
-const BASE = {showScaleX: false, showBgColor: false, overlay: true};
-
-// Every style sets every option any other style touches, so switching never
-// inherits leftovers. Wave reproduces the stock template's own settings.
-const RESET = {
-    alphaBars: false, barSpace: 0.3, channelLayout: 'dual-combined', fadePeaks: false, fillAlpha: 0.4,
-    frequencyScale: 'linear', ledBars: false, linearAmplitude: true, linearBoost: 2, lineWidth: 1,
-    lumiBars: false, maxFreq: 16000, minFreq: 20, mirror: 0, mode: 10, outlineBars: false, peakLine: false,
-    radial: false, radius: 0.3, reflexAlpha: 0.3, reflexBright: 1, reflexFit: true, reflexRatio: 0.2,
-    roundBars: false, showPeaks: false, smoothing: 0.92, spinSpeed: 0, trueLeds: false,
-    // The stock template's quality; LOW_POWER replaces these on slow hardware.
-    fftSize: 8192, loRes: false, maxFPS: 0,
-};
-
-// Half-resolution canvas, a quarter of the FFT work per frame, 30 fps.
-const LOW_POWER = {fftSize: 4096, loRes: true, maxFPS: 30};
-// Below this the analyzer is struggling (a car head unit, not a phone).
-const LOW_POWER_FPS = 40;
-
-const STYLES = [
-    {id: 'wave', label: 'Wave', art: true, options: {}},
-    {
-        id: 'bars', label: 'Spectrum bars', art: true, options: {
-            mode: 4, frequencyScale: 'log', minFreq: 30, roundBars: true, barSpace: 0.35, showPeaks: true,
-            fadePeaks: true, linearAmplitude: false, smoothing: 0.7, reflexRatio: 0.25, reflexAlpha: 0.25,
-            channelLayout: 'single',
-        },
-    },
-    {
-        id: 'led', label: 'LED meter', art: false, gradient: 'classic', options: {
-            mode: 5, frequencyScale: 'log', minFreq: 30, ledBars: true, trueLeds: true, showPeaks: true,
-            barSpace: 0.25, linearAmplitude: false, smoothing: 0.6, reflexRatio: 0, channelLayout: 'single',
-        },
-    },
-    {
-        id: 'butterfly', label: 'Butterfly', art: true, options: {
-            mode: 6, frequencyScale: 'log', minFreq: 30, roundBars: true, barSpace: 0.3, alphaBars: true,
-            linearAmplitude: false, smoothing: 0.7, reflexRatio: 0.3, reflexAlpha: 0.35,
-            channelLayout: 'dual-horizontal', mirror: -1,
-        },
-    },
-    {
-        // radius is replaced by placeRing() once the canvas sits around the cover.
-        id: 'ring', label: 'Ring', art: true, ring: true, options: {
-            radial: true, mode: 5, frequencyScale: 'log', minFreq: 30, barSpace: 0.2, spinSpeed: 1,
-            linearAmplitude: false, smoothing: 0.7, reflexRatio: 0, channelLayout: 'single',
-        },
-    },
-    {
-        id: 'neon', label: 'Neon', art: true, options: {
-            mode: 6, frequencyScale: 'log', minFreq: 30, outlineBars: true, fillAlpha: 0.1, lineWidth: 2,
-            barSpace: 0.3, showPeaks: true, linearAmplitude: false, smoothing: 0.7, reflexRatio: 0.25,
-            reflexAlpha: 0.25, channelLayout: 'single',
-        },
-    },
-    {
-        id: 'ambient', label: 'Ambient wall', art: true, options: {
-            mode: 5, frequencyScale: 'log', minFreq: 30, lumiBars: true, barSpace: 0.08, linearAmplitude: false,
-            smoothing: 0.85, reflexRatio: 0, channelLayout: 'single',
-        },
-    },
-    {id: 'scope', label: 'Oscilloscope', effect: 'scope', options: {}},
-    {id: 'lava', label: 'Lava lamp', effect: 'lava', options: {}},
-    {id: 'milkdrop', label: 'Milkdrop', effect: 'milkdrop', options: {}},
-    {id: 'aurora', label: 'Aurora', effect: 'aurora', options: {}},
-    {id: 'off', label: 'Off', off: true, options: {}},
-];
-
-const STYLE_IDS = STYLES.map((style) => style.id);
 const LOW_POWER_CHECK_MS = 3000;
 
-// The spectrum styles come from audioMotion, the effects from effects.js.
+// The spectrum styles come from audioMotion, the effects from effects.js,
+// MilkDrop from milkdrop.js.
 // Web Audio starts only after the listener's first tap or key press: an
 // AudioContext made earlier stays suspended, and a stream routed through a
 // suspended context plays silence. Until then, and with Off, the stream
@@ -89,9 +21,17 @@ export function bindVisualizer(app) {
     const menu = root.querySelector('.viz-list');
     const analyzer = root.querySelector('#analyzer');
     const artBox = root.querySelector('.artwork-img');
-    let index = STYLE_IDS.indexOf(storage.choice('visualizer', STYLE_IDS, 'wave'));
+    // MilkDrop needs WebGL 2; without it its styles are not offered.
+    const gl2 = webgl2Available();
+    const STYLES = availableStyles(gl2);
+    const chosen = chooseStyle(storage.get('visualizer'), gl2);
+    let index = STYLES.map((style) => style.id).indexOf(chosen);
     let motion = null;
     let effects = null;
+    let milkdrop = null;
+    // A style shown for this page view in place of the chosen one, which
+    // could not start; the stored choice stays, so a later visit tries it.
+    let standIn = null;
     let artStops = null;
     let lowPower = false;
     let gestured = false;
@@ -126,6 +66,7 @@ export function bindVisualizer(app) {
         }});
         resumeAudio = keepAudioRunning(motion.audioCtx, () => player.state() !== 'stopped');
         effects = createEffects(motion, root, app.setBass);
+        milkdrop = createMilkdrop({motion, root, onLevel: app.setBass, onFail: milkdropFailed});
         checkPower();
         return motion;
     }
@@ -170,15 +111,33 @@ export function bindVisualizer(app) {
         }
     }
 
+    function styleIndex(id) {
+        return STYLES.map((style) => style.id).indexOf(id);
+    }
+
+    function milkdropFailed(why) {
+        if (why === 'butterchurn') {
+            toast.show('MilkDrop could not start here.');
+            standIn = styleIndex('wave');
+        } else {
+            toast.show('That MilkDrop preset could not load; shuffling instead.');
+            standIn = styleIndex('md-shuffle');
+        }
+        apply();
+    }
+
     function apply() {
-        const style = STYLES[index];
+        const style = STYLES[standIn === null ? index : standIn];
         root.dataset.viz = style.id;
-        root.toggleAttribute('data-effect', Boolean(style.effect));
+        // Effects and MilkDrop draw on their own canvas; the spectrum
+        // canvas would show its last frame.
+        root.toggleAttribute('data-effect', style.engine === 'effects' || style.engine === 'milkdrop');
         markActive();
-        if (style.off) {
+        if (style.engine === 'off') {
             if (motion) {
                 motion.toggleAnalyzer(false);
                 effects.stop();
+                milkdrop.stop();
             }
             clearRing();
             app.setBass(0, true);
@@ -188,13 +147,22 @@ export function bindVisualizer(app) {
             // Applied again once Web Audio can start.
             return;
         }
-        if (style.effect) {
+        if (style.engine === 'effects') {
             motion.toggleAnalyzer(false);
+            milkdrop.stop();
             clearRing();
             effects.start(style.effect);
             return;
         }
+        if (style.engine === 'milkdrop') {
+            motion.toggleAnalyzer(false);
+            effects.stop();
+            clearRing();
+            milkdrop.start(style, lowPower);
+            return;
+        }
         effects.stop();
+        milkdrop.stop();
         let gradient = ACCENT_GRADIENT;
         if (style.gradient) {
             gradient = style.gradient;
@@ -251,6 +219,7 @@ export function bindVisualizer(app) {
         button.addEventListener('click', () => {
             if (!menuLocked) {
                 index = i;
+                standIn = null;
                 storage.set('visualizer', style.id);
                 apply();
                 if (onMenuPick) {
@@ -300,10 +269,12 @@ export function bindVisualizer(app) {
         if (cors) {
             motion.connectInput(element);
             effects.reconnect();
+            milkdrop.reconnect();
             apply();
         } else {
             motion.toggleAnalyzer(false);
             effects.stop();
+            milkdrop.stop();
             toast.show('No visualizer for this stream.');
         }
     });
@@ -326,10 +297,11 @@ export function bindVisualizer(app) {
     // For lab mode only: the gallery's view of the styles. Nothing here is
     // stored, so the normal player keeps the listener's own choice.
     return {
-        styles: () => STYLES.map(({id, label}) => ({id, label})),
+        styles: () => STYLES.map(({id, label, engine}) => ({id, label, engine})),
         index: () => index,
         select(i) {
             index = i;
+            standIn = null;
             apply();
         },
         lowPower: () => lowPower,
@@ -362,7 +334,7 @@ export function bindVisualizer(app) {
         },
         // Frames audioMotion has drawn so far, or null while the style is
         // one it does not draw (Off and the effects.js styles).
-        draws: () => (STYLES[index].effect || STYLES[index].off ? null : draws),
+        draws: () => (STYLES[index].engine === 'motion' ? draws : null),
         onMenuPick(fn) {
             onMenuPick = fn;
         },
