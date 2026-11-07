@@ -122,7 +122,7 @@ test('replaceStation keeps the place and the group order', () => {
 test('setSettings keeps the numbers given and drops the empty ones', () => {
     const state = base();
     const next = setSettings(state, {
-        defaults: {delay_s: 9, pawtunes_delay_s: undefined, poll_interval_s: 12, history_size: undefined},
+        defaults: {delay_s: 9, poll_interval_s: 12, history_size: undefined},
         latitude: undefined,
         longitude: undefined,
         defaultChannel: '',

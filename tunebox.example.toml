@@ -13,10 +13,8 @@ port = 8080
 
 [defaults]
 # Seconds after a track's start time at which it counts as heard. The player
-# adds its own buffer on top; PawTunes' stock player does not, so it gets a
-# separate, longer delay.
+# adds its own buffer on top.
 delay_s = 7
-pawtunes_delay_s = 28
 poll_interval_s = 12
 history_size = 50
 

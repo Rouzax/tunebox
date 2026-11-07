@@ -268,7 +268,6 @@ def test_a_search_downloads_the_600_image_in_the_same_job(tmp_path: Path) -> Non
     assert fetch.urls == [URL.replace("/1000x1000-", "/600x600-")]
     cover = covers.lookup(track)
     assert cover is not None and cover.url.startswith(LOCAL)
-    assert covers.remote_link(track) == URL
     assert not covers.run_once()
 
 
@@ -489,7 +488,7 @@ def test_housekeeping_prunes_old_decisions_and_their_files(tmp_path: Path) -> No
     now[0] += 366 * DAY
     covers.housekeep()
     assert store.get_cover(make_track().key) is None
-    assert covers.remote_link(make_track()) is None
+    assert covers.lookup(make_track()) is None
     assert not (tmp_path / f"{name_for(URL)}.jpg").exists()
     assert (tmp_path / f"{name_for(shared)}.jpg").exists()  # still named by x|one
 
@@ -694,7 +693,6 @@ def test_a_failed_replacement_download_keeps_the_working_cover(answer: bytes | H
     covers, now, _ = replaced_after_expiry(answer)
     cover = covers.lookup(make_track())
     assert cover is not None and cover.url.startswith(LOCAL)
-    assert covers.remote_link(make_track()) == URL
     now[0] += 599
     covers.request(make_track(), NOW)
     assert not covers.run_once()
@@ -718,14 +716,12 @@ def test_a_replacement_that_cannot_be_written_keeps_the_working_cover(tmp_path: 
     covers.run_once()
     cover = covers.lookup(make_track())
     assert cover is not None and cover.url.startswith(LOCAL)
-    assert covers.remote_link(make_track()) == URL
 
 
 def test_a_replacement_whose_fetch_crashes_keeps_the_working_cover() -> None:
     covers, _, _ = replaced_after_expiry(RuntimeError("boom"))
     cover = covers.lookup(make_track())
     assert cover is not None and cover.url.startswith(LOCAL)
-    assert covers.remote_link(make_track()) == URL
 
 
 def test_a_replacement_the_folder_refuses_keeps_the_working_cover(
@@ -740,14 +736,12 @@ def test_a_replacement_the_folder_refuses_keeps_the_working_cover(
     covers, _, _ = replaced_after_expiry(JPG, refuse)
     cover = covers.lookup(make_track())
     assert cover is not None and cover.url.startswith(LOCAL)
-    assert covers.remote_link(make_track()) == URL
 
 
 def test_a_successful_replacement_switches_to_the_new_cover() -> None:
     covers, _, fetch = replaced_after_expiry(JPG)
     cover = covers.lookup(make_track())
     assert cover is not None and cover.url.startswith(f"/covers/{name_for(URL2)}.jpg")
-    assert covers.remote_link(make_track()) == URL2
     assert len(fetch.urls) == 2  # downloaded once, not again after storing
 
 
@@ -922,7 +916,6 @@ def test_a_cover_fix_is_fetched_and_shown_without_a_search() -> None:
     cover = covers.lookup(SONG)
     assert cover is not None and cover.kind == "album"
     assert cover.url.startswith(f"/covers/{name_for(FIX_URL)}.jpg?v=")
-    assert covers.remote_link(SONG) == FIX_URL
 
 
 def test_a_fix_older_than_every_ttl_is_never_searched() -> None:
@@ -945,7 +938,6 @@ def test_a_photo_fix_replaces_an_automatic_artist_photo() -> None:
     cover = covers.lookup(SONG)
     assert cover is not None and cover.kind == "artist"
     assert cover.url.startswith(f"/covers/{name_for(FIX_PHOTO)}.jpg")
-    assert covers.remote_link(SONG) == FIX_PHOTO
 
 
 def test_no_photo_shows_no_image_for_an_artist_answer() -> None:
@@ -1178,7 +1170,6 @@ def test_an_upload_is_copied_from_its_blob_and_rebuilt(tmp_path: Path) -> None:
     drain(covers)
     assert fetch.urls == []
     assert (folder / f"{name_for(ref)}.jpg").read_bytes() == JPG
-    assert covers.remote_link(SONG) is None
     (folder / f"{name_for(ref)}.jpg").unlink()
     covers.request(SONG, NOW)
     drain(covers)

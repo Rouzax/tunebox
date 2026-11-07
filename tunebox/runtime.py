@@ -30,7 +30,6 @@ LIVE_FIELDS = frozenset(
         "streams",
         "default_image",
         "delay_s",
-        "pawtunes_delay_s",
         "group",
         "logo",
         "always",

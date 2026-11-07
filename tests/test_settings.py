@@ -343,3 +343,36 @@ def test_state_from_dict_reads_group_images_and_defaults_them() -> None:
         state_from_dict({"groups": [], "channels": [], "group_images": {"G": 3}})
     with pytest.raises(ConfigError, match="group_images: expected an object of strings"):
         state_from_dict({"groups": [], "channels": [], "group_images": []})
+
+
+def test_a_retired_setting_stored_by_an_older_tunebox_is_dropped_on_reading(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tunebox.db"
+    opened = Settings(path, clock=lambda: 1000.0)
+    opened.commit(state("owr"), 0, "edit")
+    opened.close()
+    # As an older tunebox stored it: the setting in the defaults, a station
+    # and a history entry.
+    older = {"defaults": {"delay_s": 7, "pawtunes_delay_s": 28}}
+    with contextlib.closing(sqlite3.connect(path)) as db, db:
+        db.execute(
+            "UPDATE settings SET value_json = ? WHERE key = 'defaults'",
+            (json.dumps(older["defaults"]),),
+        )
+        db.execute(
+            "INSERT OR IGNORE INTO settings (key, value_json) VALUES ('defaults', ?)",
+            (json.dumps(older["defaults"]),),
+        )
+        db.execute("UPDATE channels SET doc_json = ?", (json.dumps(doc(pawtunes_delay_s=30)),))
+        db.execute("UPDATE history SET before_json = ?", (json.dumps(older),))
+    reopened = Settings(path, clock=lambda: 1000.0)
+    try:
+        loaded, _ = reopened.load()
+        assert loaded.defaults == {"delay_s": 7}
+        assert loaded.channels[0].doc == doc()
+        entries, _ = reopened.history(limit=1)
+        found = reopened.history_entry(entries[0].id)
+        assert found is not None and found[1].defaults == {"delay_s": 7}
+    finally:
+        reopened.close()

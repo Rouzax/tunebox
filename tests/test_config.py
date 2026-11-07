@@ -40,7 +40,6 @@ def test_example_config_loads() -> None:
     assert [c.id for c in config.channels] == ["owr", "daybreak", "anthems"]
     owr = config.channels[0]
     assert owr.delay_s == 7
-    assert owr.pawtunes_delay_s == 28
     assert owr.source.settings == {"mount": "OWR_INTERNATIONAL"}
     assert owr.rules.station_id is not None
     assert [s.name for s in owr.streams] == ["High", "Standard", "Compatible"]
@@ -63,10 +62,19 @@ def test_defaults_without_rules_are_neutral(tmp_path: Path) -> None:
 
 def test_channel_overrides_a_default(tmp_path: Path) -> None:
     data = minimal(delay_s=9.5)
-    data["defaults"] = {"pawtunes_delay_s": 30}
+    data["defaults"] = {"delay_s": 30, "history_size": 20}
     channel = parse(data, tmp_path).channels[0]
     assert channel.delay_s == 9.5
-    assert channel.pawtunes_delay_s == 30
+    assert channel.history_size == 20
+
+
+def test_a_retired_setting_is_dropped_not_refused(tmp_path: Path) -> None:
+    data = minimal(pawtunes_delay_s=28)
+    data["defaults"] = {"delay_s": 8, "pawtunes_delay_s": 30}
+    config = parse(data, tmp_path)
+    assert config.channels[0].delay_s == 8
+    assert "pawtunes_delay_s" not in config.state.defaults
+    assert "pawtunes_delay_s" not in config.state.channels[0].doc
 
 
 @pytest.mark.parametrize(

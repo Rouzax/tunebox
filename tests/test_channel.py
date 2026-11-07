@@ -117,9 +117,9 @@ def test_heard_records_only_the_new_songs_a_poll_requested(tmp_path: Path) -> No
     channel, _, _ = make(source, Clock(1_000_000 + 39 * 1000 + 3000), store=store)
     channel.poll_once()
     songs = {s.key: s for s in store.heard_songs(0) or []}
-    # The same tracks the cover lookups asked for: not heard, audible, PawTunes'
-    # audible and the newest 20 history entries; never the older catch-up.
-    assert len(songs) == 4 + 1 + 1 + 20
+    # The same tracks the cover lookups asked for: not heard, audible and the
+    # newest 20 history entries; never the older catch-up.
+    assert len(songs) == 4 + 1 + 20
     assert "artist 0|song 0" not in songs
     newest = songs["artist 39|song 39"]
     assert (newest.first_at, newest.last_at, newest.channels) == (1_039_000, 1_039_000, ("owr",))
@@ -320,10 +320,10 @@ def test_cover_lookups_put_now_first_and_cap_history() -> None:
     channel, covers, finder = make(source, Clock(1_000_000 + 39 * 1000 + 3000))
     channel.poll_once()
     drain(covers)
-    # Not yet heard (36-39) first, newest first; then audible (35) and PawTunes'
-    # audible (14); then only the newest 20 history entries (34 down to 15).
+    # Not yet heard (36-39) first, newest first; then audible (35); then only
+    # the newest 20 history entries (34 down to 15).
     assert finder.calls[:4] == ["Song 39", "Song 38", "Song 37", "Song 36"]
-    assert len(finder.calls) == 4 + 1 + 1 + 20
+    assert len(finder.calls) == 4 + 1 + 20
     assert "Song 0" not in finder.calls
 
 
@@ -342,72 +342,6 @@ def test_recent_list_survives_a_restart() -> None:
     assert [t["title"] for t in body["history"]] == ["My People", "Stay"]
     restarted.poll_once()
     assert restarted.now_view()[0]["current"]["title"] == "My People"
-
-
-def test_pawtunes_view_uses_its_own_delay_and_full_title() -> None:
-    source = FakeSource()
-    played = RawEntry("NOIZU", "Moon Groove (Played by Noizu Library TML 22)", 1_200_000)
-    source.responses = [[played, OLD]]
-    clock = Clock(1_210_000)
-    channel, _, _ = make(source, clock)
-    channel.poll_once()
-    assert channel.now_view()[0]["current"]["title"] == "Moon Groove"
-    assert channel.pawtunes_view()["title"] == "Stay"
-    clock.ms = 1_230_000
-    body = channel.pawtunes_view()
-    assert body["title"] == "Moon Groove (Played by Noizu Library TML 22)"
-    assert body["artist"] == "NOIZU"
-    assert [h["title"] for h in body["history"]] == [body["title"], "Stay"]
-    assert body["history"][0]["played_at"] == 1_200_000
-
-
-def test_pawtunes_artwork_stays_omitted_once_omitted() -> None:
-    source = FakeSource()
-    source.responses = [[NEW, OLD]]
-    channel, covers, finder = make(source, Clock(1_300_000))
-    channel.poll_once()
-    assert "artwork" not in channel.pawtunes_view()
-    finder.covers["My People"] = M_URL
-    finder.covers["Stay"] = S_URL
-    drain(covers)
-    body = channel.pawtunes_view()
-    assert "artwork" not in body
-    assert body["history"][1]["artwork"] == S_URL
-
-
-def test_pawtunes_artwork_stays_once_sent() -> None:
-    source = FakeSource()
-    source.responses = [[NEW, OLD]]
-    clock = Clock(1_100_000)
-    channel, covers, finder = make(source, clock)
-    finder.covers["My People"] = M_URL
-    channel.poll_once()
-    drain(covers)
-    clock.ms = 1_300_000
-    assert channel.pawtunes_view()["artwork"] == M_URL
-    assert channel.pawtunes_view()["artwork"] == M_URL
-
-
-def test_pawtunes_station_id_and_empty_channel() -> None:
-    empty, _, _ = make(FakeSource(), Clock(0))
-    assert empty.pawtunes_view() == {"artist": "", "title": "One World Radio", "history": []}
-    source = FakeSource()
-    source.responses = [[ID, OLD]]
-    channel, _, _ = make(source, Clock(1_200_000))
-    channel.poll_once()
-    body = channel.pawtunes_view()
-    assert body["artist"] == ""
-    assert body["title"] == "E1700 16 Oct 2026 M19 VO"
-    assert [h["title"] for h in body["history"]] == ["Stay"]
-
-
-def test_pawtunes_history_is_capped_at_twenty() -> None:
-    source = FakeSource()
-    entries = [RawEntry(f"A{i}", f"S{i}", 1_000_000 + i * 1000) for i in reversed(range(30))]
-    source.responses = [entries]
-    channel, _, _ = make(source, Clock(2_000_000))
-    channel.poll_once()
-    assert len(channel.pawtunes_view()["history"]) == 20
 
 
 def test_info_and_status() -> None:
@@ -512,7 +446,6 @@ def test_a_woken_channel_shows_no_current_until_it_has_polled() -> None:
     assert body["current"] is None
     assert body["upcoming"] is None
     assert body["history"]
-    assert channel.pawtunes_view()["title"] == "One World Radio"
     channel.poll_once()
     assert channel.now_view()[0]["current"]["title"] == "My People"
 
@@ -569,22 +502,15 @@ def test_a_retired_channel_does_not_save() -> None:
     assert store.load_recent("owr") == []
 
 
-def test_a_restart_carries_the_pawtunes_freeze_and_activity() -> None:
+def test_a_restart_carries_the_activity() -> None:
     source = FakeSource()
     source.responses = [[OLD]]
     clock = Clock(1_300_000)
-    old, covers, finder = make(source, clock)
+    old, covers, _ = make(source, clock)
     old.poll_once()
     old.touch()
-    # Decided while no cover is known: PawTunes gets none for this track.
-    assert "artwork" not in old.pawtunes_view()
-    # The cover turns up after the decision; the replacement shares the
-    # cover service, as it does in the app.
-    finder.covers["Stay"] = M_URL
-    drain(covers)
     config = dataclasses.replace(channel_config(), poll_interval_s=20.0)
     new = Channel(config, FakeSource(), covers, Store(None), clock_ms=clock, carry=old)
-    assert "artwork" not in new.pawtunes_view()
     assert new.active()
     assert new.now_view()[0]["current"]["title"] == "Stay"
 
@@ -631,7 +557,7 @@ CHART = RawEntry("DAVID GUETTA, BEBE REXHA", "#8 Sad Girls", 1_200_000)
 RECAP = RawEntry("", "RECAP 20-11", 1_250_000)
 
 
-def test_the_badge_reaches_the_player_and_the_full_title_pawtunes() -> None:
+def test_the_badge_reaches_the_player() -> None:
     source = FakeSource()
     source.responses = [[CHART, OLD]]
     clock = Clock(1_230_000)
@@ -641,7 +567,6 @@ def test_the_badge_reaches_the_player_and_the_full_title_pawtunes() -> None:
     current = channel.now_view()[0]["current"]
     assert (current["badge"], current["title"]) == ("#8", "Sad Girls")
     assert "#8 Sad Girls" not in finder.calls
-    assert channel.pawtunes_view()["title"] == "#8 Sad Girls"
 
 
 def test_stored_tracks_are_read_with_the_current_rules() -> None:
@@ -657,24 +582,18 @@ def test_stored_tracks_are_read_with_the_current_rules() -> None:
     assert [(t["badge"], t["title"]) for t in history] == [("#8", "Sad Girls"), (None, "Stay")]
 
 
-def test_a_rule_change_rereads_the_kept_list_and_keeps_the_pawtunes_freeze() -> None:
+def test_a_rule_change_rereads_the_kept_list() -> None:
     source = FakeSource()
     source.responses = [[CHART, OLD]]
     clock = Clock(1_300_000)
-    old, covers, finder = make(source, clock)
+    old, covers, _ = make(source, clock)
     old.poll_once()
-    assert "artwork" not in old.pawtunes_view()
-    finder.covers["Sad Girls"] = M_URL
-    finder.covers["#8 Sad Girls"] = M_URL
-    drain(covers)
     config = dataclasses.replace(channel_config(), rules=OWR_RULES)
     new = Channel(config, FakeSource(), covers, Store(None), clock_ms=clock, carry=old)
     assert new.now_view()[0]["current"]["badge"] == "#8"
-    # Decided before the change: PawTunes still gets no artwork for it.
-    assert "artwork" not in new.pawtunes_view()
 
 
-def test_now_gives_a_local_cover_and_pawtunes_the_remote_link() -> None:
+def test_now_gives_a_local_cover() -> None:
     source = FakeSource()
     source.responses = [[NEW, OLD]]
     clock = Clock(1_300_000)
@@ -684,7 +603,6 @@ def test_now_gives_a_local_cover_and_pawtunes_the_remote_link() -> None:
     drain(covers)
     current = channel.now_view()[0]["current"]
     assert current["cover"].startswith("/covers/") and "?v=" in current["cover"]
-    assert channel.pawtunes_view()["artwork"] == M_URL
 
 
 def test_a_cover_arriving_changes_the_etag() -> None:

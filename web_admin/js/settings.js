@@ -6,7 +6,6 @@ import {setSettings} from './state.js';
 
 const NUMBERS = [
     ['delay_s', 'Title delay (seconds)', 'How long after a station\'s feed changes the song changes in its audio.'],
-    ['pawtunes_delay_s', 'PawTunes delay (seconds)', 'The same for the PawTunes endpoint.'],
     ['poll_interval_s', 'Feed check (seconds)', 'How often tunebox asks a station what plays.'],
     ['history_size', 'Recently played (songs)', 'How many songs each station keeps.'],
 ];

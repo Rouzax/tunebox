@@ -216,10 +216,7 @@ def test_weakened_etag_from_a_compressing_proxy_still_matches(server: TuneboxSer
     assert status == 304
 
 
-def test_pawtunes_and_health(server: TuneboxServer) -> None:
-    status, _, body = request(server, "/api/pawtunes/owr")
-    assert status == 200
-    assert json.loads(body)["title"] == "Stay"
+def test_health(server: TuneboxServer) -> None:
     status, _, body = request(server, "/healthz")
     assert status == 200
     assert json.loads(body)["status"] == "ok"
@@ -229,7 +226,7 @@ def test_pawtunes_and_health(server: TuneboxServer) -> None:
     "path",
     [
         "/api/channels/nope/now",
-        "/api/pawtunes/nope",
+        "/api/pawtunes/owr",
         "/api/other",
         "/missing.js",
         "/../secret.txt",
@@ -361,7 +358,7 @@ def test_now_rejects_a_bad_buffer(server: TuneboxServer, value: str) -> None:
 
 
 def test_a_request_body_is_never_read_as_a_second_request(server: TuneboxServer) -> None:
-    smuggled = b"GET /api/pawtunes/owr HTTP/1.1\r\nHost: x\r\n\r\n"
+    smuggled = b"GET /api/channels/owr/now HTTP/1.1\r\nHost: x\r\n\r\n"
     head = f"GET /api/channels HTTP/1.1\r\nHost: x\r\nContent-Length: {len(smuggled)}\r\n\r\n"
     with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5) as conn:
         conn.sendall(head.encode() + smuggled)
@@ -376,12 +373,6 @@ def test_asking_what_is_playing_marks_the_channel_active(server: TuneboxServer) 
     channel = server.current().channels["owr"]
     assert not channel.active()
     request(server, "/api/channels/owr/now")
-    assert channel.active()
-
-
-def test_the_pawtunes_endpoint_marks_the_channel_active(server: TuneboxServer) -> None:
-    channel = server.current().channels["owr"]
-    request(server, "/api/pawtunes/owr")
     assert channel.active()
 
 
@@ -1080,8 +1071,8 @@ def test_a_granted_device_gets_the_covers(site: PinWorld) -> None:
     assert (status, body) == (200, COVER_JPG)
 
 
-def test_a_locked_site_keeps_the_code_and_pawtunes_open(site: PinWorld) -> None:
-    for path in ["/app.js", "/pin.html", "/api/pawtunes/owr", "/healthz"]:
+def test_a_locked_site_keeps_the_code_open(site: PinWorld) -> None:
+    for path in ["/app.js", "/pin.html", "/healthz"]:
         assert request(site.httpd, path)[0] == 200, path
 
 

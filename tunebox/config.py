@@ -26,10 +26,13 @@ SOURCE_CHOICES: dict[str, dict[str, tuple[str, ...]]] = {
 CODECS = ("aac", "mp3")
 DEFAULTS: dict[str, float] = {
     "delay_s": 7,
-    "pawtunes_delay_s": 28,
     "poll_interval_s": 12,
     "history_size": 50,
 }
+# Settings of earlier versions that no longer do anything. A stored state,
+# its history, an export or tunebox.toml may still hold them, so they are
+# dropped on reading instead of refused as unknown.
+RETIRED = frozenset({"pawtunes_delay_s"})
 _CHANNEL_KEYS = {
     "id",
     "name",
@@ -76,7 +79,6 @@ class ChannelConfig:
     source: SourceConfig
     rules: Rules
     delay_s: float
-    pawtunes_delay_s: float
     poll_interval_s: float
     history_size: int
     group: str | None = None
@@ -278,8 +280,21 @@ def state_from_import(text: str) -> tuple[ConfigState, list[str]]:
     return state_from_toml(data), notes
 
 
+def without_retired(state: ConfigState) -> ConfigState:
+    """The state with every RETIRED key left out of its defaults and stations."""
+    return replace(
+        state,
+        defaults=_drop_retired(state.defaults),
+        channels=tuple(replace(row, doc=_drop_retired(row.doc)) for row in state.channels),
+    )
+
+
+def _drop_retired[V](table: dict[str, V]) -> dict[str, V]:
+    return {key: value for key, value in table.items() if key not in RETIRED}
+
+
 def state_from_toml(data: dict[str, Any]) -> ConfigState:
-    defaults_table = _table(data, "defaults", "defaults")
+    defaults_table = _drop_retired(_table(data, "defaults", "defaults"))
     _no_unknown(defaults_table, set(DEFAULTS), "defaults")
     raw_channels: object = data.get("channels", [])
     if not isinstance(raw_channels, list):
@@ -291,7 +306,7 @@ def state_from_toml(data: dict[str, Any]) -> ConfigState:
         where = f"channels[{index}]"
         if not isinstance(raw, dict):
             raise ConfigError(f"{where}: expected a table")
-        doc = dict(cast("dict[str, Any]", raw))
+        doc = _drop_retired(cast("dict[str, Any]", raw))
         group = _optional_str(doc, "group", f"{where}.group")
         doc.pop("group", None)
         # With a [[groups]] list the order is the file's; a station naming a
@@ -471,7 +486,6 @@ def _channel(table: dict[str, Any], where: str, defaults: dict[str, float]) -> C
         source=_source(_table(table, "source", f"{where}.source"), f"{where}.source"),
         rules=_rules(_table(table, "rules", f"{where}.rules"), f"{where}.rules"),
         delay_s=numbers["delay_s"],
-        pawtunes_delay_s=numbers["pawtunes_delay_s"],
         poll_interval_s=numbers["poll_interval_s"],
         history_size=int(numbers["history_size"]),
         group=group,

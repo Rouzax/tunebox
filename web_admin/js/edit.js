@@ -7,7 +7,6 @@ import {addStation, newStation, replaceStation, validId} from './state.js';
 
 const NUMBERS = {
     delay_s: ['Delay (seconds)', 'How far the audio runs behind the feed.'],
-    pawtunes_delay_s: ['PawTunes delay (seconds)', null],
     poll_interval_s: ['Poll interval (seconds)', null],
     history_size: ['History size', 'Tracks kept in the recent list.'],
 };
