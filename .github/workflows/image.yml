@@ -7,6 +7,13 @@ on:
 permissions:
   contents: read
 
+# Every build pushes :latest, so a build of an older commit that finishes
+# last would move :latest back. A newer push to main cancels the build
+# still running for the one before it.
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     uses: ./.github/workflows/ci.yml
