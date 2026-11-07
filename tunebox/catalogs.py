@@ -339,6 +339,20 @@ class Catalogs:
         # songs by the second-named one, covers and tributes highest.
         lead = lead_artist(first)
         queries.extend(dict.fromkeys((f"{lead} {base}", f"{first} {base}")))
+        # Deezer's search names no album's artist; an album is asked once
+        # per search however many queries list it.
+        owners: dict[str, str] = {}
+
+        def owner(candidate: Candidate) -> str:
+            if not candidate.album_id:
+                return ""
+            if candidate.album_id not in owners:
+                # An unanswered lookup leaves the owner unknown; the song's
+                # own search did not fail.
+                album = self.deezer_album(candidate.album_id, [])
+                owners[candidate.album_id] = album.artist if album is not None else ""
+            return owners[candidate.album_id]
+
         for q in queries:
             url = f"{self._deezer_api}/search?" + urllib.parse.urlencode({"q": q, "limit": 10})
             data = self._json(url, self._deezer, failures)
@@ -350,10 +364,11 @@ class Catalogs:
                     _text(i, "album", "title"),
                     _text(i, "artist", "picture_xl"),
                     _id(i, "artist", "id"),
+                    album_id=_id(i, "album", "id"),
                 )
                 for i in _items(data, "data")
             ]
-            if found := best_match(names, track.title, candidates):
+            if found := best_match(names, track.title, candidates, owner):
                 return found
         return None
 
@@ -377,6 +392,7 @@ class Catalogs:
                     _text(i, "trackName"),
                     _text(i, "artworkUrl100").replace("100x100bb", "1000x1000bb"),
                     _text(i, "collectionName"),
+                    album_artist=_text(i, "collectionArtistName"),
                 )
                 for i in _items(data, "results")
             ]

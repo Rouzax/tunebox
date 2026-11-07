@@ -51,7 +51,9 @@ Behind the player:
   iTunes, and only accepts a cover when both the title and an artist match.
   Among the matches it prefers the song's own release over a DJ mix,
   compilation or radio show, whose cover shows that rather than the song.
-  When no song cover exists it shows a photo of the artist instead, and when
+  An album that belongs to another artist, such as a DJ's mix or a
+  various-artists album, counts as a compilation even when its title does
+  not say so. When no song cover exists it shows a photo of the artist instead, and when
   there is neither, no picture rather than the wrong one. A song that has
   its own cover also gets the artist's photo: tap the cover and it turns
   like a card to show the photo, tap again to turn it back. A new song
