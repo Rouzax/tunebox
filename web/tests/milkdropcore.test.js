@@ -3,9 +3,11 @@ import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 import {BLEND_S, PRESETS, PRESET_DIR, RENDER_CAP, SHUFFLE_ID, SHUFFLE_S, createCycle, followBass, renderSize} from '../js/milkdropcore.js';
 
-test('the 18 presets that passed in the car, each vendored and WebAssembly-only', () => {
-    assert.equal(PRESETS.length, 18);
-    assert.equal(new Set(PRESETS.map((p) => p.id)).size, 18);
+test('the 17 presets shown, each vendored and WebAssembly-only, with short names', () => {
+    assert.equal(PRESETS.length, 17);
+    assert.equal(new Set(PRESETS.map((p) => p.id)).size, 17);
+    assert.ok(PRESETS.every((p) => p.label.length <= 14 && !/ - /.test(p.label)));
+    assert.equal(PRESETS.find((p) => p.id === 'md-geiss-reaction-diffusion-2'), undefined);
     for (const preset of PRESETS) {
         assert.equal(preset.id, `md-${preset.file.replace(/\.json$/, '')}`);
         assert.notEqual(preset.id, SHUFFLE_ID);

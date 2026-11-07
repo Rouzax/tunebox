@@ -573,8 +573,8 @@ async function checkVizGroups(send, evaluate) {
     await evaluate(`[...document.querySelectorAll('.viz-groups .tile')].find((t) => t.dataset.group === 'milkdrop').click()`);
     await sleep(300);
     const milkdrop = await state();
-    if (milkdrop.heading !== 'MilkDrop' || milkdrop.styles !== 19) {
-        problems.push(`the MilkDrop tile does not open Shuffle and 18 presets (${JSON.stringify(milkdrop)})`);
+    if (milkdrop.heading !== 'MilkDrop' || milkdrop.styles !== 18) {
+        problems.push(`the MilkDrop tile does not open Shuffle and 17 presets (${JSON.stringify(milkdrop)})`);
     }
     await escape();
     const back = await state();

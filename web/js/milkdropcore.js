@@ -11,25 +11,28 @@ export const BLEND_S = 2.7;
 // large monitor costs no more than the car's split window.
 export const RENDER_CAP = 1280;
 
+// The authors' names are in the file names and in web/js/gpucore.js; the
+// player shows a short name for what the preset looks like. Geiss's
+// Reaction Diffusion 2 passed the car's test but stays nearly black, so it
+// is left out here (the GPU test still measures it).
 export const PRESETS = [
-    ['geiss-hurricane.json', 'Geiss - Hurricane'],
-    ['flexi-mindblob-shiny-mix.json', 'Flexi - mindblob'],
-    ['martin-disco-mix-4.json', 'martin - disco mix 4'],
-    ['flexi-martin-geiss-sherwin-maxawow.json', 'Flexi, martin + geiss - sherwin maxawow'],
-    ['flexi-martin-geiss-rogue-wave-strike.json', 'Flexi, martin + geiss - rogue wave strike'],
-    ['flexi-psychenapping.json', 'Flexi - psychenapping'],
-    ['flexi-martin-dive.json', 'Flexi + Martin - dive'],
-    ['flexi-reality-tunnel.json', 'Flexi - reality tunnel'],
-    ['geiss-reaction-diffusion-2.json', 'Geiss - Reaction Diffusion 2'],
-    ['rovastar-geiss-hyperspace-kaleidoscope.json', 'Rovastar + Geiss - Hyperspace'],
-    ['aderrasi-potion-of-spirits.json', 'Aderrasi - Potion of Spirits'],
-    ['unchained-unified-drag-2.json', 'Unchained - Unified Drag 2'],
-    ['zylot-true-visionary-final-mix.json', 'Zylot - True Visionary'],
-    ['eos-zylot-skylight-stained-glass.json', 'Eo.S. + Zylot - skylight'],
-    ['martin-gate-to-moria.json', 'martin - gate to moria'],
-    ['martin-reflections-on-black-tiles.json', 'martin - reflections on black tiles'],
-    ['cope-the-drain-to-heaven.json', 'cope - the drain to heaven'],
-    ['shifter-liquid-circuitry-conjugoth.json', 'shifter - liquid circuitry'],
+    ['geiss-hurricane.json', 'Hurricane'],
+    ['flexi-mindblob-shiny-mix.json', 'Neon Tendrils'],
+    ['martin-disco-mix-4.json', 'Light Streaks'],
+    ['flexi-martin-geiss-sherwin-maxawow.json', 'Snakeskin'],
+    ['flexi-martin-geiss-rogue-wave-strike.json', 'Painted Wave'],
+    ['flexi-psychenapping.json', 'Pink Lace'],
+    ['flexi-martin-dive.json', 'Marble Dive'],
+    ['flexi-reality-tunnel.json', 'Nebula'],
+    ['rovastar-geiss-hyperspace-kaleidoscope.json', 'Kaleidoscope'],
+    ['aderrasi-potion-of-spirits.json', 'Fire Mirror'],
+    ['unchained-unified-drag-2.json', 'Crystal Orb'],
+    ['zylot-true-visionary-final-mix.json', 'Mandala'],
+    ['eos-zylot-skylight-stained-glass.json', 'Spiral Glass'],
+    ['martin-gate-to-moria.json', 'Stone Gate'],
+    ['martin-reflections-on-black-tiles.json', 'Night Tiles'],
+    ['cope-the-drain-to-heaven.json', 'Light Burst'],
+    ['shifter-liquid-circuitry-conjugoth.json', 'Acid Circuit'],
 ].map(([file, label]) => ({id: `md-${file.slice(0, -'.json'.length)}`, file, label}));
 
 // The canvas's size in device pixels, the long side capped at RENDER_CAP,
