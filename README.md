@@ -239,19 +239,27 @@ browser has none.
 
 1. In the lab bar, tap **GPU test**. It opens its own page,
    `/lab-gpu.html`, which you can also open directly.
-2. Tap **Start**. It runs on the same silent test signal, says how long the
-   run takes (about 4 minutes), and shows the live frame rate.
-3. When it ends, photograph the QR code. It is separate from the lab test's
+2. Optional: tap **Full screen** to measure the whole screen instead of the
+   window. The results record which of the two the run started in.
+3. Tap **Start**. It runs on the same silent test signal, says how long the
+   run takes (5 to 6 minutes), and shows the live frame rate.
+4. When it ends, photograph the QR code. It is separate from the lab test's
    QR code, and the same numbers are in the table beside it.
 
 In order, it measures the page with nothing drawn, then three test drawings
 of its own at full, half and a third of the window's resolution: a light
 colour field, a tunnel of the cover image drawn over the previous frames,
-and a heavy layered noise. Then come five Milkdrop presets through
-Butterchurn, at half and a third. It also times compiling each test
-drawing and loading each preset, and records the longest frame just after
-a preset change, which shows up as a stutter. **Stop** ends the run early
+and a heavy layered noise. Then come 18 candidate Milkdrop presets through
+Butterchurn, each at half resolution. It also times compiling each test
+drawing and loading each preset, and records the longest frame around a
+preset's load, which shows up as a stutter. **Stop** ends the run early
 and shows what was measured so far.
+
+Each preset gets a verdict, and the line above the table counts the
+passes. A preset passes with an average of at least 55 frames per second,
+a slowest second of at least 45, and no frame longer than 100 ms around
+its load; a preset that fails any of the three is not smooth enough for
+the player.
 
 Butterchurn turns each preset's equations into WebAssembly, so this page
 alone is allowed to compile WebAssembly; every other page keeps the

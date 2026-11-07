@@ -1,9 +1,11 @@
 // Browser check of the GPU test page (lab-gpu.html): lab mode's GPU test
 // button opens it with labsec carried; only this page's policy allows
 // WebAssembly; no AudioContext before the Start tap and exactly one after;
-// a shortened full run measures Off, every probe shader at every scale and
-// every Butterchurn preset at both scales, with every setup time; the
-// presets ran as WebAssembly, never as JavaScript; the QR code holds
+// the Full screen button shows where the browser allows it and switches
+// both ways; a shortened full run measures Off, every probe shader at
+// every scale and every candidate preset once with its load stall, and
+// shows a verdict per preset; the presets ran as WebAssembly, never as
+// JavaScript; the QR code holds
 // exactly the results JSON; the results fit a phone's width; nothing is
 // stored and every request stays on tunebox; a browser without WebGL 2 is
 // told so. Fails on any page error or CSP violation.
@@ -258,13 +260,29 @@ async function run() {
             ? null : `the GPU test button opened ${await evaluate('location.href')}`);
         await sleep(500);
         check((await counts()).contexts === 0 ? null : 'an AudioContext before Start');
-        check(/about \d+ s\. Press Start\./.test(await evaluate(`document.querySelector('.gpu-note').textContent`))
+        check(/about (\d+ min )?\d+ s\. Press Start\./.test(await evaluate(`document.querySelector('.gpu-note').textContent`))
             ? null : `the start note says ${await evaluate(`document.querySelector('.gpu-note').textContent`)}`);
         check(await evaluate(`document.querySelector('.gpu-back').getAttribute('href')`) === './?lab=1&labsec=1'
             ? null : 'Back to lab drops labsec');
         const env = await evaluate(`window.tuneboxEnvironment()`);
         if (!env.webgl2) {
             throw new CheckFailure(`this browser has no WebGL 2 (${JSON.stringify(env)}); the run cannot be checked here`);
+        }
+
+        // Full screen where the browser allows it, and back; the run below
+        // starts outside it.
+        const fullAllowed = await evaluate(`Boolean(document.fullscreenEnabled || document.webkitFullscreenEnabled)`);
+        const fullLabel = () => evaluate(`document.querySelector('.gpu-full').textContent`);
+        check(await evaluate(`document.querySelector('.gpu-full').classList.contains('hidden')`) === !fullAllowed
+            ? null : `Full screen button shown: ${!fullAllowed}, allowed: ${fullAllowed}`);
+        if (fullAllowed) {
+            await tap('.gpu-full');
+            check(await until(`document.fullscreenElement !== null && document.querySelector('.gpu-full').textContent === 'Leave full screen'`, 10000)
+                ? null : `after Full screen: ${await fullLabel()}`);
+            await tap('.gpu-full');
+            check(await until(`document.fullscreenElement === null && document.querySelector('.gpu-full').textContent === 'Full screen'`, 10000)
+                ? null : `after Leave full screen: ${await fullLabel()}`);
+            await sleep(300);
         }
 
         const started = Date.now();
@@ -294,18 +312,16 @@ async function run() {
         console.log(`full run with labsec=1: ${Math.round((Date.now() - started) / 1000)} s`);
         const payload = await evaluate(`document.querySelector('.gpu-results').dataset.payload`);
         const data = JSON.parse(payload);
-        check(data.k === 'gpu' && data.v === 1 ? null : `marker ${data.k} ${data.v}`);
+        check(data.k === 'gpu' && data.v === 2 ? null : `marker ${data.k} ${data.v}`);
         check(data.w === 1 ? null : `window ${data.w} s`);
         check(Array.isArray(data.vw) && data.vw[0] === 960 && data.vw[1] === 560 ? null : `window ${JSON.stringify(data.vw)}`);
         check(typeof data.ua === 'string' && data.ua.length ? null : 'no user agent');
         check(data.e && data.e.g2 === 1 ? null : `environment ${JSON.stringify(data.e)}`);
+        check(data.fs === 0 ? null : `full screen ${data.fs}`);
         check(data.x === undefined ? null : `failed: ${JSON.stringify(data.x)}`);
         const rows = {off: 2};
         PROBES.forEach((probe) => {
             rows[probe.id] = 6;
-        });
-        PRESETS.forEach((preset) => {
-            rows[preset.id] = 4;
         });
         check(Object.keys(data.r).join() === Object.keys(rows).join() ? null : `results for ${Object.keys(data.r).join()}`);
         for (const id of Object.keys(rows)) {
@@ -317,13 +333,24 @@ async function run() {
             const ms = data.su[probe.id];
             check(typeof ms === 'number' && ms >= 0 ? null : `${probe.id} setup ${JSON.stringify(ms)}`);
         }
-        for (const preset of PRESETS) {
-            const pair = data.su[preset.id];
-            check(Array.isArray(pair) && pair.length === 2 && pair[0] > 0 && pair[1] > 0
-                ? null : `${preset.id} setup ${JSON.stringify(pair)}`);
-        }
+        check(Object.keys(data.su).join() === PROBES.map((probe) => probe.id).join() ? null : `setup for ${Object.keys(data.su).join()}`);
+        check(Array.isArray(data.p) && data.p.length === PRESETS.length ? null : `presets ${JSON.stringify(data.p)}`);
+        (data.p || []).forEach((entry, i) => {
+            check(Array.isArray(entry) && entry.length === 3 && entry.every((value) => typeof value === 'number')
+                && entry[0] > 0 && entry[2] > 0 ? null : `${PRESETS[i].id}: ${JSON.stringify(entry)}`);
+        });
         const tableRows = await evaluate(`document.querySelectorAll('.gpu-table tr').length`);
-        check(tableRows === 1 + 1 + PROBES.length * 3 + PRESETS.length * 2 ? null : `${tableRows} table rows`);
+        check(tableRows === 1 + 1 + PROBES.length * 3 + PRESETS.length ? null : `${tableRows} table rows`);
+        // A verdict on every preset row and none on the others; SwiftShader
+        // fails most, so only the form is checked.
+        const verdicts = await evaluate(`[...document.querySelectorAll('.gpu-table tr')].slice(1).map((row) => row.cells[4].textContent)`);
+        const presetVerdicts = verdicts.slice(1 + PROBES.length * 3);
+        check(verdicts.slice(0, 1 + PROBES.length * 3).every((text) => text === '')
+            && presetVerdicts.length === PRESETS.length && presetVerdicts.every((text) => text === 'pass' || /^fail: (average|worst|load)/.test(text))
+            ? null : `verdicts ${JSON.stringify(verdicts)}`);
+        const passing = presetVerdicts.filter((text) => text === 'pass').length;
+        const summary = await evaluate(`document.querySelector('.gpu-summary').textContent`);
+        check(summary === `${passing} of ${PRESETS.length} presets pass` ? null : `summary: ${summary}`);
 
         // Butterchurn ran every preset as WebAssembly: a compile each, and
         // none refused, and it never fell back to JavaScript (which the
@@ -396,6 +423,7 @@ async function run() {
         check(await until(`document.querySelector('.gpu').dataset.gpu === 'done'`, 2000) ? null : `Stop took over 2 s (${await gpuState()})`);
         const stopped = JSON.parse(await evaluate(`document.querySelector('.gpu-results').dataset.payload`));
         check(Object.keys(stopped.r).join() === 'off' ? null : `after Stop: ${JSON.stringify(stopped.r)}`);
+        check(stopped.p.every((entry) => entry === null) ? null : `presets after Stop: ${JSON.stringify(stopped.p)}`);
 
         // Without WebGL 2 the page says so, and the code says so too.
         await open('/lab-gpu.html?labsec=1&nowebgl2=1');

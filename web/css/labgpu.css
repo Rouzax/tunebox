@@ -154,6 +154,11 @@ body {
     word-break: break-word;
 }
 
+.gpu-summary {
+    margin:      0 0 .5rem;
+    font-weight: 600;
+}
+
 .gpu-table {
     border-collapse: collapse;
     font-size:       1rem;
