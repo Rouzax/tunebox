@@ -1,9 +1,6 @@
 // The lab's results as one compact JSON text for a QR code. Short keys;
 // v changes whenever a key's meaning does.
-export const FORMAT = 4;
-// Where each mode's numbers start in a row. Still glow asks only about
-// the page, so it has no draw rate.
-const MODE_AT = {normal: 0, low: 3, still: 6};
+export const FORMAT = 5;
 // Level L: the code is read from a still photo of a screen, where fewer,
 // larger modules help more than the extra correction of M.
 export const QR_LEVEL = 'L';
@@ -22,20 +19,26 @@ const number = (value) => (typeof value === 'number' && Number.isFinite(value) ?
 
 // r maps each style to the page's average and worst frame rate and the
 // visualizer's own draw rate in normal quality, then the same in low
-// power, then the page's two in normal quality with the cover glow held
-// still (na,nw,nd,la,lw,ld,sa,sw, fixed by the format). A mode the test
-// did not reach is null, and so is the draw rate of a style audioMotion
-// does not draw.
+// power: [na, nw, nd, la, lw, ld]. A style with no draw count (every
+// engine but audioMotion's) leaves the draw rates out: [na, nw, la, lw].
+// A mode the test did not reach is null.
 function byStyle(results) {
+    const counted = {};
+    for (const result of results) {
+        if (typeof result.draw_fps === 'number') {
+            counted[result.style] = true;
+        }
+    }
     const out = {};
     for (const result of results) {
-        const row = out[result.style] || [null, null, null, null, null, null, null, null];
-        const at = MODE_AT[result.mode];
+        const draws = Boolean(counted[result.style]);
+        const row = out[result.style] || (draws ? [null, null, null, null, null, null] : [null, null, null, null]);
+        const at = result.mode === 'low' ? (draws ? 3 : 2) : 0;
         // Whole frames per second: the table on screen keeps the tenths, and
         // whole numbers keep the code within version 20.
         row[at] = Math.round(result.avg_fps);
         row[at + 1] = Math.round(result.worst_fps);
-        if (result.mode !== 'still') {
+        if (draws) {
             row[at + 2] = typeof result.draw_fps === 'number' ? Math.round(result.draw_fps) : null;
         }
         out[result.style] = row;
@@ -43,8 +46,7 @@ function byStyle(results) {
     return out;
 }
 
-// results: [{style, mode ('normal', 'low' or 'still'), avg_fps, worst_fps,
-// draw_fps}].
+// results: [{style, mode ('normal' or 'low'), avg_fps, worst_fps, draw_fps}].
 export function labPayload({userAgent, screen, view, dpr, windowS, env, results}) {
     return JSON.stringify({
         v: FORMAT,

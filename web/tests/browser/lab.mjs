@@ -2,7 +2,7 @@
 // none of it; Start feeds the silent test signal to the analysers; Next
 // steps through every visualizer style; the cover glow's layer sits on
 // the cover and follows the bass, and Still glow holds it;
-// a shortened test measures every style, Off first, in all three modes;
+// a shortened test measures every style, Off first, in both modes;
 // the results fit a phone's width; the QR code holds exactly the results JSON;
 // Stop test stops at once; MilkDrop draws and stops drawing when left;
 // each GPU style draws at its scale, a step smaller in low power, and
@@ -377,7 +377,7 @@ async function run() {
         }
         const payload = await evaluate(`document.querySelector('.lab-results').dataset.payload`);
         const data = JSON.parse(payload);
-        check(data.v === 4 ? null : `format ${data.v}`);
+        check(data.v === 5 ? null : `format ${data.v}`);
         check(Array.isArray(data.vw) && data.vw[0] === 960 && data.vw[1] === 560 ? null : `window ${JSON.stringify(data.vw)}`);
         check(data.w === 1 ? null : `window ${data.w} s`);
         check(typeof data.ua === 'string' && data.ua.length ? null : 'no user agent');
@@ -387,17 +387,15 @@ async function run() {
         check(Object.keys(data.r).join() === tested.join() ? null : `results for ${Object.keys(data.r).join()}`);
         for (const id of tested) {
             const row = data.r[id] || [];
-            const pages = [row[0], row[1], row[3], row[4], row[6], row[7]];
-            const draws = [row[2], row[5]];
-            const drawsOk = UNCOUNTED.includes(id)
-                ? draws.every((value) => value === null)
-                // audioMotion draws at most 30 times a second in low power.
-                : draws.every((value) => typeof value === 'number' && value > 0) && row[5] <= 33;
-            check(row.length === 8 && pages.every((value) => typeof value === 'number' && value > 0) && drawsOk
+            const counted = !UNCOUNTED.includes(id);
+            const pages = counted ? [row[0], row[1], row[3], row[4]] : row;
+            // audioMotion draws at most 30 times a second in low power.
+            const drawsOk = !counted || ([row[2], row[5]].every((value) => typeof value === 'number' && value > 0) && row[5] <= 33);
+            check(row.length === (counted ? 6 : 4) && pages.every((value) => typeof value === 'number' && value > 0) && drawsOk
                 ? null : `${id}: ${JSON.stringify(row)}`);
         }
         const rows = await evaluate(`document.querySelectorAll('.lab-table tr').length`);
-        check(rows === tested.length * 3 + 1 ? null : `${rows} table rows`);
+        check(rows === tested.length * 2 + 1 ? null : `${rows} table rows`);
 
         // The code drawn is the code of exactly this payload.
         const drawn = await evaluate(`(() => {
@@ -449,7 +447,7 @@ async function run() {
         check(await until(`document.querySelector('.tunebox').dataset.lab === 'done'`, 1000)
             ? null : `Stop test took over a second (${await lab()})`);
         const stopped = JSON.parse(await evaluate(`document.querySelector('.lab-results').dataset.payload`));
-        check(Object.keys(stopped.r).length === 1 && stopped.r.off && stopped.r.off[3] === null
+        check(Object.keys(stopped.r).length === 1 && stopped.r.off && stopped.r.off.length === 4 && stopped.r.off[2] === null
             ? null : `after Stop test: ${JSON.stringify(stopped.r)} in ${Date.now() - stopAt} ms`);
         check((await counts()).contexts === 1 ? null : `${(await counts()).contexts} AudioContexts at the end`);
         // Every WebGL context made was given back but MilkDrop's, which
