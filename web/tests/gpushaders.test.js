@@ -25,6 +25,17 @@ test('each GPU style has one shader per pass of its kind, on the shared header',
     }
 });
 
+test('the bass moves a shader by an offset or through uDrive, never by scaling the time', () => {
+    // uTime grows for as long as the page is open: a level that scales it
+    // jumps the picture further on every beat the longer it plays.
+    for (const [id, shader] of Object.entries(SHADERS)) {
+        for (const source of shader.sources) {
+            assert.ok(!/uTime \* \([^)]*uBands/.test(source), id);
+        }
+    }
+    assert.ok(/uDrive/.test(SHADERS.synthwave.sources[0]));
+});
+
 // The body after the shared header, which declares every input itself.
 const body = (source) => source.slice(HEADER.length);
 

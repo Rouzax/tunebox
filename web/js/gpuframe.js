@@ -1,14 +1,17 @@
 // How large the GPU engines draw: the canvas's device pixels, capped on
 // the long side so full screen or a large monitor costs no more than the
 // car's split window, divided by a render scale. A device that cannot
-// keep STEP_FPS draws a step smaller for the rest of the page view; it
-// never steps back up, so the size does not swing back and forth.
+// keep STEP_FPS for STEP_WINDOWS windows in a row draws a step smaller for
+// the rest of the page view: one slow window is a passing dip (a MilkDrop
+// blend, a cover upload), not a slow device. It never steps back up, so
+// the size does not swing back and forth.
 
 export const RENDER_CAP = 1280;
 // Render scales are divisors of the capped size: 1, 1/2, 1/3.
 export const MAX_SCALE = 3;
 export const STEP_FPS = 50;
 export const STEP_WINDOW_MS = 3000;
+export const STEP_WINDOWS = 2;
 // A gap between frames this long is a page in the background or a one-off
 // stall (a shader building, a texture upload), not slow drawing.
 export const STEP_GAP_MS = 250;
@@ -33,11 +36,12 @@ export function startScale(base, lowPower, floor) {
 }
 
 // Counts frames in windows of STEP_WINDOW_MS; frame(now) is true at the
-// end of a window drawn below STEP_FPS.
+// end of the STEP_WINDOWS-th window in a row drawn below STEP_FPS.
 export function createPace() {
     let from = null;
     let last = 0;
     let count = 0;
+    let streak = 0;
     return {
         reset() {
             from = null;
@@ -47,6 +51,7 @@ export function createPace() {
                 from = now;
                 last = now;
                 count = 0;
+                streak = 0;
                 return false;
             }
             count += 1;
@@ -57,7 +62,12 @@ export function createPace() {
             const fps = (count * 1000) / (now - from);
             from = now;
             count = 0;
-            return fps < STEP_FPS;
+            streak = fps < STEP_FPS ? streak + 1 : 0;
+            if (streak < STEP_WINDOWS) {
+                return false;
+            }
+            streak = 0;
+            return true;
         },
     };
 }

@@ -106,7 +106,8 @@ void main() {
 
 // Synthwave road. A grid road runs to a low sun: sky and sun from the
 // cover's colours, mountains shaped by the spectrum, the grid faster with
-// the bass. Every part is worked out for every pixel and one is picked at
+// the bass (through uDrive: scaling uTime by the bass would jump the grid
+// further on every beat the longer the page is open). Every part is worked out for every pixel and one is picked at
 // the end: fwidth needs the grid in uniform control flow.
 const SYNTHWAVE = `${HEADER}
 const float HORIZON = -0.1;
@@ -133,7 +134,7 @@ void main() {
 
     // The grid in perspective: distance grows toward the horizon.
     float below = max(HORIZON - p.y, 0.002);
-    vec2 grid = vec2(p.x / below, 1.0 / below + uTime * (1.2 + 3.0 * uBands.x)) * 0.35;
+    vec2 grid = vec2(p.x / below, 1.0 / below + uDrive * 1.2) * 0.35;
     vec2 toLine = 0.5 - abs(fract(grid) - 0.5);
     vec2 lines = 1.0 - smoothstep(vec2(0.0), fwidth(grid) * 1.5 + 0.0001, toLine);
     float line = max(lines.x, lines.y) * smoothstep(0.0, 0.3, below);

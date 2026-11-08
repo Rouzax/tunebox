@@ -195,14 +195,15 @@ test('below 50 fps MilkDrop draws a third the size for the rest of the page view
     engine.start(SHUFFLE, false);
     await settle();
     frames(0, 3100, 40);
-    assert.deepEqual(sizes[0], [400, 225]);
+    assert.deepEqual(sizes[sizes.length - 1], [400, 225]);
+    frames(3125, 6100, 40);
     assert.deepEqual(sizes[sizes.length - 1], [267, 150]);
-    frames(3200, 12000, 60);
+    frames(6200, 15000, 60);
     assert.deepEqual(sizes[sizes.length - 1], [267, 150]);
     engine.stop();
     engine.start(HURRICANE, false);
     await settle();
-    frames(12100, 12300, 60);
+    frames(15100, 15300, 60);
     assert.deepEqual(sizes[sizes.length - 1], [267, 150]);
 });
 

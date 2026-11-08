@@ -152,14 +152,16 @@ test('below 50 fps the scale steps down to a third and never back up', () => {
     const {engine, shown} = world();
     engine.start(TUNNEL, false);
     frames(0, 3100, 40);
+    assert.equal(shown()[0].dataset.gpuScale, '1');
+    frames(3125, 6100, 40);
     assert.equal(shown()[0].dataset.gpuScale, '2');
-    frames(3150, 6300, 40);
+    frames(6150, 12300, 40);
     assert.equal(shown()[0].dataset.gpuScale, '3');
-    frames(6350, 20000, 60);
+    frames(12350, 26000, 60);
     assert.equal(shown()[0].dataset.gpuScale, '3');
     engine.stop();
     engine.start(TUNNEL, false);
-    frames(20100, 20200, 60);
+    frames(26100, 26200, 60);
     assert.equal(shown()[0].dataset.gpuScale, '3');
 });
 
@@ -223,6 +225,16 @@ test('the shaders get the cover palette from the page', () => {
     engine.start(TUNNEL, false);
     frames(0, 20, 60);
     assert.deepEqual(contexts[0].uniforms.uPal, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+});
+
+test('the drive runs at the pace of real time in silence, and a pause does not jump it', () => {
+    const {engine} = world();
+    engine.start(TUNNEL, false);
+    frames(0, 1000, 60);
+    const drive = contexts[0].uniforms.uDrive;
+    assert.ok(Math.abs(drive - 1) < 0.05, String(drive));
+    frames(60000, 60100, 60);
+    assert.ok(contexts[0].uniforms.uDrive - drive < 0.3, String(contexts[0].uniforms.uDrive));
 });
 
 test('reconnect reads the new sources', () => {

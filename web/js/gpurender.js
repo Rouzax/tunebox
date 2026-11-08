@@ -1,9 +1,9 @@
 // Draws one shader program of one or two passes on a WebGL 2 context. The
 // GPU test's probes and the player's GPU styles both draw through it, so
 // what the test measures is what the player runs. Every program gets the
-// same inputs: time, the bass, mids and highs, the spectrum as a texture,
-// two covers to fade between, the cover palette and, in a second pass,
-// what the first pass drew.
+// same inputs: time, a drive that runs faster with the bass, the bass,
+// mids and highs, the spectrum as a texture, two covers to fade between,
+// the cover palette and, in a second pass, what the first pass drew.
 
 export const SPECTRUM_BINS = 128;
 
@@ -23,6 +23,7 @@ export const HEADER = `#version 300 es
 precision highp float;
 uniform vec2 uRes;
 uniform float uTime;
+uniform float uDrive;
 uniform vec3 uBands;
 uniform sampler2D uSpec;
 uniform sampler2D uCover;
@@ -40,6 +41,7 @@ vec3 cover(vec2 uv) { return mix(texture(uCoverOld, uv).rgb, texture(uCover, uv)
 const DEFAULT_LOOK = {
     palette: new Float32Array([98 / 255, 168 / 255, 234 / 255, 155 / 255, 123 / 255, 240 / 255, 60 / 255, 198 / 255, 192 / 255]),
     fade: 1,
+    drive: 0,
 };
 
 function compile(gl, type, source) {
@@ -131,7 +133,7 @@ export function createRenderer(gl, kind, sources) {
 
     const uniforms = programs.map((program) => {
         const at = (name) => gl.getUniformLocation(program, name);
-        return {res: at('uRes'), time: at('uTime'), bands: at('uBands'), spec: at('uSpec'), cover: at('uCover'),
+        return {res: at('uRes'), time: at('uTime'), drive: at('uDrive'), bands: at('uBands'), spec: at('uSpec'), cover: at('uCover'),
             coverOld: at('uCoverOld'), fade: at('uFade'), input: at('uInput'), pal: at('uPal')};
     });
 
@@ -146,6 +148,7 @@ export function createRenderer(gl, kind, sources) {
         gl.useProgram(programs[index]);
         gl.uniform2f(u.res, width, height);
         gl.uniform1f(u.time, time);
+        gl.uniform1f(u.drive, look.drive);
         gl.uniform3f(u.bands, bands.bass, bands.mid, bands.high);
         gl.uniform1f(u.fade, look.fade);
         gl.uniform3fv(u.pal, look.palette);
@@ -177,7 +180,7 @@ export function createRenderer(gl, kind, sources) {
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
         },
         // time in seconds; bands {bass, mid, high} in 0..1; spectrum a
-        // Uint8Array of SPECTRUM_BINS; look {palette, fade}.
+        // Uint8Array of SPECTRUM_BINS; look {palette, fade, drive}.
         draw(time, bands, spectrum, look = DEFAULT_LOOK) {
             gl.bindVertexArray(vao);
             bind(UNIT.spectrum, spectrumTexture);

@@ -16,6 +16,11 @@ const FFT_SIZE = 512;
 const PALETTE_EVERY = 6;
 const GL_OPTIONS = {alpha: false, antialias: false, depth: false, stencil: false};
 const PALETTE_PROPERTIES = ['--art-1', '--art-2', '--art-3'];
+// The drive (uDrive) runs at real time in silence and up to this much
+// faster at full bass. A frame after a pause counts at most MAX_STEP_S, so
+// the picture does not leap on return.
+const DRIVE_BASS = 2.5;
+const MAX_STEP_S = 0.1;
 
 // onLevel(glow) drives the cover glow; onFail('gpu') when a style cannot
 // start or its context is lost; held() true keeps the size (lab mode).
@@ -31,6 +36,8 @@ export function createGpuStyles({motion, root, onLevel, onFail, held = () => fal
     const levels = createLevels();
     const palette = new Float32Array(9);
     const started = performance.now();
+    const look = {palette, fade: 1, drive: 0};
+    let lastFrame = null;
     let coverImage = null;
     let coverSince = 0;
     let canvas = null;
@@ -207,7 +214,11 @@ export function createGpuStyles({motion, root, onLevel, onFail, held = () => fal
         if (frames % PALETTE_EVERY === 0) {
             readPalette();
         }
-        renderer.draw((now - started) / 1000, level, spectrum, {palette, fade: coverFade(now, coverSince)});
+        const step = lastFrame === null ? 0 : Math.min(MAX_STEP_S, Math.max(0, now - lastFrame) / 1000);
+        lastFrame = now;
+        look.drive += step * (1 + DRIVE_BASS * level.bass);
+        look.fade = coverFade(now, coverSince);
+        renderer.draw((now - started) / 1000, level, spectrum, look);
         frames += 1;
         canvas.dataset.gpuFrames = String(frames);
         // Relative levels peak at 1; the glow is tuned for audioMotion's lower energy values.

@@ -34,11 +34,20 @@ function run(pace, from, to, fps) {
     return slow;
 }
 
-test('createPace says slow once per three-second window drawn below 50 fps', () => {
+test('createPace says slow after two three-second windows in a row below 50 fps', () => {
     assert.equal(STEP_FPS, 50);
-    const slow = run(createPace(), 0, 6100, 40);
+    const slow = run(createPace(), 0, 12100, 40);
     assert.equal(slow.length, 2);
-    assert.ok(slow[0] >= 2990 && slow[0] < 3100, String(slow[0]));
+    assert.ok(slow[0] >= 5990 && slow[0] < 6100, String(slow[0]));
+});
+
+test('one slow window between fast ones is a passing dip, not a slow device', () => {
+    const pace = createPace();
+    const slow = [
+        run(pace, 0, 6000, 60), run(pace, 6010, 9000, 40), run(pace, 9010, 15000, 60),
+        run(pace, 15010, 18000, 40), run(pace, 18010, 24000, 60),
+    ];
+    assert.deepEqual([].concat(...slow), []);
 });
 
 test('createPace never says slow at 60 fps, nor just above 50', () => {
