@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {SHADERS} from '../js/gpushaders.js';
 import {PRESETS, SHUFFLE_ID} from '../js/milkdropcore.js';
 import {GROUPS, STYLES, availableStyles, chooseStyle, groupOf, groupsFor} from '../js/vizcore.js';
 
@@ -10,7 +11,7 @@ test('every style but Off sits in exactly one of the four groups', () => {
     const byGroup = (id) => STYLES.filter((s) => s.group === id).map((s) => s.id);
     assert.deepEqual(byGroup('bars'), ['bars', 'led', 'butterfly', 'ring', 'neon', 'ambient']);
     assert.deepEqual(byGroup('waves'), ['wave', 'scope']);
-    assert.deepEqual(byGroup('ambient'), ['lava', 'aurora', 'swirl']);
+    assert.deepEqual(byGroup('ambient'), ['lava', 'aurora', 'swirl', 'tunnel', 'kaleido', 'synthwave', 'ink']);
     assert.deepEqual(byGroup('milkdrop'), [SHUFFLE_ID].concat(PRESETS.map((p) => p.id)));
     assert.deepEqual(STYLES.filter((s) => s.group === null).map((s) => s.id), ['off']);
     assert.equal(STYLES.find((s) => s.id === 'milkdrop'), undefined);
@@ -56,4 +57,22 @@ test('groupOf finds a style\'s group; Off and unknown ids have none', () => {
     assert.equal(groupOf(SHUFFLE_ID), 'milkdrop');
     assert.equal(groupOf('off'), null);
     assert.equal(groupOf('nope'), null);
+});
+
+test('the GPU styles name their shader and start scale', () => {
+    const gpu = STYLES.filter((s) => s.engine === 'gpu');
+    assert.deepEqual(gpu.map((s) => [s.id, s.label, s.shader, s.scale]), [
+        ['tunnel', 'Cover tunnel', 'tunnel', 1],
+        ['kaleido', 'Cover kaleidoscope', 'kaleido', 1],
+        ['synthwave', 'Synthwave road', 'synthwave', 1],
+        ['ink', 'Liquid ink', 'ink', 2],
+    ]);
+    assert.ok(gpu.every((s) => SHADERS[s.shader]));
+});
+
+test('without WebGL 2 the GPU styles are not offered, and a stored one plays Wave', () => {
+    assert.ok(availableStyles(false).every((s) => s.engine !== 'gpu'));
+    assert.deepEqual(groupsFor(false).map((g) => g.id), ['bars', 'waves', 'ambient']);
+    assert.equal(chooseStyle('tunnel', false), 'wave');
+    assert.equal(chooseStyle('ink', true), 'ink');
 });

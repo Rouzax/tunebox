@@ -1,6 +1,6 @@
 // The visualizer's styles as data: id, label, the group whose tile holds
-// it, the engine that draws it (audioMotion, effects.js, MilkDrop or none)
-// and audioMotion's options; plus which of them a device can show and
+// it, the engine that draws it (audioMotion, effects.js, the GPU styles,
+// MilkDrop or none) and audioMotion's options; plus which of them a device can show and
 // which one a stored choice means.
 import {PRESETS, SHUFFLE_ID} from './milkdropcore.js';
 
@@ -73,6 +73,13 @@ export const STYLES = [
     {id: 'lava', group: 'ambient', engine: 'effects', label: 'Lava lamp', effect: 'lava', options: {}},
     {id: 'aurora', group: 'ambient', engine: 'effects', label: 'Aurora', effect: 'aurora', options: {}},
     {id: 'swirl', group: 'ambient', engine: 'effects', label: 'Swirl', effect: 'swirl', options: {}},
+    // GPU styles: shader names a program in gpushaders.js, scale the render
+    // scale it starts at. Liquid ink is the heavy noise the car drew at 50
+    // fps full size and 59 at half.
+    {id: 'tunnel', group: 'ambient', engine: 'gpu', label: 'Cover tunnel', shader: 'tunnel', scale: 1, options: {}},
+    {id: 'kaleido', group: 'ambient', engine: 'gpu', label: 'Cover kaleidoscope', shader: 'kaleido', scale: 1, options: {}},
+    {id: 'synthwave', group: 'ambient', engine: 'gpu', label: 'Synthwave road', shader: 'synthwave', scale: 1, options: {}},
+    {id: 'ink', group: 'ambient', engine: 'gpu', label: 'Liquid ink', shader: 'ink', scale: 2, options: {}},
     {id: SHUFFLE_ID, group: 'milkdrop', engine: 'milkdrop', label: 'Shuffle', shuffle: true, options: {}},
 ].concat(PRESETS.map((preset) => ({
     id: preset.id, group: 'milkdrop', engine: 'milkdrop', label: preset.label, preset: preset.file, options: {},
@@ -87,9 +94,10 @@ export const GROUPS = [
     {id: 'milkdrop', label: 'MilkDrop'},
 ].map((group) => Object.assign({image: `icons/viz/${group.id}.webp`}, group));
 
-// MilkDrop needs WebGL 2; without it its tile and styles are left out.
+// MilkDrop and the GPU styles need WebGL 2; without it they are left out
+// (and with them the MilkDrop tile).
 export function availableStyles(gl2) {
-    return gl2 ? STYLES : STYLES.filter((style) => style.engine !== 'milkdrop');
+    return gl2 ? STYLES : STYLES.filter((style) => style.engine !== 'milkdrop' && style.engine !== 'gpu');
 }
 
 export function groupsFor(gl2) {
@@ -102,8 +110,8 @@ export function groupOf(id) {
 }
 
 // The 2D effect once called Milkdrop is Swirl. A MilkDrop preset no
-// longer shipped falls back to Shuffle; anything else unknown, or MilkDrop
-// without WebGL 2, to Wave.
+// longer shipped falls back to Shuffle; anything else unknown, or a WebGL 2
+// style without WebGL 2, to Wave.
 export function chooseStyle(stored, gl2) {
     const id = stored === 'milkdrop' ? 'swirl' : stored;
     if (availableStyles(gl2).some((style) => style.id === id)) {

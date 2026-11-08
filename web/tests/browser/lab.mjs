@@ -4,10 +4,13 @@
 // the cover and follows the bass, and Still glow holds it;
 // a shortened test measures every style, Off first, in all three modes;
 // the results fit a phone's width; the QR code holds exactly the results JSON;
-// Stop test stops at once; nothing is stored and no stream plays; exactly
-// one AudioContext is made, and only after the Start tap; every WebGL
-// probe context is given back; Start without Web Audio says so;
-// /check.html lists the environment rows. Fails on any page or CSP error.
+// Stop test stops at once; MilkDrop draws and stops drawing when left;
+// each GPU style draws at its scale, a step smaller in low power, and
+// gives its WebGL context back when left; nothing is stored and no stream
+// plays; exactly one AudioContext is made, and only after the Start tap;
+// every WebGL context made is given back but MilkDrop's; Start without
+// Web Audio says so; /check.html lists the environment rows. Fails on any
+// page or CSP error.
 //
 // Needs Google Chrome or Chromium (or CHROME=<path>) and the repo's .venv.
 // It starts its own tunebox on a free port with a temporary data folder and
@@ -53,11 +56,11 @@ if (typeof WebSocket === 'undefined') {
     process.exit(2);
 }
 
-// Runs before any page script: counts AudioContexts, WebGL contexts given
-// back and WebAssembly compiles, records policy violations, and takes Web
+// Runs before any page script: counts AudioContexts, WebGL contexts made
+// and given back and WebAssembly compiles, records policy violations, and takes Web
 // Audio away for ?nowebaudio=1.
 const INSTRUMENT = `(() => {
-    const counts = {contexts: 0, losses: 0, wasm: 0, violations: 0};
+    const counts = {contexts: 0, gl: 0, losses: 0, wasm: 0, violations: 0};
     window.labCheckCounts = counts;
     for (const name of ['compile', 'instantiate']) {
         const real = WebAssembly[name];
@@ -81,6 +84,23 @@ const INSTRUMENT = `(() => {
                 super(...args);
                 counts.contexts += 1;
             }
+        };
+    }
+    // Every WebGL context made, counted once however often it is asked for.
+    // Butterchurn draws on an OffscreenCanvas where there is one.
+    const glMade = new WeakSet();
+    for (const type of [window.HTMLCanvasElement, window.OffscreenCanvas]) {
+        if (!type) {
+            continue;
+        }
+        const getContext = type.prototype.getContext;
+        type.prototype.getContext = function (kind, ...rest) {
+            const context = getContext.call(this, kind, ...rest);
+            if (context && /webgl/.test(kind) && !glMade.has(context)) {
+                glMade.add(context);
+                counts.gl += 1;
+            }
+            return context;
         };
     }
     for (const type of [window.WebGLRenderingContext, window.WebGL2RenderingContext]) {
@@ -432,8 +452,11 @@ async function run() {
         check(Object.keys(stopped.r).length === 1 && stopped.r.off && stopped.r.off[3] === null
             ? null : `after Stop test: ${JSON.stringify(stopped.r)} in ${Date.now() - stopAt} ms`);
         check((await counts()).contexts === 1 ? null : `${(await counts()).contexts} AudioContexts at the end`);
-        // envinfo's contexts, and the player's own WebGL 2 check.
-        check((await counts()).losses === data.e.g1 + data.e.g2 + 1 ? null : `${(await counts()).losses} WebGL contexts given back`);
+        // Every WebGL context made was given back but MilkDrop's, which
+        // Butterchurn keeps once loaded: envinfo's, the player's WebGL 2
+        // check and the GPU styles'.
+        const afterTest = await counts();
+        check(afterTest.gl - afterTest.losses === 1 ? null : `${afterTest.gl} WebGL contexts made, ${afterTest.losses} given back`);
         console.log(`results payload: ${payload.length} bytes, QR code ${matrix.length} modules`);
         console.log(payload);
 
@@ -468,6 +491,33 @@ async function run() {
         const after = await counts();
         check(after.wasm > 0 ? null : 'MilkDrop compiled no WebAssembly');
         check(after.violations === 0 ? null : `${after.violations} policy violation(s)`);
+
+        // GPU styles: each draws on one canvas at its start scale, low power
+        // draws a step smaller, and leaving them gives the context back.
+        const gpu = () => evaluate(`(() => { const c = document.querySelector('.car-gpu');
+            return c ? {frames: Number(c.dataset.gpuFrames || 0), scale: c.dataset.gpuScale, width: c.width} : null; })()`);
+        for (const [id, scale] of [['tunnel', '1'], ['kaleido', '1'], ['synthwave', '1'], ['ink', '2']]) {
+            check(await stepTo(id) ? null : `Next never reached ${id}`);
+            await sleep(1500);
+            const first = await gpu();
+            await sleep(1000);
+            const later = await gpu();
+            check(first && later && later.frames > first.frames && later.scale === scale && later.width > 0
+                ? null : `${id} does not draw at scale ${scale} (${JSON.stringify(later)})`);
+            await shoot(`lab-${id}`);
+        }
+        check(await evaluate(`document.querySelectorAll('.car-gpu').length === 1`) ? null : 'not exactly one GPU style canvas');
+        check(!(await evaluate(`/could not start/.test(document.body.textContent)`)) ? null : 'a GPU style could not start');
+        await tap('.lab-power');
+        await sleep(800);
+        const lowInk = await gpu();
+        check(lowInk && lowInk.scale === '3' ? null : `Liquid ink in low power at ${JSON.stringify(lowInk)}`);
+        await tap('.lab-power');
+        check(await stepTo('wave') ? null : 'Next never came round to Wave from the GPU styles');
+        await sleep(500);
+        check(await evaluate(`document.querySelector('.car-gpu') === null`) ? null : 'the GPU style canvas stays after leaving');
+        const afterGpu = await counts();
+        check(afterGpu.gl - afterGpu.losses === 1 ? null : `after the GPU styles: ${afterGpu.gl} WebGL contexts made, ${afterGpu.losses} given back`);
 
         check(await evaluate(`localStorage.length === ${before} && localStorage.getItem('tunebox.visualizer') === 'off'`)
             ? null : 'lab mode stored something');
