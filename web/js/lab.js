@@ -10,8 +10,8 @@ const SEED = 1;
 const WARMUP_SHARE = 0.1;
 const LIVE_MS = 500;
 // The test's modes per style, in order.
-const MODES = ['normal', 'low', 'still'];
-const MODE_LABELS = {normal: 'normal', low: 'low power', still: 'still glow'};
+const MODES = ['normal', 'low'];
+const MODE_LABELS = {normal: 'normal', low: 'low power'};
 // RMS of the meter's samples above this means the signal reaches Web Audio.
 const SIGNAL_RMS = 0.01;
 
@@ -274,7 +274,7 @@ export function bindLab(app, viz) {
             table.removeChild(table.firstChild);
         }
         const caption = element('caption', 'lab-caption',
-            'Frames per second. Page: what the browser managed; Off is the page with no visualizer. Draws: how often the visualizer itself drew (low power draws the spectrum styles at most 30 times a second); a dash means the style keeps no count. Still glow: normal quality with the cover glow not following the bass.');
+            'Frames per second. Page: what the browser managed; Off is the page with no visualizer. Draws: how often the visualizer itself drew (low power draws the spectrum styles at most 30 times a second); a dash means the style keeps no count.');
         table.appendChild(caption);
         const head = element('tr', '');
         for (const title of ['Style', 'Mode', 'Page average', 'Page worst', 'Draws']) {
@@ -321,8 +321,9 @@ export function bindLab(app, viz) {
         // against.
         const order = styles.map((style, i) => ({i, style}));
         const plan = [];
-        // MilkDrop as Shuffle only: every preset at three modes would triple
-        // the run and overflow the QR code, and each passed the GPU test.
+        // MilkDrop as Shuffle only: every preset in both modes would more
+        // than double the run and overflow the QR code, and each passed the
+        // GPU test.
         const timed = order.filter((s) => s.style.engine !== 'milkdrop' || s.style.id === 'md-shuffle');
         timed.filter((s) => s.style.id === 'off').concat(timed.filter((s) => s.style.id !== 'off')).forEach(({i, style}) => {
             for (const mode of MODES) {
@@ -336,10 +337,10 @@ export function bindLab(app, viz) {
         results.hidden = true;
         root.dataset.lab = 'testing';
         sync();
+        holdGlow(false);
         for (let n = 0; n < plan.length && !stopRequested; n++) {
             const {i, style, mode} = plan[n];
             viz.setLowPower(mode === 'low');
-            holdGlow(mode === 'still');
             viz.select(i);
             sync();
             note.textContent = `test ${n + 1}/${plan.length}${mode === 'normal' ? '' : `, ${MODE_LABELS[mode]}`}`;

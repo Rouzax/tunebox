@@ -7,7 +7,8 @@
 import qrcode from '../vendor/qrcode-generator-2.0.4/qrcode.mjs';
 import {PASS, PRESETS, SWITCH_WATCH_S, bands, capMs, describeSeconds, gpuPlan, planSeconds, presetVerdict, shrink, worstGapMs} from './gpucore.js';
 import {bindFullscreen, isFullscreen} from './fullscreen.js';
-import {SPECTRUM_BINS, createProbe} from './gpuprobe.js';
+import {createProbe} from './gpuprobe.js';
+import {SPECTRUM_BINS} from './gpurender.js';
 import {QR_LEVEL, gpuPayload} from './gpureport.js';
 import {labSignal} from './labsignal.js';
 import {frameStats, testWindowS} from './labstats.js';

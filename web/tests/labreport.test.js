@@ -4,10 +4,10 @@ import qrcode from '../vendor/qrcode-generator-2.0.4/qrcode.mjs';
 import {FORMAT, QR_LEVEL, labPayload} from '../js/labreport.js';
 import {qrMatrix} from '../js/qr.js';
 
-const STYLES = ['off', 'wave', 'bars', 'led', 'butterfly', 'ring', 'neon', 'ambient', 'scope', 'lava', 'aurora', 'swirl', 'md-shuffle'];
-// Off and the styles effects.js draws itself: the lab knows no draw rate
+const STYLES = ['off', 'wave', 'bars', 'led', 'butterfly', 'ring', 'neon', 'ambient', 'scope', 'lava', 'aurora', 'swirl', 'tunnel', 'kaleido', 'synthwave', 'ink', 'md-shuffle'];
+// Off and the styles audioMotion does not draw: the lab knows no draw rate
 // for them.
-const EFFECTS = ['off', 'scope', 'lava', 'aurora', 'swirl', 'md-shuffle'];
+const EFFECTS = ['off', 'scope', 'lava', 'aurora', 'swirl', 'tunnel', 'kaleido', 'synthwave', 'ink', 'md-shuffle'];
 
 function realistic(overrides) {
     const results = [];
@@ -15,7 +15,6 @@ function realistic(overrides) {
         const effect = EFFECTS.indexOf(id) >= 0;
         results.push({style: id, mode: 'normal', avg_fps: 59.94, worst_fps: 57.12, draw_fps: effect ? null : 59.7});
         results.push({style: id, mode: 'low', avg_fps: 59.5, worst_fps: 58.04, draw_fps: effect ? null : 29.96});
-        results.push({style: id, mode: 'still', avg_fps: 60.04, worst_fps: 59.01, draw_fps: effect ? null : 60.2});
     }
     return Object.assign({
         userAgent: 'Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.109 Safari/537.36 XPENG-G9/5.4.1.1234 CarBrowser/1.0',
@@ -44,14 +43,18 @@ test('labPayload is compact JSON with the format version and every result', () =
     assert.equal(data.e.tx, 16384);
     assert.deepEqual(Object.keys(data.r), STYLES);
     assert.equal(data.rf, undefined);
-    assert.equal(FORMAT, 4);
-    assert.deepEqual(data.r.wave, [60, 57, 60, 60, 58, 30, 60, 59]);
-    assert.deepEqual(data.r.lava, [60, 57, null, 60, 58, null, 60, 59]);
+    assert.equal(FORMAT, 5);
+    assert.deepEqual(data.r.wave, [60, 57, 60, 60, 58, 30]);
+    assert.deepEqual(data.r.lava, [60, 57, 60, 58]);
+    assert.deepEqual(data.r.ink, [60, 57, 60, 58]);
 });
 
 test('labPayload leaves a mode the test did not reach as null', () => {
-    const data = JSON.parse(labPayload(realistic({results: [{style: 'wave', mode: 'low', avg_fps: 12, worst_fps: 9}]})));
-    assert.deepEqual(data.r, {wave: [null, null, null, 12, 9, null, null, null]});
+    const data = JSON.parse(labPayload(realistic({results: [
+        {style: 'wave', mode: 'low', avg_fps: 12, worst_fps: 9, draw_fps: 8},
+        {style: 'off', mode: 'normal', avg_fps: 59, worst_fps: 58, draw_fps: null},
+    ]})));
+    assert.deepEqual(data.r, {wave: [null, null, null, 12, 9, 8], off: [59, 58, null, null]});
 });
 
 test('labPayload writes absent environment values as null', () => {

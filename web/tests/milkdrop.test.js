@@ -6,6 +6,7 @@ import {createMilkdrop} from '../js/milkdrop.js';
 // A page, a clock and Butterchurn made of plain objects: frames run when
 // the test says, timers when the test moves the clock.
 let timers;
+let pending;
 let now;
 let canvases;
 
@@ -34,8 +35,14 @@ beforeEach(() => {
             }
         },
     };
-    globalThis.requestAnimationFrame = () => 1;
-    globalThis.cancelAnimationFrame = () => {};
+    pending = null;
+    globalThis.requestAnimationFrame = (fn) => {
+        pending = fn;
+        return 1;
+    };
+    globalThis.cancelAnimationFrame = () => {
+        pending = null;
+    };
 });
 
 afterEach(() => {
@@ -59,14 +66,26 @@ async function advance(ms) {
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+// Runs the engine's frames from `from` to `to` ms at fps.
+function frames(from, to, fps) {
+    for (let t = from; t <= to && pending; t += 1000 / fps) {
+        const fn = pending;
+        pending = null;
+        fn(t);
+    }
+}
+
 function world(options = {}) {
     const loads = [];
+    const sizes = [];
     const failures = [];
     const node = {connect: (to) => to, disconnect() {}};
     const visualizer = {
         connectAudio() {},
         disconnectAudio() {},
-        setRendererSize() {},
+        setRendererSize(width, height) {
+            sizes.push([width, height]);
+        },
         render() {},
         loadPreset(preset, blend) {
             if (options.broken && options.broken.includes(preset.file)) {
@@ -92,6 +111,7 @@ function world(options = {}) {
     }) : Promise.resolve();
     const engine = createMilkdrop({
         motion, root, onLevel() {}, onFail: (why) => failures.push(why),
+        held: () => Boolean(options.held),
         loadButterchurn: () => gate.then(() => {
             if (options.noButterchurn) {
                 throw new Error('no WebGL');
@@ -101,7 +121,7 @@ function world(options = {}) {
         fetchPreset: (file) => (options.offline && options.offline(file)
             ? Promise.reject(new Error('offline')) : Promise.resolve({file})),
     });
-    return {engine, loads, failures, release: () => release()};
+    return {engine, loads, failures, sizes, release: () => release()};
 }
 
 const SHUFFLE = {id: 'md-shuffle', shuffle: true};
@@ -168,4 +188,29 @@ test('a preset that will not compile leaves Shuffle for good', async () => {
     }
     assert.ok(loads.length > 17);
     assert.ok(loads.every((load) => load.file !== 'geiss-hurricane.json'));
+});
+
+test('below 50 fps MilkDrop draws a third the size for the rest of the page view', async () => {
+    const {engine, sizes} = world();
+    engine.start(SHUFFLE, false);
+    await settle();
+    frames(0, 3100, 40);
+    assert.deepEqual(sizes[sizes.length - 1], [400, 225]);
+    frames(3125, 6100, 40);
+    assert.deepEqual(sizes[sizes.length - 1], [267, 150]);
+    frames(6200, 15000, 60);
+    assert.deepEqual(sizes[sizes.length - 1], [267, 150]);
+    engine.stop();
+    engine.start(HURRICANE, false);
+    await settle();
+    frames(15100, 15300, 60);
+    assert.deepEqual(sizes[sizes.length - 1], [267, 150]);
+});
+
+test('lab mode holds MilkDrop at its size', async () => {
+    const {engine, sizes} = world({held: true});
+    engine.start(SHUFFLE, false);
+    await settle();
+    frames(0, 10000, 30);
+    assert.ok(sizes.length > 0 && sizes.every(([width]) => width === 400), JSON.stringify(sizes));
 });

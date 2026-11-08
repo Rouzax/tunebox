@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
-import {BLEND_S, PRESETS, PRESET_DIR, RENDER_CAP, SHUFFLE_ID, SHUFFLE_S, createCycle, followBass, renderSize} from '../js/milkdropcore.js';
+import {BLEND_S, PRESETS, PRESET_DIR, SHUFFLE_ID, SHUFFLE_S, createCycle, followBass} from '../js/milkdropcore.js';
 
 test('the 17 presets shown, each vendored and WebAssembly-only, with short names', () => {
     assert.equal(PRESETS.length, 17);
@@ -17,15 +17,6 @@ test('the 17 presets shown, each vendored and WebAssembly-only, with short names
     }
     assert.equal(SHUFFLE_S, 45);
     assert.equal(BLEND_S, 2.7);
-});
-
-test('renderSize caps the long side at 1280 device pixels, then scales', () => {
-    assert.deepEqual(renderSize(876, 579, 1.75, 2), {width: 640, height: 423});
-    assert.deepEqual(renderSize(489, 518, 1.75, 2), {width: 428, height: 453});
-    assert.deepEqual(renderSize(1372, 686, 1.75, 2), {width: 640, height: 320});
-    assert.deepEqual(renderSize(1372, 686, 1.75, 3), {width: 427, height: 213});
-    assert.equal(RENDER_CAP, 1280);
-    assert.deepEqual(renderSize(0, 0, 1, 2), {width: 1, height: 1});
 });
 
 function seeded(seed) {

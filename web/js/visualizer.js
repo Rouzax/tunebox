@@ -1,5 +1,6 @@
 import AudioMotionAnalyzer from '../vendor/audiomotion-analyzer-4.5.4/audioMotion-analyzer.js';
 import {createEffects} from './effects.js';
+import {createGpuStyles} from './gpustyles.js';
 import {createMilkdrop, webgl2Available} from './milkdrop.js';
 import {keepAudioRunning} from './reconnect.js';
 import {accentColor} from './palette.js';
@@ -11,7 +12,7 @@ import {
 const LOW_POWER_CHECK_MS = 3000;
 
 // The spectrum styles come from audioMotion, the effects from effects.js,
-// MilkDrop from milkdrop.js.
+// the GPU styles from gpustyles.js, MilkDrop from milkdrop.js.
 // Web Audio starts only after the listener's first tap or key press: an
 // AudioContext made earlier stays suspended, and a stream routed through a
 // suspended context plays silence. Until then, and with Off, the stream
@@ -24,7 +25,8 @@ export function bindVisualizer(app) {
     const offButton = root.querySelector('.viz-off');
     const analyzer = root.querySelector('#analyzer');
     const artBox = root.querySelector('.artwork-img');
-    // MilkDrop needs WebGL 2; without it its styles are not offered.
+    const artwork = root.querySelector('img.artwork');
+    // MilkDrop and the GPU styles need WebGL 2; without it they are not offered.
     const gl2 = webgl2Available();
     const STYLES = availableStyles(gl2);
     const chosen = chooseStyle(storage.get('visualizer'), gl2);
@@ -32,6 +34,7 @@ export function bindVisualizer(app) {
     let motion = null;
     let effects = null;
     let milkdrop = null;
+    let gpu = null;
     // A style shown for this page view in place of the chosen one, which
     // could not start; the stored choice stays, so a later visit tries it.
     let standIn = null;
@@ -69,7 +72,9 @@ export function bindVisualizer(app) {
         }});
         resumeAudio = keepAudioRunning(motion.audioCtx, () => player.state() !== 'stopped');
         effects = createEffects(motion, root, app.setBass);
-        milkdrop = createMilkdrop({motion, root, onLevel: app.setBass, onFail: milkdropFailed});
+        milkdrop = createMilkdrop({motion, root, onLevel: app.setBass, onFail: milkdropFailed, held: () => powerHeld});
+        gpu = createGpuStyles({motion, root, onLevel: app.setBass, onFail: gpuFailed, held: () => powerHeld});
+        gpu.cover(artwork);
         checkPower();
         return motion;
     }
@@ -129,18 +134,38 @@ export function bindVisualizer(app) {
         apply();
     }
 
+    // Lava lamp for this page view; the stored choice stays, as for MilkDrop.
+    function gpuFailed() {
+        toast.show('That style could not start here.');
+        standIn = styleIndex('lava');
+        apply();
+    }
+
+    // Only one engine draws at a time; the GPU context goes before another
+    // engine starts.
+    function stopOthers(keep) {
+        if (keep !== 'effects') {
+            effects.stop();
+        }
+        if (keep !== 'milkdrop') {
+            milkdrop.stop();
+        }
+        if (keep !== 'gpu') {
+            gpu.stop();
+        }
+    }
+
     function apply() {
         const style = STYLES[standIn === null ? index : standIn];
         root.dataset.viz = style.id;
-        // Effects and MilkDrop draw on their own canvas; the spectrum
+        // The own-canvas engines draw on their own canvas; the spectrum
         // canvas would show its last frame.
-        root.toggleAttribute('data-effect', style.engine === 'effects' || style.engine === 'milkdrop');
+        root.toggleAttribute('data-effect', style.engine !== 'motion' && style.engine !== 'off');
         markActive();
         if (style.engine === 'off') {
             if (motion) {
                 motion.toggleAnalyzer(false);
-                effects.stop();
-                milkdrop.stop();
+                stopOthers(null);
             }
             clearRing();
             app.setBass(0, true);
@@ -150,22 +175,20 @@ export function bindVisualizer(app) {
             // Applied again once Web Audio can start.
             return;
         }
-        if (style.engine === 'effects') {
+        if (style.engine !== 'motion') {
             motion.toggleAnalyzer(false);
-            milkdrop.stop();
+            stopOthers(style.engine);
             clearRing();
-            effects.start(style.effect);
+            if (style.engine === 'effects') {
+                effects.start(style.effect);
+            } else if (style.engine === 'milkdrop') {
+                milkdrop.start(style, lowPower);
+            } else {
+                gpu.start(style, lowPower);
+            }
             return;
         }
-        if (style.engine === 'milkdrop') {
-            motion.toggleAnalyzer(false);
-            effects.stop();
-            clearRing();
-            milkdrop.start(style, lowPower);
-            return;
-        }
-        effects.stop();
-        milkdrop.stop();
+        stopOthers(null);
         let gradient = ACCENT_GRADIENT;
         if (style.gradient) {
             gradient = style.gradient;
@@ -369,11 +392,13 @@ export function bindVisualizer(app) {
             motion.connectInput(element);
             effects.reconnect();
             milkdrop.reconnect();
+            gpu.reconnect();
             apply();
         } else {
             motion.toggleAnalyzer(false);
             effects.stop();
             milkdrop.stop();
+            gpu.stop();
             toast.show('No visualizer for this stream.');
         }
     });
@@ -381,6 +406,9 @@ export function bindVisualizer(app) {
         artStops = palette ? palette.map(([h, s]) => `hsl(${h}, ${s}%, 60%)`) : null;
         if (motion && artStops) {
             motion.registerGradient(ART_GRADIENT, {bgColor: BACKGROUND, colorStops: artStops});
+        }
+        if (gpu) {
+            gpu.cover(artwork);
         }
         apply();
     });

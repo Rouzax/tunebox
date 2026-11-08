@@ -1,12 +1,15 @@
 // The player's MilkDrop: Butterchurn, loaded on the first MilkDrop pick
-// only, drawing a preset at half size (a third in low power) on its own
-// canvas, fed from the sources audioMotion reads. Presets run as
+// only, drawing a preset at half size (a third in low power, or once the
+// device cannot keep 50 fps) on its own canvas, fed from the sources audioMotion reads. Presets run as
 // WebAssembly only: the page's policy refuses their JavaScript form.
 import {bands} from './gpucore.js';
-import {BLEND_S, PRESETS, PRESET_DIR, SHUFFLE_S, createCycle, followBass, renderSize} from './milkdropcore.js';
+import {MAX_SCALE, createPace, renderSize, startScale} from './gpuframe.js';
+import {BLEND_S, PRESETS, PRESET_DIR, SHUFFLE_S, createCycle, followBass} from './milkdropcore.js';
 
 const BUTTERCHURN = '../vendor/butterchurn-3.0.0-beta.5/butterchurn.min.js';
 const FFT_SIZE = 512;
+// Half size: every shipped preset passed the car's GPU test there.
+const BASE_SCALE = 2;
 
 // Asked once per page view: a context made and given back at once.
 export function webgl2Available() {
@@ -31,8 +34,9 @@ const fetchJson = (file) => window.fetch(PRESET_DIR + file).then((response) => r
 // onLevel(glow) drives the cover glow; onFail('butterchurn') whenever a
 // MilkDrop style is asked for and the engine cannot start, onFail('preset')
 // when a preset picked on its own cannot show. loadButterchurn and
-// fetchPreset are the network, replaceable in tests.
-export function createMilkdrop({motion, root, onLevel, onFail, loadButterchurn = importButterchurn, fetchPreset = fetchJson}) {
+// fetchPreset are the network, replaceable in tests. held() true keeps the
+// size (lab mode measures the start scale).
+export function createMilkdrop({motion, root, onLevel, onFail, held = () => false, loadButterchurn = importButterchurn, fetchPreset = fetchJson}) {
     let canvas = null;
     let visualizer = null;
     let starting = null;
@@ -45,6 +49,8 @@ export function createMilkdrop({motion, root, onLevel, onFail, loadButterchurn =
     let frames = 0;
     let timer = 0;
     let scale = 2;
+    let floor = 1;
+    let pace = createPace();
     let size = {cssWidth: 0, cssHeight: 0};
     let current = null;
     // The style and scale asked for last, while MilkDrop is on; asking for
@@ -136,8 +142,13 @@ export function createMilkdrop({motion, root, onLevel, onFail, loadButterchurn =
         visualizer.setRendererSize(width, height);
     }
 
-    function loop() {
+    function loop(now) {
         frame = requestAnimationFrame(loop);
+        if (pace.frame(now) && !held() && scale < MAX_SCALE) {
+            scale += 1;
+            floor = scale;
+            showing.scale = scale;
+        }
         resize();
         visualizer.render();
         frames += 1;
@@ -196,13 +207,14 @@ export function createMilkdrop({motion, root, onLevel, onFail, loadButterchurn =
 
     return {
         start(style, lowPower) {
-            const wanted = lowPower ? 3 : 2;
+            const wanted = startScale(BASE_SCALE, lowPower, floor);
             if (showing && showing.id === style.id && showing.scale === wanted) {
                 return;
             }
             halt();
             const mine = run;
             scale = wanted;
+            pace = createPace();
             showing = {id: style.id, scale: wanted};
             load().then((ready) => {
                 if (mine !== run) {

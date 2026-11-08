@@ -31,10 +31,12 @@ For listeners:
 - **Day and night.** A button cycles automatic, day and night; night dims
   everything but the title.
 - **Visualizer.** Styles in four groups: spectrum bars (including a ring
-  around the cover), waves, slow ambient colour fields, all coloured from
-  the album cover, and MilkDrop: classic MilkDrop presets with their own
-  colours, one at a time or shuffled. The spectrum styles switch
-  themselves to a lighter mode on slow hardware.
+  around the cover), waves, ambient (slow colour fields, and scenes drawn
+  by the graphics chip such as a tunnel lined with the album cover), all
+  coloured from the album cover, and MilkDrop: classic MilkDrop presets
+  with their own colours, one at a time or shuffled. On slow hardware the
+  spectrum styles switch to a lighter mode and the graphics-chip styles
+  draw at a lower resolution.
 - **Lock screen and media keys.** Phones and cars show the song and cover;
   next and previous change station.
 - **Small window and embedding.** Open the player in a small pop-out window,
@@ -181,8 +183,12 @@ it). What the buttons do:
   on the group of the style showing. Tap a style to switch to it, **All
   groups** or Escape to go back to the tiles. **Shuffle** in MilkDrop
   moves to another preset every 45 seconds and plays each once before
-  any repeats. MilkDrop needs WebGL 2; browsers without it do not show
-  that tile.
+  any repeats. MilkDrop and the Ambient styles drawn with WebGL (Cover
+  tunnel and the others after Swirl) need WebGL 2; browsers without it do
+  not show the MilkDrop tile, and Ambient lists only its other styles.
+  These styles draw at most 1280 pixels across, and on a device that
+  cannot keep 50 frames a second they switch to a lower resolution until
+  the page is loaded again.
 - **Day/night** (top left) cycles automatic, day and night. Automatic
   follows the sun when `[player]` has a location, otherwise the device's
   dark mode setting. It turns dark when the evening sun is 4 degrees above
@@ -222,13 +228,16 @@ and buttons to step through the styles (**Previous**, **Next**), to
 switch **Low power** on and off, and to hold the cover glow still
 (**Still glow**; normally it swells with the bass).
 
-**Run test** shows every style for 10 seconds in each of three modes:
-normal, low power, and normal with the glow held still. It starts with
-**Off**, the page with no visualizer, as the baseline. MilkDrop is
-measured as **Shuffle** only; each preset has passed the GPU test below.
-That takes about 7 minutes; leave the page in front meanwhile. A style
-well below Off is costing frames; if it recovers with the glow held
-still, the glow is the cost, not the style.
+**Run test** shows every style for 10 seconds in each of two modes:
+normal and low power (the spectrum styles draw less often, the WebGL
+styles and MilkDrop at a lower resolution). It starts with **Off**, the
+page with no visualizer, as the baseline. MilkDrop is measured as
+**Shuffle** only; each preset has passed the GPU test below. The WebGL
+styles are measured at the resolution they start at: lab mode holds off
+their switch to a lower one. That takes about 6 minutes; leave the page
+in front meanwhile. A style well below Off is costing frames; to see
+whether the cover glow is part of the cost, step to the style with
+**Next** and compare the frame rate with **Still glow** on and off.
 
 The test ends with a table and a QR code. Per style and mode the table
 gives the page's average and worst frame rate (the slowest second), and
@@ -1449,7 +1458,9 @@ The lab check starts its own tunebox the same way and drives
 [lab mode](#check-a-device-with-lab-mode) with 1-second test windows
 (`?lab=1&labsec=1`): every style, a full test, the QR code checked against
 the results, MilkDrop drawing through WebAssembly and stopping when left,
-nothing stored, and the graphics rows on `/check.html`:
+the WebGL styles drawing at their resolution and giving their graphics
+context back when left, nothing stored, and the graphics rows on
+`/check.html`:
 
 ```sh
 node web/tests/browser/lab.mjs /tmp/lab-shots
