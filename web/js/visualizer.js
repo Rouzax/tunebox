@@ -69,7 +69,7 @@ export function bindVisualizer(app) {
         }});
         resumeAudio = keepAudioRunning(motion.audioCtx, () => player.state() !== 'stopped');
         effects = createEffects(motion, root, app.setBass);
-        milkdrop = createMilkdrop({motion, root, onLevel: app.setBass, onFail: milkdropFailed});
+        milkdrop = createMilkdrop({motion, root, onLevel: app.setBass, onFail: milkdropFailed, held: () => powerHeld});
         checkPower();
         return motion;
     }
