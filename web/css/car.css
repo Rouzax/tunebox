@@ -147,10 +147,27 @@
     box-sizing:      border-box;
     height:          var(--car-station-h);
     padding:         0 3.25rem;
-    gap:             .5rem;
     font-size:       .95rem;
     font-weight:     600;
     min-width:       0;
+}
+
+.tunebox .car-station-card {
+    display:       flex;
+    align-items:   center;
+    gap:           .5rem;
+    min-width:     0;
+    padding:       .2rem .7rem;
+    border-radius: .6rem;
+    transition:    background-color 300ms ease;
+}
+
+/* A full-screen visual can be dark or busy right where the station sits:
+   while one shows on the main page, the name gets the song card's ground.
+   The fade matches the visual's own. */
+.tunebox[data-effect]:not([data-page]:not([data-page="main"])) .car-station-card {
+    background: var(--car-card);
+    color:      var(--car-card-ink);
 }
 
 .tunebox .car-station .current-channel {
@@ -235,6 +252,16 @@
     --car-card:      rgba(255, 255, 255, .92);
     --car-card-ink:  #1f2a37;
     --car-card-soft: #4b5869;
+}
+
+/* Solid over a full-screen visual on the main page: through a see-through
+   card a bright line of the visual runs across the text. */
+.tunebox[data-effect]:not([data-page]:not([data-page="main"])) {
+    --car-card: rgb(14, 22, 32);
+}
+
+.tunebox.car-day[data-effect]:not([data-page]:not([data-page="main"])) {
+    --car-card: rgb(255, 255, 255);
 }
 
 .tunebox .player {

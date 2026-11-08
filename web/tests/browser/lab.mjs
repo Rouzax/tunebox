@@ -505,6 +505,15 @@ async function run() {
             await shoot(`lab-${id}`);
         }
         check(await evaluate(`document.querySelectorAll('.car-gpu').length === 1`) ? null : 'not exactly one GPU style canvas');
+        // The station name sits on the song card's ground over a full-screen
+        // visual, and on the page's own without one.
+        const stationGround = () => evaluate(`getComputedStyle(document.querySelector('.car-station-card')).backgroundColor`);
+        await sleep(400);
+        const overGpu = await stationGround();
+        check(overGpu !== 'rgba(0, 0, 0, 0)' ? null : 'the station name has no ground over a GPU style');
+        // Solid: a bright line of the visual would show through a see-through card.
+        const songGround = () => evaluate(`getComputedStyle(document.querySelector('.onair')).backgroundColor`);
+        check(/^rgb\(/.test(await songGround()) ? null : `the song card is see-through over a GPU style (${await songGround()})`);
         check(!(await evaluate(`/could not start/.test(document.body.textContent)`)) ? null : 'a GPU style could not start');
         await tap('.lab-power');
         await sleep(800);
@@ -514,6 +523,8 @@ async function run() {
         check(await stepTo('wave') ? null : 'Next never came round to Wave from the GPU styles');
         await sleep(500);
         check(await evaluate(`document.querySelector('.car-gpu') === null`) ? null : 'the GPU style canvas stays after leaving');
+        check((await stationGround()) === 'rgba(0, 0, 0, 0)' ? null : `the station name keeps a ground on Wave (${await stationGround()})`);
+        check(/^rgba\(/.test(await songGround()) ? null : `the song card stays solid on Wave (${await songGround()})`);
         const afterGpu = await counts();
         check(afterGpu.gl - afterGpu.losses === 1 ? null : `after the GPU styles: ${afterGpu.gl} WebGL contexts made, ${afterGpu.losses} given back`);
 
