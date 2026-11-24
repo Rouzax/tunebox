@@ -3,6 +3,13 @@ name: image
 on:
   push:
     branches: [main]
+  # Merges made with GITHUB_TOKEN (Dependabot auto-merge) start no push
+  # build, and Alpine fixes arrive without a new base digest. The weekly
+  # build ships both; it runs before the docker host's nightly pull of
+  # :latest at local midnight (22:00Z in summer).
+  schedule:
+    - cron: '0 20 * * 6'
+  workflow_dispatch:
 
 permissions:
   contents: read
