@@ -1,5 +1,17 @@
-# python:3.14-alpine, pinned by digest; Dependabot proposes updates.
-FROM python:3.15-alpine@sha256:0f9552bb28711333da16915ec146f5e6bb44a7fdac9ced15dc17c2e0206346dd
+# Pinned by digest; Dependabot proposes new digests. The Python version
+# follows the one CI tests on (pyproject.toml), so a version change is a
+# reviewed change, never an automatic one.
+FROM python:3.14-alpine@sha256:5862d971d1f0ae26b258cefa4e893556b1d3aba81bd2ff30888704ad378bab67
+
+# Alpine fixes published after the base image was built, so a scheduled
+# rebuild picks them up without a new digest. tunebox uses the standard
+# library only, so pip is never run here; removing it keeps its vendored
+# packages (and the advisories filed against them) out of the image.
+RUN apk upgrade --no-cache \
+ && rm -rf /usr/local/lib/python3.*/site-packages/pip \
+           /usr/local/lib/python3.*/site-packages/pip-*.dist-info \
+           /usr/local/lib/python3.*/ensurepip \
+           /usr/local/bin/pip*
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
